@@ -124,7 +124,7 @@
     {
       "target": "src/hermes_codex_router/external_runtime.py::ExternalCliAdapter.run_turn",
       "max_lines": 208,
-      "rationale": "Bounded ADR 0075 increment: forward the trusted local profile to the existing stream-policy owner. Invocation, stop, completion and cleanup keep their existing owners. A separate parse-only wrapper would move wiring without reducing orchestration responsibility; no new queue or lifecycle is introduced. Review this seam before the next Claude lifecycle increment.",
+      "rationale": "Bounded ADR 0075 increment: forward the trusted local profile to the existing stream-policy owner. Invocation, stop, completion and cleanup keep their existing owners. A separate parse-only wrapper would move wiring without reducing orchestration responsibility; no new queue or lifecycle is introduced. Review this seam before the next Claude lifecycle increment. ADR 0079 forwards a trusted per-launch wait clock only. claude_permission_wait owns timing, PermissionServer owns validated wait entry/exit, and the existing runner retains invocation/stop/cleanup. No new transaction or provider authority; source review must check this wiring. A mechanical split of two forwarding lines would not reduce responsibilities.",
       "owner": "Hub maintainer",
       "next_review": "2026-11-09",
       "reopen_event": "Any further growth, same-turn steering, extension execution, image/file-tool combination, or changed invocation/cleanup ownership."

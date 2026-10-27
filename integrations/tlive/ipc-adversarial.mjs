@@ -176,7 +176,7 @@ try {
   await test('malformed/unauthenticated request cannot create card',async()=>{const start=bot.sent.length;assert.equal((await ipc({kind:'hub.permission.request',epoch,payload:'{}',tag:'0'.repeat(64)})).decision,'deny');assert.equal(bot.sent.length,start);});
   await test('modified input invalidates request MAC',async()=>{const b={...state,version:1,requestNonce:randomUUID(),toolName:'Read',input:{file_path:'/home/example/file'},expiresAt:Date.now()+10000};const original=JSON.stringify(b);const payload=JSON.stringify({...b,input:{command:'echo different'}});const r=await ipc({kind:'hub.permission.request',epoch,payload,tag:mac(reqKey,'request',epoch,original)});assert.equal(r.decision,'deny');});
   await test('authenticated subagent/invalid schema/oversized payload denied without card',async()=>{
-    for(const override of [{agentId:'example-child'},{generation:0},{writer:'local'},{rootDigest:'wrong'},{expiresAt:Date.now()+700000},{requestNonce:42}]){
+    for(const override of [{agentId:'example-child'},{generation:0},{writer:'local'},{rootDigest:'wrong'},{expiresAt:Date.now()+8*24*60*60*1000},{requestNonce:42}]){
       const t=launch(override);assert.equal((await t.result).decision,'deny');assert.equal(bot.sent.length,t.start);
     }
     const payload='x'.repeat(65537);assert.equal((await ipc({kind:'hub.permission.request',epoch,payload,tag:mac(reqKey,'request',epoch,payload)})).decision,'deny');
@@ -188,6 +188,19 @@ try {
     const input=Object.fromEntries(Array.from({length:10},(_,i)=>['field_'+i,'value_'+i]));const t=launch({toolName:'Read',input});const c=await card(t);assert.ok(c.text.includes('field_9'));assert.ok(c.text.includes('value_9'));fire(c);verifyReceipt(t,await t.result);
   });
   await test('expired request denied without card',async()=>{const t=launch({expiresAt:Date.now()-1});assert.equal((await t.result).decision,'deny');assert.equal(bot.sent.length,t.start);});
+  await test('seven-day request keeps exact human-only Allow and Deny',async()=>{
+    for(const decision of ['allow','deny']){
+      const t=launch({expiresAt:Date.now()+7*24*60*60*1000-1000});
+      const c=await card(t);
+      const ctx=callback(c);
+      if(decision==='deny')ctx.callbackQuery.data=c.opts.reply_markup.inline_keyboard[0][1].callback_data;
+      bot.fire('callback_query:data',ctx);
+      const r=await t.result;
+      assert.equal(r.decision,decision);
+      assert.equal(r.tag,mac(resKey,'result',r.epoch,r.payload,decision,r.actor));
+      assert.equal(r.actor.userId,cfg.ownerId);
+    }
+  });
   await test('timeout settles explicit deny and late callback is stale',async()=>{const t=launch({expiresAt:Date.now()+100});const c=await card(t);assert.equal((await t.result).decision,'deny');fire(c);});
   await test('unknown delivery outcome denies with no automatic retry',async()=>{bot.sendFailure='connection reset after send';const t=launch();assert.equal((await t.result).decision,'deny');assert.equal(bot.sent.length,t.start);bot.sendFailure=null;});
   await test('protected parse error has no legacy plain-text retry',async()=>{bot.sendFailure='parse entity error';const t=launch();assert.equal((await t.result).decision,'deny');assert.equal(bot.sent.length,t.start);bot.sendFailure=null;});

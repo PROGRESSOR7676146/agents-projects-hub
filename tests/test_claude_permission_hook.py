@@ -1,6 +1,7 @@
 import io
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -59,6 +60,7 @@ class HookTests(unittest.TestCase):
         class FakeSocket:
             extra = False
             mismatch = False
+            wait_once = False
 
             def __init__(self, *_args):
                 self.reply = b""
@@ -93,6 +95,10 @@ class HookTests(unittest.TestCase):
                     self.reply += b"{}\n"
 
             def recv(self, _size):
+                if self.wait_once:
+                    FakeSocket.wait_once = False
+                    clock[0] += 8 * 3600
+                    raise TimeoutError()
                 result, self.reply = self.reply, b""
                 return result
 
@@ -107,6 +113,24 @@ class HookTests(unittest.TestCase):
             )
         decision = json.loads(output.getvalue())["hookSpecificOutput"]["decision"]
         self.assertEqual(decision["behavior"], "allow")
+        clock = [100.0]
+        FakeSocket.wait_once = True
+        output = io.StringIO()
+        with (
+            patch.object(claude_permission_hook.socket, "socket", FakeSocket),
+            patch.object(
+                claude_permission_hook, "time", SimpleNamespace(monotonic=lambda: clock[0])
+            ),
+        ):
+            run_hook(
+                io.BytesIO(json.dumps(event).encode()),
+                output,
+                {"HUB_CLAUDE_PERMISSION_SOCKET": "/tmp/worker.sock"},
+            )
+        self.assertEqual(
+            json.loads(output.getvalue())["hookSpecificOutput"]["decision"]["behavior"], "allow"
+        )
+        FakeSocket.wait_once = False
         FakeSocket.extra = True
         output = io.StringIO()
         with patch.object(claude_permission_hook.socket, "socket", FakeSocket):

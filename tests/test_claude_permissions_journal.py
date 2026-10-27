@@ -77,6 +77,17 @@ class ClaudePermissionJournalTests(unittest.TestCase):
         rows = self.state._connection.execute("SELECT * FROM claude_permission_requests").fetchall()
         self.assertNotIn("example.txt", str([tuple(row) for row in rows]))
 
+    def test_human_wait_is_bounded_to_seven_days(self) -> None:
+        import time
+
+        payload = ProtectedPayload.parse(self.request())
+        self.assertGreater(payload.expires_at / 1000 - time.time(), 7 * 86400 - 2)
+        for lifetime in (0, True, 7 * 86400 + 1):
+            with self.subTest(lifetime=lifetime), self.assertRaises(StateError):
+                self.journal.prepare(
+                    self.launch, str(uuid4()), "a" * 64, "Write", {}, lifetime_seconds=lifetime
+                )
+
     def test_changed_payload_cannot_consume(self) -> None:
         payload = self.request()
         with self.assertRaises(StateError):

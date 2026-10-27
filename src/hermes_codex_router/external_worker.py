@@ -1216,6 +1216,7 @@ class ExternalQueueWorker:
                     on_visible_assistant=on_visible_assistant,
                     on_claude_process_started=on_claude_process_started,
                     claude_sandbox=hosted.sandbox if hosted else None,
+                    claude_permission_wait=hosted.permission_wait if hosted else None,
                     claude_images=prepared.claude_images,
                     pending_stop_request=lambda: self.state.pending_emergency_stop_for_job(
                         job.job_id

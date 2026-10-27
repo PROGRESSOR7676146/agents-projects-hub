@@ -22,6 +22,7 @@ from .claude_permission_protocol import (
     canonical_uuid,
     parse_json_strict,
 )
+from .claude_permission_wait import HUMAN_PERMISSION_SECONDS
 from .unix_peer import PeerCredentialError, require_same_uid_peer
 
 
@@ -232,7 +233,7 @@ class ProtectedTliveClient:
         if stop is not None and stop.is_set():
             raise TlivePermissionError("permission cancelled")
         remaining = (binding.expires_at / 1000) - time.time()
-        if remaining <= 0 or remaining > 600:
+        if remaining <= 0 or remaining > HUMAN_PERMISSION_SECONDS:
             raise TlivePermissionError("invalid protected expiry")
         result = self._exchange(
             {

@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_mount_pins import SandboxLaunch
 from .claude_native_settings import disabled_builtin_plugins
+from .claude_permission_wait import NATIVE_PERMISSION_HOOK_SECONDS
 from .claude_stream import ClaudeStreamError
 from .claude_tool_profiles import FILE_TOOLS, profile_tools
 
@@ -63,7 +64,13 @@ def file_tool_settings(python: Path, *, profile: str = "editor") -> str:
                 "PermissionRequest": [
                     {
                         "matcher": "|".join(sorted(tools)),
-                        "hooks": [{"type": "command", "command": command, "timeout": 130}],
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": command,
+                                "timeout": NATIVE_PERMISSION_HOOK_SECONDS,
+                            }
+                        ],
                     }
                 ]
             },

@@ -24,6 +24,11 @@ from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileT
 from hermes_codex_router.claude_permission_hook import run_hook
 from hermes_codex_router.claude_permission_host import PermissionServer
 from hermes_codex_router.claude_permission_protocol import ProtectedPayload, event_digest
+from hermes_codex_router.claude_permission_wait import (
+    HUMAN_PERMISSION_SECONDS,
+    PermissionWaitClock,
+    ProductiveDeadline,
+)
 from hermes_codex_router.claude_permissions_journal import ClaudePermissionJournal, PermissionLaunch
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.hub_config import (
@@ -408,6 +413,51 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         self.assertEqual(payload.launch_epoch, self.launch.epoch)
         self.assertEqual(payload.session_id, self.native_id)
         self.assertEqual(payload.lease_id, self.token)
+
+    def test_long_wait_budget_is_host_owned_and_ends_after_decision(self) -> None:
+        hook, result = self._hook()
+        payload = self._await_request()
+        remaining = payload.expires_at / 1000 - time.time()
+        self.assertGreater(remaining, 7 * 24 * 3600 - 10)
+        time.sleep(0.02)
+        self.assertGreater(self.server.permission_wait.elapsed(), 0)
+        self._finish(hook, result, "allow")
+        elapsed = self.server.permission_wait.elapsed()
+        time.sleep(0.02)
+        self.assertEqual(self.server.permission_wait.elapsed(), elapsed)
+
+    def test_invalid_hook_does_not_pause_productive_time(self) -> None:
+        hook, result = self._hook(self._event(cwd="/home/example/other"))
+        self._finish(hook, result, "deny")
+        self.assertEqual(self.server.permission_wait.elapsed(), 0)
+
+    def test_valid_looking_forged_request_gets_only_capped_wait_credit(self) -> None:
+        self.launch = dataclasses.replace(self.launch, profile="developer")
+        self.server.launch = self.launch
+        now = [100.0]
+        self.server.permission_wait = PermissionWaitClock(clock=lambda: now[0])
+        deadline = ProductiveDeadline(900, self.server.permission_wait, clock=lambda: now[0])
+        event = self._event()
+        # A direct same-UID caller knows the binding; no official hook is involved.
+        request = {
+            "kind": "claude.permission.request",
+            "version": 1,
+            "nonce": str(uuid4()),
+            "event": event,
+            "eventDigest": event_digest(event),
+        }
+        self.peer.decision = "deny"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as caller:
+            caller.settimeout(4)
+            caller.connect(str(self.server.path))
+            caller.sendall(json.dumps(request).encode() + b"\n")
+            self._await_request()
+            self.assertEqual(self._statuses(), ["pending"])
+            now[0] += HUMAN_PERMISSION_SECONDS + 901
+            self.assertLess(deadline.remaining(), 0)
+            self.peer.release.set()
+            self.assertEqual(json.loads(caller.recv(4096))["decision"], "deny")
+        self.assertEqual(self._statuses(), ["deny"])
 
     def test_developer_bash_stop_revokes_even_a_valid_late_allow(self) -> None:
         self.launch = dataclasses.replace(self.launch, profile="developer")

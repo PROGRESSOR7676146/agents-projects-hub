@@ -738,7 +738,7 @@ new file mode 100644
 +const TOOLS = new Set(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash']);
 +const MAX_PENDING = 128;
 +const MAX_REPLAY = 4096;
-+const MAX_TTL_MS = 600_000;
++const MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 +
 +/** The optional file alone enables this path. Read its bytes from one owned,
 + * non-symlink descriptor; absence is the sole disabled state. */

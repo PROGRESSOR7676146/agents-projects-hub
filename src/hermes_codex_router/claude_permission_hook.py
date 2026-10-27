@@ -17,6 +17,7 @@ from .claude_permission_protocol import (
     event_digest,
     parse_json_strict,
 )
+from .claude_permission_wait import PERMISSION_HOOK_SECONDS
 from .claude_tool_profiles import profile_tools
 
 _TOOLS = profile_tools("developer")  # Trusted per-launch host enforces the selected profile.
@@ -72,7 +73,7 @@ def _broker(socket_path: str, event: dict[str, Any]) -> bool:
     )
     if len(wire) > 131072:
         return False
-    deadline = time.monotonic() + 600.0
+    deadline = time.monotonic() + PERMISSION_HOOK_SECONDS
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.25)

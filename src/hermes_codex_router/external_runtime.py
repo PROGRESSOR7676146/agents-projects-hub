@@ -33,6 +33,7 @@ from .claude_image_input import (
 )
 from .claude_image_receipt import ClaudeImageReceipt
 from .claude_native_settings import text_only_settings
+from .claude_permission_wait import PermissionWaitClock, ProductiveDeadline
 from .claude_stream import (
     MAX_CLAUDE_STDERR_BYTES,
     ClaudeStreamError,
@@ -353,6 +354,7 @@ class ExternalCliAdapter:
         on_visible_assistant: VisibleAssistantCallback | None = None,
         on_claude_process_started: Callable[[], None] | None = None,
         claude_sandbox: FileToolSandboxConfig | None = None,
+        claude_permission_wait: PermissionWaitClock | None = None,
         claude_images: tuple[VerifiedClaudeImage, ...] = (),
     ) -> ExternalTurnResult:
         if self.runtime == "claude" and claude_sandbox is not None and prompt.strip():
@@ -399,6 +401,7 @@ class ExternalCliAdapter:
                 on_visible_assistant=on_visible_assistant,
                 on_process_started=on_claude_process_started,
                 sandbox=claude_sandbox,
+                permission_wait=claude_permission_wait,
                 input_data=input_data,
             )
         elif self._uses_default_runner:
@@ -592,6 +595,7 @@ class ExternalCliAdapter:
         on_visible_assistant: VisibleAssistantCallback | None,
         on_process_started: Callable[[], None] | None,
         sandbox: FileToolSandboxConfig | None,
+        permission_wait: PermissionWaitClock | None = None,
         input_data: bytes | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Own mount descriptors across every productive invocation exit path."""
@@ -626,6 +630,7 @@ class ExternalCliAdapter:
                     on_process_started=on_process_started,
                     input_data=input_data,
                     image_receipt=receipt,
+                    permission_wait=permission_wait,
                 )
         try:
             argv = (str(sandbox.claude_executable), *argv[1:])
@@ -654,6 +659,7 @@ class ExternalCliAdapter:
                 on_process_started=on_process_started,
                 event_policy=file_tool_event_policy(sandbox.profile),
                 pass_fds=launch.pass_fds,
+                permission_wait=permission_wait,
             )
 
     def _verified_claude_argv(
@@ -707,6 +713,7 @@ class ExternalCliAdapter:
         pass_fds: tuple[int, ...] = (),
         input_data: bytes | None = None,
         image_receipt: ClaudeImageReceipt | None = None,
+        permission_wait: PermissionWaitClock | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Drain both pipes without communicate() or an unbounded reader queue."""
         if self._interrupt_requested.is_set():
@@ -747,7 +754,7 @@ class ExternalCliAdapter:
             ) from exc
         with self._process_lock:
             self._active_process = process
-        deadline = time.monotonic() + timeout
+        deadline = ProductiveDeadline(timeout, permission_wait)
         diagnostic_bytes = 0
         input_offset = 0
         stop_draining = False
@@ -772,11 +779,11 @@ class ExternalCliAdapter:
                     if self._interrupt_requested.is_set() and not stop_draining:
                         self._terminate_claude_process(process, graceful=False)
                         stop_draining = True
-                        deadline = min(deadline, time.monotonic() + 5)
+                        deadline.stop_within(5)
                         if process.stdin is not None and not process.stdin.closed:
                             selector.unregister(process.stdin)
                             process.stdin.close()
-                    remaining = deadline - time.monotonic()
+                    remaining = deadline.remaining()
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
                     for key, _ in selector.select(min(0.1, remaining)):
@@ -819,7 +826,7 @@ class ExternalCliAdapter:
                                 raise ClaudeStreamError(
                                     "claude diagnostic output exceeded its limit"
                                 )
-                remaining = deadline - time.monotonic()
+                remaining = deadline.remaining()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(argv, timeout)
                 while (exit_code := peek_exit_code(process)) is None:
@@ -828,7 +835,7 @@ class ExternalCliAdapter:
                         exit_code = process.returncode
                         assert exit_code is not None
                         break
-                    remaining = deadline - time.monotonic()
+                    remaining = deadline.remaining()
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
                     self._interrupt_requested.wait(min(0.05, remaining))
@@ -843,7 +850,7 @@ class ExternalCliAdapter:
                 if not reader.terminal_seen:
                     raise ExternalTurnInterrupted("claude turn interrupted by user")
             stdout = reader.finish()
-            if time.monotonic() >= deadline:
+            if deadline.remaining() <= 0:
                 raise subprocess.TimeoutExpired(argv, timeout)
             return subprocess.CompletedProcess(argv, exit_code, stdout, "")
         except subprocess.TimeoutExpired:
