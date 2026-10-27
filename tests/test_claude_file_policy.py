@@ -74,6 +74,16 @@ class FilePolicyTests(unittest.TestCase):
             with self.subTest(event=event), self.assertRaises(ClaudeStreamError):
                 require_file_tool_event(event)
 
+    def test_task_refusal_names_a_fixed_category_without_forwarding_payload(self) -> None:
+        for event in (
+            {"type": "task_started", "description": "FICTIONAL_PRIVATE_TASK"},
+            {"type": "system", "subtype": "task_FICTIONAL_PRIVATE_TASK"},
+        ):
+            with self.subTest(event=event), self.assertRaises(ClaudeStreamError) as raised:
+                require_file_tool_event(event)
+            self.assertIn("background or child task", str(raised.exception))
+            self.assertNotIn("FICTIONAL_PRIVATE_TASK", str(raised.exception))
+
     def test_prompted_targets_cannot_escape_through_paths_or_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "example-project"

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.claude_environment import claude_environment_prompt
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig
-from hermes_codex_router.external_runtime import ExternalCliAdapter
+from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalRuntimeError
 from hermes_codex_router.namespace_toolchain import NamespaceToolchain
 
 
@@ -29,12 +29,6 @@ class ClaudeEnvironmentTests(unittest.TestCase):
                 (Path("/home/example/private"),),
                 profile=profile,
             )
-
-    def test_text_only_does_not_advertise_developer_capabilities(self) -> None:
-        prompt = claude_environment_prompt(None)
-        self.assertIn("text-only", prompt)
-        self.assertNotIn("hub-consult", prompt)
-        self.assertNotIn("Bash until restart", prompt)
 
     def test_editor_does_not_inherit_developer_or_consultation_tools(self) -> None:
         prompt = claude_environment_prompt(self.sandbox("editor"))
@@ -57,6 +51,11 @@ class ClaudeEnvironmentTests(unittest.TestCase):
         self.assertIn("AGENTS.md", prompt)
         self.assertIn("foreground", prompt)
         self.assertIn("unknown", prompt)
+        self.assertIn("Configured Git/hook Python", prompt)
+        self.assertIn("sys.prefix", prompt)
+        self.assertNotIn("Configured development Python", prompt)
+        self.assertNotIn("hub-consult astra", prompt)
+        self.assertNotIn("hub-consult sol", prompt)
         self.assertNotIn("/home/example/private", prompt)
         self.assertNotIn("/run/example-permission.sock", prompt)
         self.assertNotIn("/home/example/session", prompt)
@@ -65,6 +64,20 @@ class ClaudeEnvironmentTests(unittest.TestCase):
         prompt = claude_environment_prompt(self.sandbox())
         self.assertNotIn("hub-consult", prompt)
         self.assertNotIn("Configured development Python", prompt)
+
+    def test_blank_request_is_rejected_before_orientation_or_launch(self) -> None:
+        adapter = ExternalCliAdapter("claude")
+        for profile in ("editor", "developer"):
+            with (
+                self.subTest(profile=profile),
+                tempfile.TemporaryDirectory() as directory,
+                patch.object(adapter, "_run_owned_claude_turn") as run,
+                self.assertRaises(ExternalRuntimeError),
+            ):
+                adapter.run_turn(
+                    cwd=Path(directory), prompt=" \n\t", claude_sandbox=self.sandbox(profile)
+                )
+            run.assert_not_called()
 
     def test_real_adapter_passes_current_profile_note_with_each_resumed_request(self) -> None:
         adapter = ExternalCliAdapter("claude")

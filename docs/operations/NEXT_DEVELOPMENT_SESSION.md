@@ -30,7 +30,7 @@ merged as `801385a`; canonical checks, hosted CI and Opus 5.5/high review passed
 Sole writer/owner: primary development agent / Hub maintainer. Source lane
 `feat/claude-developer-toolchain`; source publication is complete, installed
 functional acceptance is open (**80/100**). Acceptance follow-up
-`fix/claude-foreground-onboarding` keeps long commands in the foreground and
+`fix/claude-foreground-final` keeps long commands in the foreground and
 adds profile-specific environment orientation. Next trigger: its exact-head
 Opus/canonical/hosted gates, then finish the authorized installed canary.
 Source, installation and live evidence remain distinct. Do not close the goal

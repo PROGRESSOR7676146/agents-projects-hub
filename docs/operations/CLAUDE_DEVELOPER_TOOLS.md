@@ -42,12 +42,13 @@ venv Python from another `bin` can select the system prefix and lose its
 dependencies; check `sys.prefix` and a required dependency import, not just
 `python3 --version`.
 
-Each Claude turn receives a compact environment note from its actual prepared
+Each confined Claude turn receives a compact environment note from its actual prepared
 profile/toolchain: available native tools, project instructions, configured
 Python, Git/hook limits, human command decisions, consultations and unknown
 outcomes. It contains no host credentials or session HOME. Confined launches
-set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` so native Bash cannot automatically
-move a long test/build/hook into an unsupported background task. Keep explicit
+set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, intended to prevent native Bash from
+moving a long test/build/hook into an unsupported background task. Confirm the
+native effect in the installed canary. Keep explicit
 command timeouts; task/child stream guards remain enforced.
 
 PATH, validation Python and author policy must resolve inside readonly tools or
