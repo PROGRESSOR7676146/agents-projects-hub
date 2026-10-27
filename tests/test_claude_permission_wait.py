@@ -63,6 +63,24 @@ class PermissionWaitTests(unittest.TestCase):
             self.now += 6
             self.assertLess(self.deadline.remaining(), 0)
 
+    def test_total_wait_credit_is_capped_even_while_request_remains_pending(self) -> None:
+        with self.wait.waiting():
+            self.now += HUMAN_PERMISSION_SECONDS
+            self.assertEqual(self.deadline.remaining(), 900)
+            self.now += 901
+            self.assertLess(self.deadline.remaining(), 0)
+
+    def test_later_requests_do_not_replenish_total_wait_credit(self) -> None:
+        with self.wait.waiting():
+            self.now += HUMAN_PERMISSION_SECONDS - 60
+        self.now += 100
+        with self.wait.waiting():
+            self.now += 60
+            self.assertEqual(self.deadline.remaining(), 800)
+        with self.wait.waiting():
+            self.now += 801
+            self.assertLess(self.deadline.remaining(), 0)
+
     def test_old_wait_is_not_credited_to_a_new_process(self) -> None:
         with self.wait.waiting():
             self.now += 3600

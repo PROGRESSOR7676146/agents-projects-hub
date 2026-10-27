@@ -1,4 +1,4 @@
-"""Trusted host wait accounting; native stream text cannot pause a deadline."""
+"""Bounded host wait credit; native stream text cannot pause a deadline."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class PermissionWaitClock:
 
 
 class ProductiveDeadline:
-    """Keep execution finite while excluding verified host permission waits."""
+    """Credit at most seven days of host permission waiting per owned launch."""
 
     def __init__(
         self,
@@ -59,7 +59,10 @@ class ProductiveDeadline:
 
     def remaining(self) -> float:
         waiting = 0.0 if self._wait is None else self._wait.elapsed() - self._initial_wait
-        deadline = self._deadline + max(0.0, waiting)
+        # Bound even correctly bound requests forged by a sandbox socket caller.
+        # Earlier permitted descendants can run while a human decision is pending.
+        credit = min(HUMAN_PERMISSION_SECONDS, max(0.0, waiting))
+        deadline = self._deadline + credit
         if self._stop_deadline is not None:
             deadline = min(deadline, self._stop_deadline)
         return deadline - self._clock()

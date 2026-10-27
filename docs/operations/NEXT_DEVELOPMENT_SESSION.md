@@ -35,7 +35,7 @@ adds profile-specific environment orientation. Next trigger: its exact-head
 Opus/canonical/hosted gates, then finish the authorized installed canary.
 The next bounded acceptance fix is long human permission waiting under
 [ADR 0079](../decisions/0079-long-human-permission-waits.md): update the full
-timeout chain and pause only trusted host waiting, then validate the matching
+timeout chain and cap total host-wait credit at seven days per launch, then validate the matching
 worker/tlive candidate before sending the next human test card. Owner: primary
 development agent. Base: integrated `3fb8439`; lane `fix/claude-approval-wait`.
 Inspect tracked/staged/untracked state after merge and installed acceptance.

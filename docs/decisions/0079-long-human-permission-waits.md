@@ -13,10 +13,18 @@ journal, protected transport, tlive and synchronous native hook around a seven-d
 human response window, with small outer hook margins. The finite values fit
 native JavaScript timers. Keep connect, framing, shutdown and cleanup waits short.
 
-Use one process-memory clock per existing permission host. Only a validated live
+Use one process-memory clock per existing permission host. A validated live
 request prepared in the existing single-use journal starts that clock. The owned
-process runner subtracts that waiting from its productive budget; stream messages
-and provider claims cannot pause it. Stop imposes its independent cleanup cutoff.
+process runner credits at most seven days of TOTAL waiting per launch; a later
+request cannot replenish it. Native stream text cannot start this clock.
+Same-UID socket binding checks do not authenticate the official hook: correctly
+bound requests forged by confined code can consume the capped credit. Previously
+authorized background descendants may continue running while a decision is pending.
+The owner accepts this bounded extension for the trusted personal installation;
+process suspension and hook-origin authentication are not claimed. Maximum wall
+execution is the original productive budget plus seven days, with existing bounded
+cleanup afterwards. The remaining budget may end a later request before its expiry.
+Stop imposes its independent cleanup cutoff.
 Binding revalidation and single-use consumption still precede native Allow.
 
 This uses the existing protocol and schema with no daemon, durable continuation,
@@ -34,7 +42,15 @@ Timeout after invocation retains uncertain-outcome handling; neither waiting nor
 its failure authorizes replay or another provider call.
 
 Offline clock, subprocess, hook and Unix-socket fixtures exercise long waiting,
-resumed productive limits, invalid-request refusal and bounded cancellation.
+resumed productive limits, invalid-request refusal, forged-request credit caps,
+background execution under the same cap and bounded cancellation.
 The carried tlive IPC suite checks signed decisions within the extended window
 and rejects overlong/expired requests. These tests use fictional peers, not real
 human callbacks. Installed and Telegram acceptance remain separate.
+
+The protected replay ledger retains at most 4,096 nonces until their expiries,
+now up to seven days. Exhaustion denies new requests; no automatic eviction,
+restart or grant is introduced. Cached Bash consent reduces prompted requests.
+The outer hook margins are finite; severe transport or database delays can still
+deny a decision. Long-wait acceptance must check heartbeat/lease continuity and
+the native timeout, not infer them from the configured expiry alone.

@@ -96,7 +96,7 @@ class HookTests(unittest.TestCase):
 
             def recv(self, _size):
                 if self.wait_once:
-                    self.wait_once = False
+                    FakeSocket.wait_once = False
                     clock[0] += 8 * 3600
                     raise TimeoutError()
                 result, self.reply = self.reply, b""

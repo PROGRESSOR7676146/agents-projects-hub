@@ -436,6 +436,76 @@ class ExternalRuntimeTests(unittest.TestCase):
                 on_claude_process_started=human_wait,
             )
 
+    def test_background_descendant_during_wait_cannot_extend_total_credit(self) -> None:
+        waiting = PermissionWaitClock()
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "background-running"
+            source = (
+                "import os, pathlib, time\n"
+                "if os.fork() == 0:\n"
+                f"    pathlib.Path({str(marker)!r}).write_text('running')\n"
+                "    time.sleep(3)\n"
+                "    os._exit(0)\n"
+                "time.sleep(3)\n"
+            )
+            with (
+                patch("hermes_codex_router.claude_permission_wait.HUMAN_PERMISSION_SECONDS", 0.15),
+                waiting.waiting(),
+                self.assertRaisesRegex(RuntimeError, "timed out"),
+            ):
+                self._claude_process(source, timeout=0.35, claude_permission_wait=waiting)
+            self.assertTrue(marker.exists(), "background descendant did not execute during wait")
+
+    def test_concurrent_human_wait_starts_after_visible_stream_progress(self) -> None:
+        waiting = PermissionWaitClock()
+        begin, active = threading.Event(), threading.Event()
+        native = str(uuid.uuid4())
+        message = json.dumps(
+            {
+                "type": "assistant",
+                "session_id": native,
+                "uuid": str(uuid.uuid4()),
+                "parent_tool_use_id": None,
+                "message": {"content": [{"type": "text", "text": "Before wait"}]},
+            }
+        )
+        terminal = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": native,
+                "result": "After wait",
+            }
+        )
+
+        def human_wait() -> None:
+            if begin.wait(3):
+                with waiting.waiting():
+                    active.set()
+                    time.sleep(0.5)
+
+        thread = threading.Thread(target=human_wait, daemon=True)
+        thread.start()
+
+        def progress(_item: ClaudeVisibleAssistant) -> None:
+            begin.set()
+            self.assertTrue(active.wait(3))
+
+        try:
+            result = self._claude_process(
+                f"import time\nprint({message!r}, flush=True)\ntime.sleep(0.6)\nprint({terminal!r}, flush=True)\n",
+                timeout=0.4,
+                new_session_id=native,
+                claude_permission_wait=waiting,
+                on_visible_assistant=progress,
+            )
+            self.assertEqual(result.text, "After wait")
+        finally:
+            begin.set()
+            thread.join(3)
+            self.assertFalse(thread.is_alive())
+
     def test_claude_help_and_turn_reserve_leader_pid_until_last_group_signal(self) -> None:
         session = str(uuid.uuid4())
         terminal = {

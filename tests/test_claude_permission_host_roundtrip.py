@@ -24,6 +24,11 @@ from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileT
 from hermes_codex_router.claude_permission_hook import run_hook
 from hermes_codex_router.claude_permission_host import PermissionServer
 from hermes_codex_router.claude_permission_protocol import ProtectedPayload, event_digest
+from hermes_codex_router.claude_permission_wait import (
+    HUMAN_PERMISSION_SECONDS,
+    PermissionWaitClock,
+    ProductiveDeadline,
+)
 from hermes_codex_router.claude_permissions_journal import ClaudePermissionJournal, PermissionLaunch
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.hub_config import (
@@ -425,6 +430,34 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         hook, result = self._hook(self._event(cwd="/home/example/other"))
         self._finish(hook, result, "deny")
         self.assertEqual(self.server.permission_wait.elapsed(), 0)
+
+    def test_valid_looking_forged_request_gets_only_capped_wait_credit(self) -> None:
+        self.launch = dataclasses.replace(self.launch, profile="developer")
+        self.server.launch = self.launch
+        now = [100.0]
+        self.server.permission_wait = PermissionWaitClock(clock=lambda: now[0])
+        deadline = ProductiveDeadline(900, self.server.permission_wait, clock=lambda: now[0])
+        event = self._event()
+        # A direct same-UID caller knows the binding; no official hook is involved.
+        request = {
+            "kind": "claude.permission.request",
+            "version": 1,
+            "nonce": str(uuid4()),
+            "event": event,
+            "eventDigest": event_digest(event),
+        }
+        self.peer.decision = "deny"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as caller:
+            caller.settimeout(4)
+            caller.connect(str(self.server.path))
+            caller.sendall(json.dumps(request).encode() + b"\n")
+            self._await_request()
+            self.assertEqual(self._statuses(), ["pending"])
+            now[0] += HUMAN_PERMISSION_SECONDS + 901
+            self.assertLess(deadline.remaining(), 0)
+            self.peer.release.set()
+            self.assertEqual(json.loads(caller.recv(4096))["decision"], "deny")
+        self.assertEqual(self._statuses(), ["deny"])
 
     def test_developer_bash_stop_revokes_even_a_valid_late_allow(self) -> None:
         self.launch = dataclasses.replace(self.launch, profile="developer")

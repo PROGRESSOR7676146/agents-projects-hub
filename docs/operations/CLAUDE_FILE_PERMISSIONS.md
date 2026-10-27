@@ -17,7 +17,8 @@ the former global inventory/UID/VM study. No new infrastructure is required here
 The protected response window and its cancellation boundaries are defined in
 [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md). Verify the entire chain:
 journal expiry, protected tlive cap, worker transport, hook broker and native
-hook timeout. The productive timer excludes only trusted host waiting. A matching
+hook timeout. Check the shared per-launch credit cap and background-execution
+limits in the contract: repeated cards do not renew the total wait budget. A matching
 worker and tlive patch are required; an older tlive safely refuses the extended
 expiry. Use the same worker-before-tlive update order below, after both are idle.
 Existing pending cards are not renewed or replayed during an update.

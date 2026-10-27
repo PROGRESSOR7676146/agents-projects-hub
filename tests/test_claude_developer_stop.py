@@ -90,15 +90,21 @@ class DeveloperStopTests(unittest.TestCase):
                 def wrap(argv, environment, *_args):
                     return SandboxLaunch(tuple(argv), environment, MountPins())
 
+                hosted = HostedClaudeLaunch(sandbox)
                 with (
+                    hosted.permission_wait.waiting(),
                     patch(
                         "hermes_codex_router.claude_permission_host.hosted_claude_launch",
-                        return_value=nullcontext(HostedClaudeLaunch(sandbox)),
+                        return_value=nullcontext(hosted),
                     ),
                     patch("hermes_codex_router.external_runtime.wrap_file_tool_argv", new=wrap),
                     patch.object(ExecutionJournal, "record_claude_item", new=record),
+                    patch.object(adapter, "run_turn", wraps=adapter.run_turn) as invoke,
                 ):
                     self.assertTrue(worker.run_cycle())
+                    self.assertIs(
+                        invoke.call_args.kwargs["claude_permission_wait"], hosted.permission_wait
+                    )
                 self.assertEqual(
                     recorded, ["visible"], worker.state.get_provider_job(job_id).error_code
                 )

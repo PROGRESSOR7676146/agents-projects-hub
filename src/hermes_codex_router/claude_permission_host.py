@@ -181,8 +181,8 @@ class PermissionServer:
         )
         receipt = None
         if not granted:
-            # Only a validated, live, journaled request pauses productive time.
-            # Native stdout and an untrusted hook's claims never control this clock.
+            # A live journaled request starts wait accounting; same-UID callers
+            # can forge hook bindings. The runner caps total credit per launch.
             with self.permission_wait.waiting():
                 receipt = self.client.request(payload, capability, cancellation)
         decision = (

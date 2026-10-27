@@ -378,14 +378,20 @@ single-writer checks remain mandatory. See
   requiring masking or an incomplete preview MUST be denied. Native permission
   suggestions MUST NOT become persistent grants or input changes. Restart,
   timeout, unavailable isolation/host and ambiguity MUST deny without replay.
-  A protected human decision MUST have a seven-day response window, bounded by
+  A protected human decision MUST use a seven-day expiry, bounded by
   the current live launch and channel; stop, disconnect or restart MUST invalidate
   it without replay. The native hook and protected transport MUST cover that
-  window. Only waiting owned by the trusted host after exact request validation
-  and journal preparation MAY suspend the productive process deadline. Native
-  output MUST NOT suspend it. Productive timeouts and bounded stop/cleanup MUST
-  remain effective before and after human waiting. This window is not a grant
-  and MUST NOT survive process or channel loss.
+  window. Host waiting after exact request validation and journal preparation MAY
+  extend the productive process deadline by at most seven days TOTAL per launch;
+  repeated requests MUST NOT replenish that credit. Native output MUST NOT
+  suspend it. Socket binding checks do not authenticate official hook origin:
+  correctly bound requests from confined code can consume this capped credit.
+  Already authorized background descendants MAY continue during waiting; process
+  suspension is not claimed. This bounded execution extension is accepted for the
+  personal trusted installation. The remaining launch budget MAY end a later
+  request before its own expiry. Productive timeouts and bounded stop/cleanup MUST
+  remain effective before and after waiting. This window is not a grant and MUST
+  NOT survive process or channel loss.
   The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
   continuation, mirroring or second conversation writer. The default `editor`
   profile retains per-write human permission and read-only ordinary Git metadata.
