@@ -50,3 +50,13 @@ class ClaudePermissionsConfigTests(unittest.TestCase):
         del settings["tlive_config"]
         with self.assertRaises(ValueError):
             parse_claude_file_permissions(settings)
+
+    def test_toolchain_is_developer_only_and_retained_for_launch(self) -> None:
+        tools = {"roots": ["/opt/example-tools"], "path": ["/opt/example-tools/bin"]}
+        with self.assertRaises(ValueError):
+            parse_claude_file_permissions(self.settings() | {"toolchain": tools})
+        settings = parse_claude_file_permissions(
+            self.settings() | {"profile": "developer", "toolchain": tools}
+        )
+        assert settings is not None and settings.toolchain is not None
+        self.assertEqual(str(settings.toolchain.path[0]), "/opt/example-tools/bin")

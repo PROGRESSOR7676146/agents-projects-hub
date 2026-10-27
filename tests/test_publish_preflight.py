@@ -24,6 +24,7 @@ def _isolated_git_environment() -> dict[str, str]:
     ).stdout.splitlines()
     for name in names:
         environment.pop(name, None)
+    environment.pop("HUB_PUBLISH_PYTHON", None)
     return environment
 
 
@@ -996,6 +997,16 @@ class PublishPreflightTests(unittest.TestCase):
             self.assertEqual(committed.returncode, 0, committed.stderr)
             self.assertTrue(calls()[-2].endswith("scripts/validate.py --profile focused"))
             self.assertIn("-m hermes_codex_router.privacy_scan", calls()[-1])
+            self.assertTrue(calls()[-1].endswith("--history"))
+
+            # A namespace has a different Python path from the host's local
+            # config. The explicit launch override must actually execute it.
+            git("config", "--local", "hub.publishPython", "/missing/host-python")
+            environment["HUB_PUBLISH_PYTHON"] = str(interpreter)
+            (root / "tracked.txt").write_text("namespace change\n", encoding="utf-8")
+            git("add", "tracked.txt")
+            committed = git("commit", "-q", "-m", "namespace interpreter")
+            self.assertEqual(committed.returncode, 0, committed.stderr)
             self.assertTrue(calls()[-1].endswith("--history"))
 
 

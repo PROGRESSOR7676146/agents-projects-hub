@@ -48,6 +48,9 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Install system namespace tools
         run: |
           sudo apt-get update
@@ -83,6 +86,7 @@ jobs:
           tests.test_process_namespace_topology
           tests.test_review_materials_namespace
           tests.test_review_bridge_namespace
+          tests.test_namespace_toolchain
 
   tlive:
     runs-on: ubuntu-latest

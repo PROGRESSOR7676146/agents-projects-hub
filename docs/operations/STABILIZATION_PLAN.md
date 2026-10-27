@@ -32,12 +32,11 @@ triggers below. Historical evidence is not current deployment acceptance.
 
 ## Revised delivery scope
 
-Current checkpoint, 2026-10-27: the bounded minimal developer goal is closed;
-its evidence, limitations and subsequent priorities are owned by the
-[continuation plan](NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order).
-Source closure `2f6fa35`; linked-worktree follow-up `bfa08b6`. Broader
-stabilization remains open. The next selected increment is temporary Bash
-consent plus prompt card settlement; live acceptance of that change is pending.
+Current checkpoint, 2026-10-27: minimal developer goal closed; Bash consent/card
+settlement published at `16694c3`, live acceptance pending. Active goal:
+[developer tools/consultations](CLAUDE_DEVELOPER_TOOLS.md). The
+[continuation plan](NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order) owns
+evidence, weights and closure. Broader stabilization remains open.
 The older integration/editor-only next triggers below are historical.
 
 Current owner order (2026-10-26): integrate stop/tlive tails, minimal Claude

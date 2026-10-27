@@ -31,6 +31,7 @@ live acceptance.
 - [Claude Code: project editor and human approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 - [Independent Claude source review through CPA](operations/CLAUDE_SOURCE_REVIEW.md)
 - [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
+- [Claude developer tools and explicit consultations](operations/CLAUDE_DEVELOPER_TOOLS.md)
 - [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
 - [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)
 - [Passive incident journal and runbook catalogue](operations/INCIDENT_JOURNAL.md)
