@@ -434,9 +434,9 @@ def hosted_claude_launch(
             survived("claude_permission_host.boundary_unverified", error)
             if isinstance(error, TrustScanLimitError):
                 message = (
-                    "The project tree has too many files for the Claude file-tool trust scan. "
-                    "Move bulky generated files such as caches out of the project. "
-                    "The productive turn was not started."
+                    "A directory tree the Claude file-tool boundary must inspect has more "
+                    "entries than the trust scan allows, for example a project or its Git "
+                    "metadata holding large caches. The productive turn was not started."
                 )
             else:
                 message = "Claude file-tool permission boundary could not be verified. The productive turn was not started."

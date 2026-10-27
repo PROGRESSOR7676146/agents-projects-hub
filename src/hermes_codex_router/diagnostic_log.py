@@ -330,6 +330,13 @@ def survived(site: str, error: BaseException) -> None:
     registered at run time never contributes its name. Repeats of the same
     site and class are emitted at most once per interval with a count.
     """
+    try:
+        _record(site, error)
+    except Exception:  # noqa: BLE001 - the diagnostic path must never fail its caller
+        _count_dropped()
+
+
+def _record(site: str, error: BaseException) -> None:
     label = _site_label(site)
     kind = _error_kind(error)
     key = f"{label}:{kind}"
@@ -344,10 +351,7 @@ def survived(site: str, error: BaseException) -> None:
         repeated = _repeats.pop(key, 0)
         _last_emitted[key] = current
     suffix = f" (+{repeated} similar)" if repeated else ""
-    try:
-        _logger.warning("survived %s at %s%s", kind, label, suffix)
-    except Exception:  # noqa: BLE001 - the diagnostic path must never fail its caller
-        _count_dropped()
+    _logger.warning("survived %s at %s%s", kind, label, suffix)
 
 
 def reset_repeat_state() -> None:
