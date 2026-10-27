@@ -75,10 +75,11 @@ class FilePolicyTests(unittest.TestCase):
                 require_file_tool_event(event)
 
     def test_task_refusal_names_a_fixed_category_without_forwarding_payload(self) -> None:
-        for event in (
+        events: tuple[dict[str, object], ...] = (
             {"type": "task_started", "description": "FICTIONAL_PRIVATE_TASK"},
             {"type": "system", "subtype": "task_FICTIONAL_PRIVATE_TASK"},
-        ):
+        )
+        for event in events:
             with self.subTest(event=event), self.assertRaises(ClaudeStreamError) as raised:
                 require_file_tool_event(event)
             self.assertIn("background or child task", str(raised.exception))
