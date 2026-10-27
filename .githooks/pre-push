@@ -7,7 +7,10 @@ for variable in $local_git_environment; do
     unset "$variable"
 done
 
-python="$(git -C "$root" config --local --get hub.publishPython || true)"
+python="${HUB_PUBLISH_PYTHON:-}"
+if [ -z "$python" ]; then
+    python="$(git -C "$root" config --local --get hub.publishPython || true)"
+fi
 if [ -z "$python" ]; then
     python="$root/.venv/bin/python"
 fi

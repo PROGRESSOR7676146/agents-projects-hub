@@ -70,15 +70,17 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
     if "strategy" in job or "needs" in job:
         raise AssertionError("namespace job must run independently and unconditionally")
     steps = job.get("steps")
-    if not isinstance(steps, list) or len(steps) != 7:
-        raise AssertionError("namespace job must have seven required setup and test steps")
-    checkout, setup_python, setup_uv, tools, apparmor, install, invocation = steps
+    if not isinstance(steps, list) or len(steps) != 8:
+        raise AssertionError("namespace job must have eight required setup and test steps")
+    checkout, setup_python, setup_uv, setup_node, tools, apparmor, install, invocation = steps
     if checkout != {"uses": "actions/checkout@v6"}:
         raise AssertionError("namespace job must check out the event commit")
     if setup_python != {"uses": "actions/setup-python@v6", "with": {"python-version": "3.12"}}:
         raise AssertionError("namespace job must select Python 3.12")
     if setup_uv != {"uses": "astral-sh/setup-uv@v7"}:
         raise AssertionError("namespace job must install uv")
+    if setup_node != {"uses": "actions/setup-node@v6", "with": {"node-version": "22"}}:
+        raise AssertionError("namespace job must select Node 22")
     expected_tools = (
         "sudo apt-get update\n"
         "sudo apt-get install --yes bubblewrap apparmor\n"
@@ -117,7 +119,8 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "tests.test_process_namespace_rehearsal "
         "tests.test_process_namespace_topology "
         "tests.test_review_materials_namespace "
-        "tests.test_review_bridge_namespace"
+        "tests.test_review_bridge_namespace "
+        "tests.test_namespace_toolchain"
     ):
         raise AssertionError(
             "namespace job must run all required real namespace scenarios and outer wrapper witness"

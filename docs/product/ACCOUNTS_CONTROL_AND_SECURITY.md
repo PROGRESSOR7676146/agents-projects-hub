@@ -412,7 +412,26 @@ single-writer checks remain mandatory. See
   MUST be denied. Profile and session-home identity MUST remain pinned on exact
   resume and rollback; a profile change MUST require a fresh `/new` session.
   MCP, skills, external plugins and agent children remain unavailable in both
-  profiles. Standard linked Git worktrees MAY expose this worktree's metadata
+  profiles. An explicit developer toolchain MAY provide bounded readonly
+  root/worker-owned development tools, PATH and visible Git hook/Python/identity
+  settings. Tools MUST NOT be writable by others or overlap private authority,
+  control runtime, project or session HOME. Pinning, native-filesystem and bounded
+  tree checks remain; hardlinks/special files MUST refuse. Trusted control/hook
+  code MUST retain immutable root-owned validation. Launch-local Git settings
+  MUST disable implicit upstream setup and automatic gc/maintenance for linked
+  worktrees without changing shared/sibling config. The same authorized Bash
+  scope MAY invoke a separate text-only consultation CLI: one bounded explicit
+  question to a locally pinned CPA route/model/effort and response model, no
+  tools/session/writer, proxy/redirect, automatic retry or paid fallback.
+  It MUST return only complete visible text and retain uncertainty on timeout,
+  model mismatch or incomplete output. Stop MUST terminate the owned caller;
+  it MUST NOT claim remote cancellation. Configuration MUST require prior
+  verification of an inference-only credential and no-paid-fallback route;
+  declaration alone MUST NOT establish billing proof or credential quota isolation.
+  No management/signing credential may become visible. This is not passive
+  monitoring, an approval authority or Hub-managed review orchestration. See
+  [ADR 0078](../decisions/0078-claude-developer-tools-and-consultations.md).
+  Standard linked Git worktrees MAY expose this worktree's metadata
   plus shared objects/refs and existing reference logs, with Git access following
   the selected profile. Pointer files and shared configuration MUST be read-only;
   the primary checkout/index/HEAD and sibling worktree metadata MUST remain absent.

@@ -21,6 +21,7 @@ from typing import Mapping, Sequence
 from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
 from .claude_private_mounts import PrivateMountError, PrivateMountGuard, read_mount_table
 from .namespace_git import pin_git_sources
+from .namespace_toolchain import NamespaceToolchain, git_environment, validate_control_interpreters
 
 
 class NamespaceError(ValueError):
@@ -155,10 +156,12 @@ def _immutable_tree(path: Path) -> None:
                 raise NamespaceError("runtime tree contains a special entry")
 
 
-def _scan_writable_tree(root: Path, source_fd: int) -> set[tuple[int, int]]:
+def _scan_writable_tree(
+    root: Path, source_fd: int, *, toolchain: bool = False
+) -> set[tuple[int, int]]:
     """Scan the pinned source, never a replacement bearing the same path name."""
     try:
-        return _scan_pinned_tree(source_fd)
+        return _scan_pinned_tree(source_fd, toolchain=toolchain)
     except (OSError, MountPinError) as exc:
         error = exc if isinstance(exc, OSError) else exc.__cause__
         if not isinstance(error, OSError):
@@ -172,11 +175,19 @@ def _scan_writable_tree(root: Path, source_fd: int) -> set[tuple[int, int]]:
         raise NamespaceError(message) from exc
 
 
-def _scan_pinned_tree(source_fd: int) -> set[tuple[int, int]]:
+def _scan_pinned_tree(source_fd: int, *, toolchain: bool = False) -> set[tuple[int, int]]:
     """Own only the current ancestor chain while examining each pinned entry."""
     count = 0
     expected_mount = mount_id(source_fd)
     root_info = os.fstat(source_fd)
+
+    def check_owner(info: os.stat_result) -> None:
+        if toolchain and (info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022):
+            raise NamespaceError(
+                "toolchain must be owned by root/worker and not writable by others"
+            )
+
+    check_owner(root_info)
     expected_device = root_info.st_dev
     identities = {(root_info.st_dev, root_info.st_ino)}
     first = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=source_fd)
@@ -209,6 +220,7 @@ def _scan_pinned_tree(source_fd: int) -> set[tuple[int, int]]:
                     raise NamespaceError("writable tree changed during validation")
                 if stat.S_ISLNK(info.st_mode):
                     continue  # Outside targets stay absent in the new namespace.
+                check_owner(info)
                 if stat.S_ISREG(info.st_mode):
                     if info.st_nlink != 1:
                         raise NamespaceError("writable tree contains a hardlink")
@@ -380,6 +392,7 @@ class ProcessNamespaceConfig:
     network: str = "private"
     permission_socket: Path | None = None
     git_access: str = "read-only"
+    toolchain: NamespaceToolchain | None = None
 
     def __post_init__(self) -> None:
         if self.project_access not in ("read-only", "read-write"):
@@ -445,8 +458,22 @@ class ProcessNamespaceConfig:
             ):
                 raise NamespaceError("permission socket and parent need private ownership and mode")
         bwrap, roots = self.runtime.validate()
+        tools = () if self.toolchain is None else self.toolchain.roots
+        for index, path in enumerate(tools):
+            _absolute_path(path, "toolchain root")
+            _not_broad(path, "toolchain root")
+            if any(
+                _within(path, root) or _within(root, path)
+                for root in (
+                    *roots,
+                    *tools[:index],
+                    *((self.runtime.code_root,) if self.runtime.code_root else ()),
+                )
+            ):
+                raise NamespaceError("toolchain and trusted runtime mounts overlap")
+            _scan_writable_tree(path, source_fds[path], toolchain=True)
         code = self.runtime.code_root
-        sources = (project, home, *roots, *((code,) if code is not None else ()))
+        sources = (project, home, *roots, *tools, *((code,) if code is not None else ()))
         for writable in (project, home):
             for other in sources:
                 if writable != other and (_within(writable, other) or _within(other, writable)):
@@ -463,7 +490,52 @@ class ProcessNamespaceConfig:
             _within(source, sock) or _within(sock, source) for source in sources
         ):
             raise NamespaceError("permission socket overlaps a broad mount")
-        _validate_destinations(project, roots, code)
+        _validate_destinations(project, (*roots, *tools), code)
+        if self.toolchain is not None:
+            try:
+                validate_control_interpreters(
+                    (self.runtime.executable, *self.runtime.auxiliary_executables), roots
+                )
+            except (OSError, ValueError) as exc:
+                raise NamespaceError("toolchain cannot select a control interpreter") from exc
+            for path, project_hook in (
+                *((path, False) for path in self.toolchain.path),
+                (self.toolchain.git_hooks_path, True),
+                (self.toolchain.git_python, False),
+                (self.toolchain.author_policy, False),
+            ):
+                if path is None:
+                    continue
+                visible = (*roots, *tools)
+                if project_hook:
+                    visible = (project, *visible)
+                if not any(_within(path, root) for root in visible):
+                    raise NamespaceError("toolchain setting is outside visible mounts")
+                try:
+                    target = path.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    raise NamespaceError("toolchain setting is unavailable") from None
+                if not any(_within(target, root) for root in visible) or _within(
+                    target, project / ".hub/work"
+                ):
+                    raise NamespaceError("toolchain setting resolves outside visible mounts")
+                if path in self.toolchain.path and not path.is_dir():
+                    raise NamespaceError("toolchain PATH entry must be a directory")
+                if path in self.toolchain.path:
+                    for entry in path.iterdir():
+                        if entry.is_symlink():
+                            try:
+                                target = entry.resolve(strict=False)
+                            except (OSError, RuntimeError) as exc:
+                                raise NamespaceError("unsafe toolchain PATH link") from exc
+                            if not any(_within(target, root) for root in (*roots, *tools)):
+                                raise NamespaceError("toolchain PATH link leaves readonly mounts")
+                if path == self.toolchain.git_hooks_path and not path.is_dir():
+                    raise NamespaceError("Git hooks path must be a directory")
+                if path == self.toolchain.git_python and (
+                    not path.is_file() or not os.access(path, os.X_OK)
+                ):
+                    raise NamespaceError("Git Python must be executable")
         try:
             if private_guard is None:
                 with PrivateMountGuard() as guard:
@@ -507,6 +579,8 @@ class ProcessNamespaceConfig:
             pins.open(Path(self.permission_socket)) if self.permission_socket is not None else None
         )
         runtime_fds = {Path(root): pins.open(Path(root)) for root in self.runtime.runtime_roots}
+        tools = () if self.toolchain is None else self.toolchain.roots
+        tool_fds = {root: pins.open(root, directory=True) for root in tools}
         code = self.runtime.code_root
         code_fd = None
         if code is not None and not any(_within(code, root) for root in runtime_fds):
@@ -516,6 +590,7 @@ class ProcessNamespaceConfig:
             **git_sources.descriptors,
             Path(self.session_home): home_fd,
             **runtime_fds,
+            **tool_fds,
         }
         if self.permission_socket is not None and sock_fd is not None:
             source_fds[Path(self.permission_socket)] = sock_fd
@@ -532,6 +607,7 @@ class ProcessNamespaceConfig:
                     Path(self.project_root),
                     Path(self.session_home),
                     *runtime_fds,
+                    *tool_fds,
                     *((code,) if code is not None else ()),
                 ):
                     if _within(path, other) or _within(other, path):
@@ -569,6 +645,15 @@ class ProcessNamespaceConfig:
             TMPDIR="/tmp",
             PATH="/usr/bin:/bin",
         )
+        if git_sources.controls:
+            child_env.update(
+                git_environment(
+                    {"gc.auto": "0", "maintenance.auto": "false", "branch.autoSetupMerge": "false"}
+                )
+            )
+        if self.toolchain is not None:
+            child_env["PATH"] = ":".join((*map(str, self.toolchain.path), "/usr/bin", "/bin"))
+            child_env.update(self.toolchain.environment())
         command = [
             str(bwrap),
             "--unshare-user",
@@ -601,6 +686,8 @@ class ProcessNamespaceConfig:
         )
         for root in roots:
             command.extend(("--ro-bind-fd", str(runtime_fds[root]), str(root)))
+        for root, fd in tool_fds.items():
+            command.extend(("--ro-bind-fd", str(fd), str(root)))
         for alias, target in _SYSTEM_ALIASES.items():
             alias_path = Path(alias)
             if (

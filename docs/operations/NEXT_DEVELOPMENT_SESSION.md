@@ -17,12 +17,21 @@ runtime identities and live receipts remain private. The later linked-worktree
 patch passed source and isolated launch checks; a productive task on that layout
 remains separate acceptance. These limits survive the historical goal closure.
 
-Next owner-requested increment: explicit temporary Bash consent and immediate
+Previous source increment: explicit temporary Bash consent and immediate
 permission-card settlement, under [ADR 0077](../decisions/0077-temporary-claude-bash-consent.md).
-Source lane `feat/claude-bash-restart-grant`, base `bfa08b6`; primary agent owns
-implementation and integration. Publication needs focused/full gates and native
-Opus 5.5/high. Deployment and real callback acceptance remain separately scoped.
+Published as `16694c3` after exact-source canonical/CI and native Opus 5.5/high
+review of `78ec260`. Deployment and real callback acceptance remain separately scoped.
 After merge inspect tracked, staged and untracked lane state before any cleanup.
+
+Current active owner-requested goal: useful developer tools/Git, then bounded
+text-only model consultations, under [ADR 0078](../decisions/0078-claude-developer-tools-and-consultations.md)
+and the [toolchain runbook](CLAUDE_DEVELOPER_TOOLS.md). Last verified base `16694c3`.
+Sole writer/owner: primary development agent / Hub maintainer. Source lane
+`feat/claude-developer-toolchain`; next trigger: focused implementation, exact-head
+Opus/canonical/hosted gates, merge, then a separately authorized installed canary.
+Source, installation and live evidence remain distinct. Do not close the goal
+until the actual edit-test-build-commit-consult cycle is observed. Review the
+lane's tracked/staged/untracked state after merge and installed acceptance.
 
 Then follow the accepted order:
 
@@ -37,8 +46,10 @@ Then follow the accepted order:
 Historical minimal-goal weights are closed: source/review 25, developer/offline
 15, recovery safeguards 15, installation/convergence 20, bounded acceptance 20,
 closure 5: **100/100**. This denominator measures that finite goal only.
-The current temporary-Bash increment has its own fixed weights: audit/plans 15,
-implementation/focused regressions 55, Opus/publication/hosted gates 30.
+The temporary-Bash source increment is published. The active expansion uses fixed
+weights: diagnosis 15, usable toolchain/Git plus source publication 45, consultation
+plus source publication 20, installed acceptance 20. No source-only result earns
+the installed 20 points. Preparation and repeated checks add no credit.
 Report earned points, next checkpoint and actual blocker. Preparation, elapsed
 time and repeated checks add no credit. Source publication is not live acceptance.
 

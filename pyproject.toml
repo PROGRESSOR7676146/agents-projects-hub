@@ -37,6 +37,7 @@ dev = [
 [project.scripts]
 hcr = "hermes_codex_router.cli:main"
 agents-projects-hub = "hermes_codex_router.cli:main"
+hub-consult = "hermes_codex_router.consult:main"
 agents-projects-hub-wait-socket = "hermes_codex_router.socket_ready:main"
 agents-projects-hub-prepare-codex-socket-dir = "hermes_codex_router.socket_directory:main"
 

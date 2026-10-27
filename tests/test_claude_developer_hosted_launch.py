@@ -16,6 +16,7 @@ from unittest.mock import patch
 from hermes_codex_router import claude_permission_host as host
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig
 from hermes_codex_router.claude_permissions_config import ClaudeFilePermissionsConfig
+from hermes_codex_router.namespace_toolchain import NamespaceToolchain
 from hermes_codex_router.tlive_permissions import TlivePermissionConfig
 from tests import test_claude_permission_host_roundtrip as fixtures
 
@@ -41,6 +42,7 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
             bwrap_executable=Path("/usr/bin/bwrap"),
             private_paths=(base / "private",),
             profile="developer",
+            toolchain=NamespaceToolchain((base / "tools",), (base / "tools/bin",)),
         )
         config = replace(fixture.config, claude_file_permissions=settings)
         transport = TlivePermissionConfig(
@@ -73,6 +75,8 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
         ):
             assert hosted is not None
             self.assertEqual(hosted.sandbox.profile, "developer")
+            self.assertIs(hosted.sandbox.toolchain, settings.toolchain)
+            self.assertIs(hosted.sandbox._namespace.toolchain, settings.toolchain)
             self.assertEqual(hosted.sandbox.provider_home, home / fixture.native_id)
             fixture.server = servers[0]
             fixture.launch = fixture.server.launch
