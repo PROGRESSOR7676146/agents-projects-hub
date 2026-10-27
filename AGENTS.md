@@ -68,7 +68,7 @@ to the current state. The public plan stays in
 
 ## agy Gemini Flash helper delegation (Codex sessions)
 
-When `gemini-agent-mcp` is available, strongly prefer delegating ordinary and moderately complex subtasks to agy Gemini Flash helpers before spending Codex-side context and reasoning on them. This includes `git status`, `git diff`, `git log`, `rg`, file discovery, dependency inspection, log scanning, test-output triage, alternative hypotheses and summary passes. All source review, including first-pass review, follows the Opus-only rule below.
+When `gemini-agent-mcp` is available, strongly prefer delegating ordinary and moderately complex subtasks to agy Gemini Flash helpers before spending Codex-side context and reasoning on them. This includes `git status`, `git diff`, `git log`, `rg`, file discovery, dependency inspection, log scanning, test-output triage, alternative hypotheses and summary passes. All source review, including first-pass review, follows the reviewer rule below.
 
 Use this delegation bias only when it is expected to preserve or improve task quality. Do not delegate when direct Codex reading, synthesis, or decision-making over the source material is likely to produce a better result, such as when nuanced summarization, cross-document judgment, sensitive context handling, or final integration depends on Codex's own analysis.
 
@@ -118,13 +118,16 @@ revision and highest proven level.
 
 - A pull request that changes more than about 300 lines, or touches Controller,
   state, worker lifecycle, security, trust boundaries or release gates, needs an
-  independent Claude Opus review by an agent that did not write it, or the
-  owner's own review. Agent reviews use only Opus 5.5/high; Argon and Astra
-  review fallback permissions are revoked. Follow
-  `docs/operations/CLAUDE_SOURCE_REVIEW.md` and record the findings in the pull
-  request.
-- Invoke independent Claude source review directly through CPA HTTP, without
-  Claude CLI, following [the review runbook](docs/operations/CLAUDE_SOURCE_REVIEW.md).
+  independent agent review by a model family that did not write it, or the
+  owner's own review. The reviewer follows the author's active model: Codex or
+  other non-Claude authors get Claude Opus 5.5/high; Claude authors get GPT-6.1
+  Sol/high, or GPT Astra/high for exceptionally important changes. Argon is not
+  a reviewer. Follow `docs/operations/CLAUDE_SOURCE_REVIEW.md` and record the
+  findings in the pull request.
+- A Claude-led session consults GPT Astra on architectural and other important
+  decisions before committing to them; the owner still decides.
+- Invoke independent source review directly through CPA HTTP, without a
+  provider CLI, following [the review runbook](docs/operations/CLAUDE_SOURCE_REVIEW.md).
   Resolve the exact provider/model route before inferring reviewer availability.
 - The owner delegates merging ready pull requests into `main` to the primary
   development agent within the authorized task scope; no per-PR confirmation
