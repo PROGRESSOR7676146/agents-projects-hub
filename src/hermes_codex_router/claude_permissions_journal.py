@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from .claude_permission_binding import binding_digest, binding_snapshot
 from .claude_permission_protocol import ProtectedPayload, canonical_uuid
+from .claude_permission_wait import HUMAN_PERMISSION_SECONDS
 from .claude_tool_profiles import profile_tools
 from .execution_journal import ExecutionJournal
 from .state import HubState, StateError
@@ -140,13 +141,13 @@ class ClaudePermissionJournal:
         tool: str,
         tool_input: Any,
         *,
-        lifetime_seconds: int = 120,
+        lifetime_seconds: int = HUMAN_PERMISSION_SECONDS,
         notify_wait: bool = True,
     ) -> str:
         if (
             tool not in profile_tools(launch.profile)
             or type(lifetime_seconds) is not int
-            or not 1 <= lifetime_seconds <= 120
+            or not 1 <= lifetime_seconds <= HUMAN_PERMISSION_SECONDS
         ):
             raise StateError("Claude permission tool or deadline is unsupported")
         if len(event_digest) != 64 or any(c not in "0123456789abcdef" for c in event_digest):

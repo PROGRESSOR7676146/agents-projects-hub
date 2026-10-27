@@ -17,6 +17,7 @@ from unittest.mock import patch
 from hermes_codex_router.claude_file_policy import require_file_tool_event
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from hermes_codex_router.claude_mount_pins import MountPins, SandboxLaunch
+from hermes_codex_router.claude_permission_wait import PermissionWaitClock
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeTerminalFailure,
@@ -393,6 +394,47 @@ class ExternalRuntimeTests(unittest.TestCase):
     def test_claude_timeout_reaps_process_and_closes_pipes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             self._claude_process("import time\ntime.sleep(30)\n", timeout=0.05)
+
+    def test_human_wait_outlasts_productive_timeout_and_result_is_drained(self) -> None:
+        waiting = PermissionWaitClock()
+        native = str(uuid.uuid4())
+        terminal = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": native,
+                "result": "Finished after approval",
+            }
+        )
+
+        def human_wait() -> None:
+            with waiting.waiting():
+                time.sleep(0.4)
+
+        result = self._claude_process(
+            f"print({terminal!r}, flush=True)\n",
+            timeout=0.2,
+            new_session_id=native,
+            claude_permission_wait=waiting,
+            on_claude_process_started=human_wait,
+        )
+        self.assertEqual(result.text, "Finished after approval")
+
+    def test_productive_timeout_resumes_after_permission_wait(self) -> None:
+        waiting = PermissionWaitClock()
+
+        def human_wait() -> None:
+            with waiting.waiting():
+                time.sleep(0.3)
+
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            self._claude_process(
+                "import time\ntime.sleep(30)\n",
+                timeout=0.1,
+                claude_permission_wait=waiting,
+                on_claude_process_started=human_wait,
+            )
 
     def test_claude_help_and_turn_reserve_leader_pid_until_last_group_signal(self) -> None:
         session = str(uuid.uuid4())

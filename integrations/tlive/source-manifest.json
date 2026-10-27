@@ -151,7 +151,7 @@
     "src/types/qrcode-terminal.d.ts": "1970491e4ebeed1b9949eacaf292d79ed81c5e7a0b62af1d7980971e6de12559"
   },
   "package": "tlive",
-  "patch_sha256": "d902d8f63f0c657eaf1d27f1826b46376daa45918a2dde801de8d08849ae98bf",
+  "patch_sha256": "1b3f2de30337c5b53c5ddf7af57f1fe500aa574a659ae5314185b00ca2dd3f70",
   "patched_files": {
     "src/adapters/im/telegram.ts": "a15f707aab9048d9e65df01750b8c339ffbc1bc57693df7b8e0a0d2334ce94bd",
     "src/kernel/codex/__tests__/companion.test.ts": "5a71602e27a41da062f4d642e92c2f65dfa3af29b236c2ab3e908fa9dc921173",
@@ -161,7 +161,7 @@
     "src/kernel/contracts/protected-permission.ts": "87c8c09c39f755dc1c942a930172ee454f348d70b73be91c837fa5da99e1a3b3",
     "src/kernel/daemon/bootstrap.ts": "f9db33b037a1c2e44070b555bb12d924590b2392a4b794813452a4ba5208a216",
     "src/kernel/daemon/permission-router.ts": "9d55b104eeb43cc97713f2e4194d10beb7b279b152860a4cb8186a20af5b4a68",
-    "src/kernel/daemon/protected-permissions.ts": "c9af34a5b6bd33925984f2f17d8a7583d5c1f22b7c55cabf47b7ec9d82a14f04",
+    "src/kernel/daemon/protected-permissions.ts": "75f59f9306107c74a0cc74a7d047085e5b64d19c2e846b4056b29b002f13d182",
     "src/kernel/ipc/protocol.ts": "31b02a3091814ac5062c4ed5313186b608f2826f8968ea453fab4f5973d5b47e"
   },
   "version": "5.3.1"

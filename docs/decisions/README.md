@@ -97,3 +97,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0075: Personal Claude developer profile](0075-claude-personal-developer-profile.md) — minimal ordinary-root goal closed; later increments retain separate acceptance.
 
 - [0077: Temporary Claude Bash consent](0077-temporary-claude-bash-consent.md) — explicit per-session consent until worker/tlive restart; prompt card settlement.
+
+- [0079: Long human permission waits](0079-long-human-permission-waits.md) — human waiting is separate from productive deadlines; installed acceptance pending.

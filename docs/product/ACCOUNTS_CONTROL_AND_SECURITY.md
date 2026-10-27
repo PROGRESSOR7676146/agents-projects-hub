@@ -378,6 +378,14 @@ single-writer checks remain mandatory. See
   requiring masking or an incomplete preview MUST be denied. Native permission
   suggestions MUST NOT become persistent grants or input changes. Restart,
   timeout, unavailable isolation/host and ambiguity MUST deny without replay.
+  A protected human decision MUST have a seven-day response window, bounded by
+  the current live launch and channel; stop, disconnect or restart MUST invalidate
+  it without replay. The native hook and protected transport MUST cover that
+  window. Only waiting owned by the trusted host after exact request validation
+  and journal preparation MAY suspend the productive process deadline. Native
+  output MUST NOT suspend it. Productive timeouts and bounded stop/cleanup MUST
+  remain effective before and after human waiting. This window is not a grant
+  and MUST NOT survive process or channel loss.
   The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
   continuation, mirroring or second conversation writer. The default `editor`
   profile retains per-write human permission and read-only ordinary Git metadata.

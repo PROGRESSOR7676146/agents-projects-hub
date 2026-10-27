@@ -63,7 +63,7 @@ class TliveTests(unittest.TestCase):
             launch_epoch=str(uuid4()),
             tool_name="Read",
             tool_input={},
-            expires_at=int((time.time() + 60) * 1000),
+            expires_at=int((time.time() + 7 * 86400 - 1) * 1000),
         ).to_json()
 
         def mac(key, fields):
@@ -146,6 +146,11 @@ class TliveTests(unittest.TestCase):
             capability = client.hello()
             self.assertEqual(capability.epoch, epoch)
             self.assertEqual(client.request(payload, capability).decision, "allow")
+            invalid = json.loads(payload)
+            for expiry in (0, int((time.time() + 8 * 86400) * 1000)):
+                invalid["expiresAt"] = expiry
+                with self.assertRaises(TlivePermissionError):
+                    client.request(json.dumps(invalid), capability)
             FakeSocket.tamper = True
             with self.assertRaises(TlivePermissionError):
                 client.request(payload, capability)

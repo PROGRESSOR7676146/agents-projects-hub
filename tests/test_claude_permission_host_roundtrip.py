@@ -409,6 +409,23 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         self.assertEqual(payload.session_id, self.native_id)
         self.assertEqual(payload.lease_id, self.token)
 
+    def test_long_wait_budget_is_host_owned_and_ends_after_decision(self) -> None:
+        hook, result = self._hook()
+        payload = self._await_request()
+        remaining = payload.expires_at / 1000 - time.time()
+        self.assertGreater(remaining, 7 * 24 * 3600 - 10)
+        time.sleep(0.02)
+        self.assertGreater(self.server.permission_wait.elapsed(), 0)
+        self._finish(hook, result, "allow")
+        elapsed = self.server.permission_wait.elapsed()
+        time.sleep(0.02)
+        self.assertEqual(self.server.permission_wait.elapsed(), elapsed)
+
+    def test_invalid_hook_does_not_pause_productive_time(self) -> None:
+        hook, result = self._hook(self._event(cwd="/home/example/other"))
+        self._finish(hook, result, "deny")
+        self.assertEqual(self.server.permission_wait.elapsed(), 0)
+
     def test_developer_bash_stop_revokes_even_a_valid_late_allow(self) -> None:
         self.launch = dataclasses.replace(self.launch, profile="developer")
         self.server.launch = self.launch

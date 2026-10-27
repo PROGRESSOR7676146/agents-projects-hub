@@ -13,6 +13,7 @@ from .artifacts import (
 )
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_image_input import VerifiedClaudeImage
+from .claude_permission_wait import PermissionWaitClock
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError, CodexRetryBindingError
@@ -452,6 +453,7 @@ def invoke_external_provider_turn(
     on_visible_assistant: VisibleAssistantCallback | None = None,
     on_claude_process_started: Callable[[], None] | None = None,
     claude_sandbox: FileToolSandboxConfig | None = None,
+    claude_permission_wait: PermissionWaitClock | None = None,
     claude_images: tuple[VerifiedClaudeImage, ...] = (),
     pending_stop_request: Callable[[], str | None] | None = None,
 ) -> ExternalTurnResult:
@@ -478,6 +480,7 @@ def invoke_external_provider_turn(
                 on_visible_assistant=on_visible_assistant,
                 on_claude_process_started=on_claude_process_started,
                 claude_sandbox=claude_sandbox,
+                claude_permission_wait=claude_permission_wait,
                 claude_images=claude_images,
             )
         except ClaudeProcessStopped as exc:

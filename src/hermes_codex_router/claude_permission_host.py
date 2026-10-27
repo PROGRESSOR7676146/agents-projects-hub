@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -22,6 +22,7 @@ from .claude_permission_protocol import (
     event_digest,
     parse_json_strict,
 )
+from .claude_permission_wait import PermissionWaitClock
 from .claude_permissions_journal import (
     ClaudePermissionJournal,
     ClaudeSessionModeError,
@@ -39,6 +40,7 @@ from .worker_execution import resolve_external_worker_target, revalidate_worker_
 @dataclass(frozen=True, slots=True)
 class HostedClaudeLaunch:
     sandbox: FileToolSandboxConfig
+    permission_wait: PermissionWaitClock = field(default_factory=PermissionWaitClock)
 
 
 class _HookWait(threading.Event):
@@ -72,6 +74,7 @@ class PermissionServer:
     ) -> None:
         self.path, self.config, self.launch = path, config, launch
         self.client, self.capability = client, capability
+        self.permission_wait = PermissionWaitClock()
         self.stop = threading.Event()
         self.inflight: threading.Thread | None = None
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -176,7 +179,12 @@ class PermissionServer:
             event["tool_input"],
             **options,
         )
-        receipt = None if granted else self.client.request(payload, capability, cancellation)
+        receipt = None
+        if not granted:
+            # Only a validated, live, journaled request pauses productive time.
+            # Native stdout and an untrusted hook's claims never control this clock.
+            with self.permission_wait.waiting():
+                receipt = self.client.request(payload, capability, cancellation)
         decision = (
             "allow"
             if receipt is None or receipt.decision == "allow_bash_until_restart"
@@ -426,7 +434,7 @@ def hosted_claude_launch(
             ) from None
         server.thread.start()
         try:
-            yield HostedClaudeLaunch(sandbox)
+            yield HostedClaudeLaunch(sandbox, server.permission_wait)
         finally:
             try:
                 server.close()
