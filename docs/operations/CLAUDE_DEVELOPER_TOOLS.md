@@ -58,6 +58,12 @@ progress records do not grant tools or forward command output.
 PATH, validation Python and author policy must resolve inside readonly tools or
 runtime mounts, never the writable project. Git hooks may live in the project.
 PATH command symlinks must also resolve inside readonly tool/runtime mounts.
+The mount is the readonly boundary; the author-policy file itself must still be a
+single-link regular file owned by the worker with mode `0600`, or the history scan
+ignores it and reports the pinned merge identities. Each PATH command must be the
+intended entry point: a venv `bin` placed first can shadow a configured wrapper
+with its own console script of the same name, such as an unconfigured
+`hub-consult`. Check `command -v` for each tool inside the namespace.
 The shipped hooks accept
 `HUB_PUBLISH_PYTHON` and `HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE` from trusted launch
 configuration before falling back to host local settings. They retain the staged
