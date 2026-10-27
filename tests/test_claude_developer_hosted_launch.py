@@ -136,9 +136,18 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
         servers: list[host.PermissionServer] = []
         server_type = host.PermissionServer
 
+        closed: list[bool] = []
+
         def capture(*args, **kwargs):
             server = server_type(*args, **kwargs)
             servers.append(server)
+            original = server.close
+
+            def close() -> None:
+                closed.append(server.path.exists())
+                original()
+
+            server.close = close  # type: ignore[method-assign]
             return server
 
         diagnostic_log.reset_repeat_state()
@@ -170,8 +179,11 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
                 self.fail("unverified boundary started productive execution")
         self.assertEqual(failure.exception.code, "claude_permission_host_unverified")
         self.assertIsNone(failure.exception.__cause__)
+        self.assertIsNone(failure.exception.__context__)
         self.assertEqual(len(servers), 1)
-        self.assertFalse(servers[0].thread.is_alive())
+        self.assertIsNone(servers[0].thread.ident)
+        # Closed while its directory still existed, and the socket is gone after close.
+        self.assertEqual(closed, [True])
         self.assertFalse(servers[0].path.exists())
         self.assertEqual(
             fixture.state._connection.execute(
@@ -214,11 +226,11 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
         )
 
     def test_a_failing_diagnostic_never_replaces_the_sanitized_refusal(self) -> None:
-        before = diagnostic_log.dropped_records()
         with patch.object(diagnostic_log, "_record", side_effect=RuntimeError("fictional")):
             message, _ = self._refusal(NamespaceError("fictional-detail"), logged=False)
         self.assertIn("could not be verified", message)
-        self.assertEqual(diagnostic_log.dropped_records(), before + 1)
+        # The helper resets diagnostic state first, so exactly this failure was counted.
+        self.assertEqual(diagnostic_log.dropped_records(), 1)
 
     def test_real_writable_tree_scan_raises_the_limit_class(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-scan-limit-") as directory:

@@ -350,6 +350,7 @@ def hosted_claude_launch(
     if settings is None:
         yield None
         return
+    refusal: str | None = None
     with tempfile.TemporaryDirectory(prefix="hub-claude-permission-") as directory:
         try:
             if session_id is None:
@@ -433,19 +434,22 @@ def hosted_claude_launch(
             # Only the step's class reaches the process log; its text can hold paths.
             survived("claude_permission_host.boundary_unverified", error)
             if isinstance(error, TrustScanLimitError):
-                message = (
+                refusal = (
                     "A directory tree the Claude file-tool boundary must inspect has more "
                     "entries than the trust scan allows, for example a project or its Git "
                     "metadata holding large caches. The productive turn was not started."
                 )
             else:
-                message = "Claude file-tool permission boundary could not be verified. The productive turn was not started."
-            raise ProviderUnavailableError("claude_permission_host_unverified", message) from None
-        server.thread.start()
-        try:
-            yield HostedClaudeLaunch(sandbox, server.permission_wait)
-        finally:
+                refusal = "Claude file-tool permission boundary could not be verified. The productive turn was not started."
+        else:
+            server.thread.start()
             try:
-                server.close()
+                yield HostedClaudeLaunch(sandbox, server.permission_wait)
             finally:
-                journal.close_launch(launch)
+                try:
+                    server.close()
+                finally:
+                    journal.close_launch(launch)
+    if refusal is not None:
+        # Raised outside the handler so the refusal carries no original exception.
+        raise ProviderUnavailableError("claude_permission_host_unverified", refusal)
