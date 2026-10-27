@@ -85,4 +85,7 @@ class FileToolSandboxConfig:
             raise FileToolSandboxError("provider executable differs from pinned Claude executable")
         child = dict(env)
         child["CLAUDE_CONFIG_DIR"] = f"{SANDBOX_HOME}/.claude"
+        # Native Bash may otherwise promote a long foreground command to an
+        # asynchronous task, outside the owned command/stop contract.
+        child["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
         return self._namespace.wrap(argv, child, cwd)

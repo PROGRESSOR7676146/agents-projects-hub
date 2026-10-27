@@ -114,6 +114,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         self.assertNotIn(str(self.private), argv)
         self.assertEqual(env["HOME"], "/home/example")
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "/home/example/.claude")
+        self.assertEqual(env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
         self.assertNotIn("USER", env)
         self.assertEqual(argv[-3:], [str(self.executable), "-c", "pass"])
 

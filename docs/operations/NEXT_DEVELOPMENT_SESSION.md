@@ -25,10 +25,14 @@ After merge inspect tracked, staged and untracked lane state before any cleanup.
 
 Current active owner-requested goal: useful developer tools/Git, then bounded
 text-only model consultations, under [ADR 0078](../decisions/0078-claude-developer-tools-and-consultations.md)
-and the [toolchain runbook](CLAUDE_DEVELOPER_TOOLS.md). Last verified base `16694c3`.
+and the [toolchain runbook](CLAUDE_DEVELOPER_TOOLS.md). Published source `8e43d16`,
+merged as `801385a`; canonical checks, hosted CI and Opus 5.5/high review passed.
 Sole writer/owner: primary development agent / Hub maintainer. Source lane
-`feat/claude-developer-toolchain`; next trigger: focused implementation, exact-head
-Opus/canonical/hosted gates, merge, then a separately authorized installed canary.
+`feat/claude-developer-toolchain`; source publication is complete, installed
+functional acceptance is open (**80/100**). Acceptance follow-up
+`fix/claude-foreground-onboarding` keeps long commands in the foreground and
+adds profile-specific environment orientation. Next trigger: its exact-head
+Opus/canonical/hosted gates, then finish the authorized installed canary.
 Source, installation and live evidence remain distinct. Do not close the goal
 until the actual edit-test-build-commit-consult cycle is observed. Review the
 lane's tracked/staged/untracked state after merge and installed acceptance.
