@@ -29,8 +29,10 @@ from .claude_permissions_journal import (
     PermissionLaunch,
 )
 from .claude_tool_profiles import profile_tools
+from .diagnostic_log import survived
 from .external_runtime import ProviderUnavailableError
 from .hub_config import AgentDefinition, HubConfig
+from .process_namespace import TrustScanLimitError
 from .state import HubState, ProviderJobRecord, StateError
 from .tlive_permissions import ProtectedTliveClient, TliveCapability, load_tlive_permission_config
 from .unix_peer import PeerCredentialError, require_same_uid_peer
@@ -423,15 +425,22 @@ def hosted_claude_launch(
             )
             with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
                 pass  # Validate and release source pins; invocation acquires its own set.
-        except Exception:
+        except Exception as error:
             if server is not None:
                 server.close()
             if launch is not None:
                 journal.close_launch(launch)
-            raise ProviderUnavailableError(
-                "claude_permission_host_unverified",
-                "Claude file-tool permission boundary could not be verified. The productive turn was not started.",
-            ) from None
+            # Only the step's class reaches the process log; its text can hold paths.
+            survived("claude_permission_host.boundary_unverified", error)
+            if isinstance(error, TrustScanLimitError):
+                message = (
+                    "The project tree has too many files for the Claude file-tool trust scan. "
+                    "Move bulky generated files such as caches out of the project. "
+                    "The productive turn was not started."
+                )
+            else:
+                message = "Claude file-tool permission boundary could not be verified. The productive turn was not started."
+            raise ProviderUnavailableError("claude_permission_host_unverified", message) from None
         server.thread.start()
         try:
             yield HostedClaudeLaunch(sandbox, server.permission_wait)

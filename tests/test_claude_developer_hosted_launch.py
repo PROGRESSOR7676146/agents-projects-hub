@@ -14,9 +14,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router import claude_permission_host as host
+from hermes_codex_router import diagnostic_log
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig
 from hermes_codex_router.claude_permissions_config import ClaudeFilePermissionsConfig
+from hermes_codex_router.external_runtime import ProviderUnavailableError
 from hermes_codex_router.namespace_toolchain import NamespaceToolchain
+from hermes_codex_router.process_namespace import NamespaceError, TrustScanLimitError
 from hermes_codex_router.tlive_permissions import TlivePermissionConfig
 from tests import test_claude_permission_host_roundtrip as fixtures
 
@@ -101,3 +104,79 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
             ).fetchone()[0],
             "closed",
         )
+
+    def _refusal(self, error: Exception) -> tuple[str, list[str]]:
+        fixture = fixtures.PermissionHostRoundtripTests()
+        fixture.setUp(start_host=False)
+        self.addCleanup(fixture.doCleanups)
+        base = fixture.root.parent
+        home = base / "provider-home"
+        home.mkdir(mode=0o700)
+        peer = fixtures.FakeTlive(base / "tlive.sock")
+        self.addCleanup(peer.close)
+        settings = ClaudeFilePermissionsConfig(
+            tlive_config=base / "protected.json",
+            tlive_home=base / "tlive-home",
+            provider_home=home,
+            runtime_roots=(Path("/usr"),),
+            python_executable=Path("/usr/bin/python3"),
+            hook_code_root=Path("/opt/example-runtime"),
+            bwrap_executable=Path("/usr/bin/bwrap"),
+            private_paths=(base / "private",),
+            profile="developer",
+            toolchain=NamespaceToolchain((base / "tools",), (base / "tools/bin",)),
+        )
+        config = replace(fixture.config, claude_file_permissions=settings)
+        transport = TlivePermissionConfig(
+            str(peer.path), "42", "42", peer.request_key, peer.result_key
+        )
+        diagnostic_log.reset_repeat_state()
+        self.addCleanup(diagnostic_log.reset_repeat_state)
+        with (
+            patch.object(host, "load_tlive_permission_config", return_value=transport),
+            patch.object(host.shutil, "which", return_value="/usr/bin/true"),
+            patch("hermes_codex_router.claude_file_sandbox.NamespaceRuntime"),
+            patch.object(FileToolSandboxConfig, "wrap", side_effect=error),
+            self.assertLogs(diagnostic_log.LOGGER_NAME, level="WARNING") as logs,
+            self.assertRaises(ProviderUnavailableError) as failure,
+        ):
+            with host.hosted_claude_launch(
+                config,
+                fixture.state,
+                config.agents[0],
+                fixture.job,
+                fixture.token,
+                fixture.native_id,
+                fixture.root,
+                is_new=True,
+            ):
+                self.fail("unverified boundary started productive execution")
+        self.assertEqual(failure.exception.code, "claude_permission_host_unverified")
+        self.assertEqual(
+            fixture.state._connection.execute(
+                "SELECT status FROM claude_permission_launches"
+            ).fetchone()[0],
+            "closed",
+        )
+        return str(failure.exception), logs.output
+
+    def test_trust_scan_limit_refusal_names_the_cause_without_paths(self) -> None:
+        message, logs = self._refusal(
+            TrustScanLimitError("writable tree exceeds trust scan limit: /home/example/project")
+        )
+        self.assertIn("too many files", message)
+        self.assertNotIn("/home/example", message)
+        self.assertEqual(len(logs), 1)
+        self.assertIn(
+            "survived TrustScanLimitError at claude_permission_host.boundary_unverified", logs[0]
+        )
+        self.assertNotIn("/home/example", logs[0])
+
+    def test_other_boundary_refusals_keep_the_generic_text_and_log_their_class(self) -> None:
+        message, logs = self._refusal(NamespaceError("private mount at /home/example/secret"))
+        self.assertIn("could not be verified", message)
+        self.assertNotIn("/home/example", message)
+        self.assertIn(
+            "survived NamespaceError at claude_permission_host.boundary_unverified", logs[0]
+        )
+        self.assertNotIn("/home/example", logs[0])
