@@ -159,7 +159,8 @@ start with `/new`. Listed trees are readonly; credential directories such as
 `~/.config`, `~/.local`, `~/.cache` and `~/.ssh` must not be listed, and the
 launch refuses `/var`, `/run`, `/tmp`, `/mnt`, `/home` and a whole user home.
 Keep `.env*` files, service sockets and state-database copies out of listed
-trees, or at their top level where masking applies. Foreground Bash runs
+trees: masks cover only entries present at launch at a tree's top level and in
+checkouts one level down; later or deeper copies are readable. Foreground Bash runs
 without a card. See [ADR 0080](../decisions/0080-claude-workstation-profile.md).
 
 All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,

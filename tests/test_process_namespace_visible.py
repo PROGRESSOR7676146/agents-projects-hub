@@ -46,6 +46,11 @@ result['neighbor_env'] = read(inputs['neighbor'] + '/.env')
 result['neighbor_env_dir'] = listing(inputs['neighbor'] + '/.env.d')
 result['neighbor_work'] = listing(inputs['neighbor'] + '/.hub/work')
 result['root_env'] = read(inputs['sources'] + '/.env.local')
+result['root_env_dir'] = listing(inputs['sources'] + '/.env.d')
+result['upper_env'] = read(inputs['neighbor'] + '/.ENV')
+result['alias_env'] = read(inputs['sources'] + '/current/.env')
+result['alias_work'] = listing(inputs['sources'] + '/current/.hub/work')
+result['alias_readme'] = read(inputs['sources'] + '/current/README')
 result['project_env'] = read('.env')
 result['project_work'] = listing('.hub/work')
 result['project_write'] = write('new-file')
@@ -94,6 +99,17 @@ class VisibleRootWitnessTests(unittest.TestCase):
             (neighbor / ".hub" / "work").mkdir(parents=True)
             (neighbor / ".hub" / "work" / "state.db").write_text("fictional", encoding="utf-8")
             (sources / ".env.local").write_text("FICTIONAL_TOKEN=root", encoding="utf-8")
+            # A masked directory hides its own .env entries without a nested mask.
+            (sources / ".env.d").mkdir()
+            (sources / ".env.d" / ".env.local").write_text("fictional", encoding="utf-8")
+            (neighbor / ".ENV").write_text("FICTIONAL_TOKEN=upper", encoding="utf-8")
+            # A symlinked child checkout deeper in the tree is masked at its target.
+            deep = sources / "archive" / "team" / "repo"
+            (deep / ".hub" / "work").mkdir(parents=True)
+            (deep / ".hub" / "work" / "receipt").write_text("fictional", encoding="utf-8")
+            (deep / ".env").write_text("FICTIONAL_TOKEN=deep", encoding="utf-8")
+            (deep / "README").write_text("deep-source", encoding="utf-8")
+            (sources / "current").symlink_to(Path("archive") / "team" / "repo")
             secret = authority / "key"
             secret.write_text("fictional-private-key", encoding="utf-8")
             try:
@@ -131,10 +147,17 @@ class VisibleRootWitnessTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             result = json.loads(completed.stdout)
             self.assertEqual(result["neighbor"], "neighbor-source")
-            for key in ("neighbor_env", "root_env", "project_env"):
+            self.assertEqual(result["alias_readme"], "deep-source")
+            for key in ("neighbor_env", "root_env", "project_env", "upper_env", "alias_env"):
                 # A device-node mask under nodev denies the open: no content either way.
                 self.assertIn(result[key], ("", errno.EACCES), key)
-            for key in ("neighbor_env_dir", "neighbor_work", "project_work"):
+            for key in (
+                "neighbor_env_dir",
+                "neighbor_work",
+                "project_work",
+                "root_env_dir",
+                "alias_work",
+            ):
                 self.assertEqual(result[key], [], key)
             self.assertEqual(result["project_write"], "written")
             self.assertIsInstance(result["neighbor_write"], int)

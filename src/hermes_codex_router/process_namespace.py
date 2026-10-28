@@ -303,35 +303,36 @@ def _masked_entries(base: Path, visible: tuple[Path, ...]) -> list[tuple[Path, b
     """Return operational and environment-file paths to hide, with directory flags.
 
     Covers a visible tree's top level and its immediate children, where project
-    checkouts live. A symlinked entry masks its target when that is visible.
+    checkouts live; a symlinked child is followed to a visible target. This is
+    launch-time hygiene over a live tree, not a snapshot (ADR 0080).
     """
-    candidates = [base]
     try:
         children = list(base.iterdir())
     except OSError as exc:
         raise NamespaceError("cannot inspect visible tree") from exc
     if len(children) > _MAX_VISIBLE_CHILDREN:
         raise NamespaceError("visible tree has too many top-level entries to mask")
-    candidates.extend(child for child in children if child.is_dir() and not child.is_symlink())
+    candidates = [base]
+    for child in children:
+        target = _visible_target(child, visible) if child.is_symlink() else child
+        if target is not None and target.is_dir() and target not in candidates:
+            candidates.append(target)
     masks: list[tuple[Path, bool]] = []
     for directory in candidates:
+        if any(kind and _within(directory, path) for path, kind in masks):
+            continue  # Already hidden whole by an earlier mask.
         try:
             names = [entry.name for entry in os.scandir(directory)]
         except OSError as exc:
             raise NamespaceError("cannot inspect visible tree") from exc
-        selected = [directory / name for name in names if name.startswith(".env")]
+        selected = [directory / name for name in names if name.casefold().startswith(".env")]
         work = directory / ".hub" / "work"
         if work.exists() or work.is_symlink():
             selected.append(work)
         for entry in selected:
-            target = entry
-            if entry.is_symlink():
-                try:
-                    target = entry.resolve(strict=True)
-                except (OSError, RuntimeError):
-                    continue  # A dangling link exposes no content.
-                if not any(_within(target, root) for root in visible):
-                    continue  # Outside targets stay absent in the new namespace.
+            target = _visible_target(entry, visible) if entry.is_symlink() else entry
+            if target is None:
+                continue
             if target.is_dir():
                 masks.append((target, True))
             elif target.is_file():
@@ -339,6 +340,24 @@ def _masked_entries(base: Path, visible: tuple[Path, ...]) -> list[tuple[Path, b
             else:
                 raise NamespaceError("visible tree contains an unsupported masked entry")
     return masks
+
+
+def _visible_target(link: Path, visible: tuple[Path, ...]) -> Path | None:
+    """Resolve a link inside a visible tree; outside or dangling targets are absent."""
+    try:
+        target = link.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return target if any(_within(target, root) for root in visible) else None
+
+
+def _outermost_masks(masks: list[tuple[Path, bool]]) -> list[tuple[Path, bool]]:
+    """Drop duplicates and masks a masked ancestor directory already hides."""
+    kept: list[tuple[Path, bool]] = []
+    for path, directory in sorted(set(masks), key=lambda item: len(item[0].parts)):
+        if not any(kind and _within(path, other) for other, kind in kept):
+            kept.append((path, directory))
+    return kept
 
 
 def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Path | None) -> None:
@@ -506,9 +525,15 @@ class ProcessNamespaceConfig:
         if home_stat.st_uid != os.geteuid() or stat.S_IMODE(home_stat.st_mode) != 0o700:
             raise NamespaceError("session home must be owned by worker UID and mode 0700")
         visible = tuple(_validate_visible_root(root) for root in self.visible_roots)
-        # Visible trees are recursive readonly views, not trust-scanned sources.
+        # Whole system trees are recursive readonly views. A source tree must not
+        # carry a nested mount, which could alias a credential tree into view.
         _reject_nested_mounts(
-            *(path for path in source_fds if path not in visible), mount_ids=mount_ids
+            *(
+                path
+                for path in source_fds
+                if path not in _SYSTEM_VISIBLE_ROOTS or path not in visible
+            ),
+            mount_ids=mount_ids,
         )
         project_ids = _scan_writable_tree(project, source_fds[project])
         home_ids = _scan_writable_tree(home, source_fds[home])
@@ -808,16 +833,20 @@ class ProcessNamespaceConfig:
             command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if visible_fds:
             visible = (*visible_fds, project)
-            hidden = {operational}
-            for base in visible:
-                for path, directory in _masked_entries(base, visible):
-                    if path in hidden:
-                        continue
-                    hidden.add(path)
-                    if directory:
-                        command.extend(("--tmpfs", str(path), "--remount-ro", str(path)))
-                    else:
-                        command.extend(("--ro-bind", "/dev/null", str(path)))
+            masks: list[tuple[Path, bool]] = []
+            for base, fd in (*visible_fds.items(), (project, project_fd)):
+                # Enumerate the object that is mounted, not a swapped host path.
+                base_stat, pinned = os.stat(base, follow_symlinks=False), os.fstat(fd)
+                if (base_stat.st_dev, base_stat.st_ino) != (pinned.st_dev, pinned.st_ino):
+                    raise NamespaceError("visible tree changed during launch")
+                masks.extend(_masked_entries(base, visible))
+            for path, directory in _outermost_masks([(operational, True), *masks]):
+                if path == operational:
+                    continue  # Mounted above whenever it exists.
+                if directory:
+                    command.extend(("--tmpfs", str(path), "--remount-ro", str(path)))
+                else:
+                    command.extend(("--ro-bind", "/dev/null", str(path)))
         if sock is not None and sock_fd is not None:
             command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
         # Freeze synthetic ancestor directories and aliases as well as runtime

@@ -461,9 +461,12 @@ single-writer checks remain mandatory. See
   whole; host state, device and temporary trees, `/home` and a whole user home
   MUST refuse. A visible tree MUST NOT contain or lie inside a private authority
   path, overlap the session HOME or lie inside the project; the writable project
-  MAY lie inside one and keeps its writable mount. `.hub/work` and `.env*`
-  entries MUST be masked at each visible tree's top level, in its immediate
-  children and in the project. Namespace-owned `/proc`, `/dev`, `/tmp` and `/run`
+  MAY lie inside one and keeps its writable mount. A visible tree other than
+  `/usr`, `/etc` and `/opt` MUST NOT contain a nested mount. `.hub/work` and
+  case-insensitive `.env*` entries present at launch MUST be masked at each
+  visible tree's top level, in its immediate children, in visible targets of
+  symlinked children and in the project. Masking is launch-time hygiene over a
+  live tree, not a boundary: later or deeper entries stay readable. Namespace-owned `/proc`, `/dev`, `/tmp` and `/run`
   remain, so host sockets there stay absent. This profile preauthorizes native
   Bash: the permission host MUST still validate each request, its fields and the
   current job, lease, writer, session, root and stop state, and journal a single-use

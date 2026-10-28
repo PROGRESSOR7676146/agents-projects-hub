@@ -42,9 +42,13 @@ trees. Credential directories stay absent.
    sockets: keep service sockets out of listed source trees.
 2. The operator home is not mounted as a whole. An explicit list of source trees
    (for example the operator's project directory) is visible read-only, with
-   `.hub/work` and `.env*` entries masked at each tree's top level and in its
-   immediate children, where checkouts live, and in the writable project. Deeper
-   copies are not searched. Private operator notes (handoff, review receipts)
+   `.hub/work` and case-insensitive `.env*` entries masked at each tree's top
+   level and in its immediate children, where checkouts live, including visible
+   targets of symlinked children, and in the writable project. Masks under a
+   masked directory are dropped, and a source tree with a nested mount refuses.
+   The masks are launch-time hygiene over a live tree, not a snapshot: an entry
+   created after launch, such as a new Hub lane's `.hub/work`, or a deeper copy
+   stays readable. Private operator notes (handoff, review receipts)
    are not visible. Credential directories such as `~/.config`, `~/.local`,
    `~/.cache`, `~/.ssh`, provider homes and tlive are never mounted. A host
    inventory on 2026-10-28 found tokens, keys, Telegram sessions and
@@ -88,6 +92,12 @@ inside this profile; a commit gate for them is a separate decision. Not adopted,
 per ADR 0072: a separate UID or VM. The owner kept shared networking, as today
 and as for Codex: loopback services without their own authentication stay
 reachable, an accepted residual risk of this installation.
+
+GPT-6.1 Sol (high) reviewed the implementation. Fixed: masks missed checkouts
+reached through a symlinked child, nested masks broke a valid launch, and a
+nested mount under a source tree escaped the mount check. Narrowed instead of
+fixed: masks enumerate a live tree once, so a race-free promise would need a
+snapshot per launch; the boundary is the allowlist, not the masks.
 
 ## Consequences
 
