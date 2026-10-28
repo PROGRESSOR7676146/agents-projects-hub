@@ -153,6 +153,15 @@ tools must not trigger a host-side execution fallback. Follow
 [ADR 0075](../decisions/0075-claude-personal-developer-profile.md) for scope and
 acceptance. This configuration example grants no installation or live acceptance.
 
+For the `workstation` profile, set `"profile": "workstation"` and a
+`visible_roots` list, for example `["/usr", "/etc", "/home/example/src"]`, then
+start with `/new`. Listed trees are readonly; credential directories such as
+`~/.config`, `~/.local`, `~/.cache` and `~/.ssh` must not be listed, and the
+launch refuses `/var`, `/run`, `/tmp`, `/mnt`, `/home` and a whole user home.
+Keep `.env*` files, service sockets and state-database copies out of listed
+trees, or at their top level where masking applies. Foreground Bash runs
+without a card. See [ADR 0080](../decisions/0080-claude-workstation-profile.md).
+
 All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
 NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;
 their aliasing and ownership semantics do not establish this boundary.

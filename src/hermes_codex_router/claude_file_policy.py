@@ -13,7 +13,7 @@ from .claude_mount_pins import SandboxLaunch
 from .claude_native_settings import disabled_builtin_plugins
 from .claude_permission_wait import NATIVE_PERMISSION_HOOK_SECONDS
 from .claude_stream import ClaudeStreamError
-from .claude_tool_profiles import FILE_TOOLS, profile_tools
+from .claude_tool_profiles import BASH_PROFILES, FILE_TOOLS, profile_tools
 
 FILE_TOOL_NAMES = FILE_TOOLS
 # Default_Ignorable_Code_Point ranges that are not already covered by the
@@ -48,7 +48,7 @@ def file_tool_settings(python: Path, *, profile: str = "editor") -> str:
         "allow": [],
         "deny": ["Bash", "Agent", "Task", "WebFetch", "WebSearch"],
     }
-    if profile == "developer":
+    if profile in BASH_PROFILES:
         permissions = {
             "allow": sorted(FILE_TOOLS),
             "ask": ["Bash"],
@@ -86,7 +86,7 @@ def file_tool_argv(argv: tuple[str, ...], sandbox: FileToolSandboxConfig) -> tup
     )
     mutable[mutable.index("--permission-mode") + 1] = "manual"
     mutable[mutable.index("--tools") + 1] = "Read,Glob,Grep,Write,Edit" + (
-        ",Bash" if sandbox.profile == "developer" else ""
+        ",Bash" if sandbox.profile in BASH_PROFILES else ""
     )
     mutable[1:1] = ["--setting-sources", ""]
     return tuple(mutable)

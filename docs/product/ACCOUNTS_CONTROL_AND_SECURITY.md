@@ -359,7 +359,7 @@ single-writer checks remain mandatory. See
   topic, and agent allowlists MUST be enforced before provider invocation.
 - **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
   and isolated. Recovery MUST NOT weaken security policy to regain availability.
-- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent live acceptance pending):** An explicitly
+- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent and workstation live acceptance pending):** An explicitly
   configured Claude editor turn MAY expose only Read, Glob, Grep, Write and
   Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
   bot/web credentials and permission signing keys MUST be absent from its
@@ -425,8 +425,8 @@ single-writer checks remain mandatory. See
   sandbox-bypass options, unknown command fields and incomplete or masked previews
   MUST be denied. Profile and session-home identity MUST remain pinned on exact
   resume and rollback; a profile change MUST require a fresh `/new` session.
-  MCP, skills, external plugins and agent children remain unavailable in both
-  profiles. An explicit developer toolchain MAY provide bounded readonly
+  MCP, skills, external plugins and agent children remain unavailable in every
+  profile. An explicit developer toolchain MAY provide bounded readonly
   root/worker-owned development tools, PATH and visible Git hook/Python/identity
   settings. Tools MUST NOT be writable by others or overlap private authority,
   control runtime, project or session HOME. Pinning, native-filesystem and bounded
@@ -455,6 +455,21 @@ single-writer checks remain mandatory. See
   without an unconfined fallback. Project-contained `.hub/work` MUST be hidden
   behind an empty read-only mount; incoming materials and artifact staging remain
   available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
+  An explicitly configured `workstation` profile (source implemented; installed
+  acceptance pending) has the developer tools, Git access and toolchain and MUST
+  name 1–32 read-only `visible_roots`. Only `/usr`, `/etc` and `/opt` MAY be named
+  whole; host state, device and temporary trees, `/home` and a whole user home
+  MUST refuse. A visible tree MUST NOT contain or lie inside a private authority
+  path, overlap the session HOME or lie inside the project; the writable project
+  MAY lie inside one and keeps its writable mount. `.hub/work` and `.env*`
+  entries MUST be masked at each visible tree's top level, in its immediate
+  children and in the project. Namespace-owned `/proc`, `/dev`, `/tmp` and `/run`
+  remain, so host sockets there stay absent. This profile preauthorizes native
+  Bash: the permission host MUST still validate each request, its fields and the
+  current job, lease, writer, session, root and stop state, and journal a single-use
+  Allow without a human receipt or wait notice. It grants no network change,
+  nested user namespace or credential, and is not hostile-agent isolation. See
+  [ADR 0080](../decisions/0080-claude-workstation-profile.md).
   Developer acceptance MUST prove
   the production host/native edit-test-local-Git cycle, repeated fresh Bash
   Allow/Deny, explicit Bash-grant reuse/reset/refusal, denied effects absent, exact resume, stop/cleanup and uncertainty

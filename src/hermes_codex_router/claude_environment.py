@@ -22,11 +22,23 @@ def claude_environment_prompt(sandbox: FileToolSandboxConfig) -> str:
             "Write/Edit require human permission. Shell, tests and Git commands are unavailable."
         )
         return "\n".join(lines)
-    lines.extend(
-        (
+    if sandbox.profile == "workstation":
+        lines.append(
+            "File edits and foreground Bash are preauthorized. System trees and these source "
+            "trees are readable: "
+            + ", ".join(map(str, sandbox.visible_roots))
+            + ". Only the bound project is persistently writable. Credentials, Hub state, "
+            "private operator notes and .hub/work are absent by design; push, deployment and "
+            "service changes belong to the owner."
+        )
+    else:
+        lines.append(
             "File edits are enabled. Bash requires human Allow once or Bash until restart; "
             "the latter covers later turns of this session/root on this worker until restart. "
-            "Deny, expiry and missing permission do not authorize another attempt.",
+            "Deny, expiry and missing permission do not authorize another attempt."
+        )
+    lines.extend(
+        (
             "Keep commands in the foreground, including long tests/builds/hooks. "
             "Use an explicit Bash timeout within the remaining turn budget, at most 600000 ms; "
             "no background jobs or sandbox bypass.",

@@ -159,7 +159,11 @@ class PermissionServer:
         capability = self.capability
         scope = None
         granted = False
-        if self.launch.profile == "developer" and event["tool_name"] == "Bash":
+        if self.launch.profile == "workstation" and event["tool_name"] == "Bash":
+            # The owner preauthorized validated foreground Bash for this profile
+            # (ADR 0080); the namespace view, not a human receipt, is its boundary.
+            granted = True
+        elif self.launch.profile == "developer" and event["tool_name"] == "Bash":
             # A fresh authenticated handshake is mandatory even for cached consent.
             # A restarted/unreachable tlive cannot inherit an earlier grant.
             capability = self.client.hello()
@@ -423,6 +427,7 @@ def hosted_claude_launch(
                 ),
                 profile=settings.profile,
                 toolchain=settings.toolchain,
+                visible_roots=settings.visible_roots,
             )
             with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
                 pass  # Validate and release source pins; invocation acquires its own set.

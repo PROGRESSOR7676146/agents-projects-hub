@@ -99,3 +99,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0077: Temporary Claude Bash consent](0077-temporary-claude-bash-consent.md) — explicit per-session consent until worker/tlive restart; prompt card settlement.
 
 - [0079: Long human permission waits](0079-long-human-permission-waits.md) — human waiting is separate from productive deadlines; installed acceptance pending.
+
+- [0080: Claude workstation profile](0080-claude-workstation-profile.md) — wide readonly view without credential trees, preauthorized foreground Bash; installed acceptance pending.
