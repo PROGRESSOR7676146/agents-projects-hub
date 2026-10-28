@@ -117,8 +117,10 @@ hardlink risk is pending; review does not replace it.
 Claude gains the same practical reach as Codex for reading and running project
 work. The protected property narrows to what matters in a trusted personal
 installation: the model cannot read credential directories that are never
-mounted, directly write the filesystem outside the project and its admitted Git
-metadata, or approve for the owner. It is not hostile-agent or same-UID isolation. New source trees
+mounted, make persistent direct filesystem writes outside the project and its
+admitted Git metadata, or approve for the owner. Disposable writes to the
+session HOME and `/tmp` inside the namespace, and effects through host services,
+are outside that statement. It is not hostile-agent or same-UID isolation. New source trees
 and secret locations need installation review: a secret copied into a visible
 source tree is readable unless a launch-time mask happens to cover it. `editor` and `developer`
 keep their current behavior and evidence.
