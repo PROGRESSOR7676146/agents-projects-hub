@@ -27,9 +27,11 @@ def claude_environment_prompt(sandbox: FileToolSandboxConfig) -> str:
             "File edits and foreground Bash are preauthorized. System trees and these source "
             "trees are readable: "
             + ", ".join(map(str, sandbox.visible_roots))
-            + ". Only the bound project is persistently writable. Credential directories and "
-            "Hub state are not mounted, and .env files and .hub/work found at launch are "
-            "hidden; push, deployment and service changes belong to the owner."
+            + ". Direct persistent writes reach only the bound project and its admitted Git "
+            "metadata. Credential directories and Hub state are not mounted. .env files and "
+            ".hub/work found at launch are masked on a best-effort basis; copies created "
+            "later, deeper or hardlinked may be readable and must not be used. Push, "
+            "deployment and service changes belong to the owner by policy."
         )
     else:
         lines.append(

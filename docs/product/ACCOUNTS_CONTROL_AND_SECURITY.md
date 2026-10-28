@@ -452,8 +452,9 @@ single-writer checks remain mandatory. See
   The common Git directory MUST NOT be mounted wholesale. Exposed sources MUST
   retain pinning, private-authority and bounded tree checks. Unsupported layouts
   or repository administration requiring common-directory writes MUST fail
-  without an unconfined fallback. Project-contained `.hub/work` present at launch
-  MUST be hidden behind an empty read-only mount; incoming materials and artifact staging remain
+  without an unconfined fallback. Project-contained `.hub/work` found while the
+  launch is assembled MUST be hidden behind an empty read-only mount (best effort:
+  an entry created during or after assembly is not covered); incoming materials and artifact staging remain
   available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
   An explicitly configured `workstation` profile (source implemented; installed
   acceptance pending) has the developer tools, Git access and toolchain and MUST

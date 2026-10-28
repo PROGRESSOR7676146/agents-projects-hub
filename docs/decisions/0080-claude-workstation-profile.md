@@ -56,8 +56,10 @@ trees. Credential directories stay absent.
    inventory on 2026-10-28 found tokens, keys, Telegram sessions and
    state-database copies throughout those directories, so a per-file deny-list
    inside the home would not converge.
-3. Persistent changes go only to the project; the session HOME and `/tmp` are
-   disposable. Ordinary project Git metadata is writable, as in `developer`, so
+3. Persistent direct filesystem writes go only to the project and the Git
+   metadata ADR 0076 admits; the session HOME and `/tmp` are disposable. This
+   limits direct writes, not effects through host services. Ordinary project
+   Git metadata is writable, as in `developer`, so
    changed hooks and build scripts are reviewed before the owner or another
    agent runs them on the host.
 4. Supplementary groups cannot be dropped without privilege, so a group such as
@@ -80,11 +82,11 @@ trees. Credential directories stay absent.
 7. Human-only approval, first-valid-answer, stop, no uncertain replay, the
    single writer and immutable root-owned runtime and hook code are unchanged.
 
-Push, deployment and credential use need credentials that are not mounted, so
-they stay with the owner or the host session. Services reachable over the shared
-network, or through a socket placed in a listed tree, keep only their own
-authentication. Writes to external linked-worktree Git metadata follow the
-`developer` rules of ADR 0076.
+The profile does not supply configured credential locations, so push and
+deployment through them are unavailable. That push, deployment and service
+changes belong to the owner is policy, not a technical guarantee: a service
+reachable over the shared network, or through a socket placed in a listed tree,
+acts with its own authority and authentication.
 
 ## Consultation and resolved questions
 
@@ -115,8 +117,8 @@ hardlink risk is pending; review does not replace it.
 Claude gains the same practical reach as Codex for reading and running project
 work. The protected property narrows to what matters in a trusted personal
 installation: the model cannot read credential directories that are never
-mounted, persistently write outside the project and its Git metadata, or approve
-for the owner. It is not hostile-agent or same-UID isolation. New source trees
+mounted, directly write the filesystem outside the project and its admitted Git
+metadata, or approve for the owner. It is not hostile-agent or same-UID isolation. New source trees
 and secret locations need installation review: a secret copied into a visible
 source tree is readable unless a launch-time mask happens to cover it. `editor` and `developer`
 keep their current behavior and evidence.
