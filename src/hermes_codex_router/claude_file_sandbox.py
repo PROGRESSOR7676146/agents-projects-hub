@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .claude_mount_pins import SandboxLaunch
-from .claude_tool_profiles import profile_tools
+from .claude_tool_profiles import BASH_PROFILES, profile_tools
 from .namespace_toolchain import NamespaceToolchain
-from .process_namespace import SANDBOX_HOME, NamespaceRuntime, ProcessNamespaceConfig
 from .process_namespace import NamespaceError as FileToolSandboxError
+from .process_namespace import NamespaceRuntime, ProcessNamespaceConfig
 
 _SAFE_ENV = frozenset(
     {
@@ -53,8 +53,8 @@ class FileToolSandboxConfig:
 
     def __post_init__(self) -> None:
         profile_tools(self.profile)
-        if self.toolchain is not None and self.profile != "developer":
-            raise FileToolSandboxError("toolchain requires the developer profile")
+        if self.toolchain is not None and self.profile not in BASH_PROFILES:
+            raise FileToolSandboxError("toolchain requires a developer or workstation profile")
         runtime = NamespaceRuntime(
             bwrap_executable=self.bwrap_executable,
             executable=self.claude_executable,
@@ -73,10 +73,15 @@ class FileToolSandboxConfig:
                 project_access="read-write",
                 network="shared",
                 permission_socket=self.permission_socket,
-                git_access="read-write" if self.profile == "developer" else "read-only",
+                git_access="read-write" if self.profile in BASH_PROFILES else "read-only",
                 toolchain=self.toolchain,
+                host_view=self.profile == "workstation",
             ),
         )
+
+    @property
+    def socket_destination(self) -> str:
+        return self._namespace.socket_destination
 
     def wrap(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str) -> SandboxLaunch:
         if set(env) - _SAFE_ENV:
@@ -84,7 +89,7 @@ class FileToolSandboxConfig:
         if argv and argv[0] != str(self.claude_executable):
             raise FileToolSandboxError("provider executable differs from pinned Claude executable")
         child = dict(env)
-        child["CLAUDE_CONFIG_DIR"] = f"{SANDBOX_HOME}/.claude"
+        child["CLAUDE_CONFIG_DIR"] = f"{self._namespace.sandbox_home}/.claude"
         # Native Bash may otherwise promote a long foreground command to an
         # asynchronous task, outside the owned command/stop contract.
         child["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"

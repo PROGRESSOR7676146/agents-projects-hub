@@ -98,7 +98,7 @@ class ClaudePermissionJournal:
             raise StateError("unsupported Claude session mode")
         store = str(home.resolve())
         home_digest = _digest(
-            store if profile == "editor" else "hub.claude.session/developer/v1\x00" + store
+            store if profile == "editor" else f"hub.claude.session/{profile}/v1\x00" + store
         )
         with self.state._immediate_transaction():
             self._binding(job_id, token, native, root)

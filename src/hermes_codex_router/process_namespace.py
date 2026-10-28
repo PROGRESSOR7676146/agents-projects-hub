@@ -37,6 +37,8 @@ _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
 _SHELL_ALIAS = Path("/usr/bin/sh")
 _SHELL_TARGET = Path("/usr/bin/dash")
+# The host view keeps host /run readonly, so the socket sits in its fresh /tmp.
+_HOST_VIEW_SOCKET = "/tmp/hub-permission.sock"
 _MAX_RUNTIME_ENTRIES = 100_000
 _MAX_WRITABLE_ENTRIES = 100_000
 _MAX_SCAN_DEPTH = 128
@@ -284,7 +286,7 @@ def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = N
 def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Path | None) -> None:
     """Reject ordinary mounts shadowing namespace-owned destinations.
 
-    HOME is remapped, and the optional socket has one fixed /run destination.
+    HOME is remapped, and the optional socket has one fixed /run or /tmp destination.
     Deliberate readonly runtime nesting and the .git overlay remain valid.
     """
     destinations = (project, *roots, *((code_root,) if code_root is not None else ()))
@@ -397,6 +399,8 @@ class ProcessNamespaceConfig:
     permission_socket: Path | None = None
     git_access: str = "read-only"
     toolchain: NamespaceToolchain | None = None
+    # Show the whole host read-only, like Codex workspace-write (ADR 0081).
+    host_view: bool = False
 
     def __post_init__(self) -> None:
         if self.project_access not in ("read-only", "read-write"):
@@ -409,6 +413,17 @@ class ProcessNamespaceConfig:
             raise NamespaceError("unsupported network mode")
         if self.network == "private" and self.permission_socket is not None:
             raise NamespaceError("private network profile cannot expose a permission socket")
+        if self.host_view and self.project_access != "read-write":
+            raise NamespaceError("host view requires a writable project")
+
+    @property
+    def sandbox_home(self) -> str:
+        """HOME inside the namespace; a readonly host root cannot hold a new mount point."""
+        return str(self.session_home) if self.host_view else SANDBOX_HOME
+
+    @property
+    def socket_destination(self) -> str:
+        return _HOST_VIEW_SOCKET if self.host_view else _SANDBOX_SOCKET
 
     def _validate(
         self,
@@ -576,6 +591,8 @@ class ProcessNamespaceConfig:
         pins: MountPins,
         private_guard: PrivateMountGuard,
     ) -> tuple[list[str], dict[str, str]]:
+        # The host root is shown, not trust-scanned: it stays out of source_fds.
+        host_fd = pins.open(Path("/"), directory=True) if self.host_view else None
         project_fd = pins.open(Path(self.project_root), directory=True)
         git_sources = pin_git_sources(pins, project_fd, Path(self.project_root))
         home_fd = pins.open(Path(self.session_home), directory=True)
@@ -640,12 +657,13 @@ class ProcessNamespaceConfig:
         ):
             raise NamespaceError("invalid provider environment")
         child_env = dict(env)
+        sandbox_home = self.sandbox_home
         child_env.update(
-            HOME=SANDBOX_HOME,
-            XDG_CONFIG_HOME=f"{SANDBOX_HOME}/.config",
-            XDG_CACHE_HOME=f"{SANDBOX_HOME}/.cache",
-            XDG_STATE_HOME=f"{SANDBOX_HOME}/.local/state",
-            XDG_DATA_HOME=f"{SANDBOX_HOME}/.local/share",
+            HOME=sandbox_home,
+            XDG_CONFIG_HOME=f"{sandbox_home}/.config",
+            XDG_CACHE_HOME=f"{sandbox_home}/.cache",
+            XDG_STATE_HOME=f"{sandbox_home}/.local/state",
+            XDG_DATA_HOME=f"{sandbox_home}/.local/share",
             TMPDIR="/tmp",
             PATH="/usr/bin:/bin",
         )
@@ -666,6 +684,9 @@ class ProcessNamespaceConfig:
         ]
         if self.network == "shared":
             command.append("--share-net")
+        if host_fd is not None:
+            # First, so namespace-owned /dev, /proc, /tmp and /run cover it.
+            command.extend(("--ro-bind-fd", str(host_fd), "/"))
         command.extend(
             (
                 "--disable-userns",
@@ -682,17 +703,16 @@ class ProcessNamespaceConfig:
                 "/proc",
                 "--tmpfs",
                 "/tmp",
-                "--tmpfs",
-                "/run",
-                "--dir",
-                "/home",
             )
         )
+        if not self.host_view:
+            # The host view shows host /run (sockets, resolver links) readonly.
+            command.extend(("--tmpfs", "/run", "--dir", "/home"))
         for root in roots:
             command.extend(("--ro-bind-fd", str(runtime_fds[root]), str(root)))
         for root, fd in tool_fds.items():
             command.extend(("--ro-bind-fd", str(fd), str(root)))
-        for alias, target in _SYSTEM_ALIASES.items():
+        for alias, target in () if self.host_view else _SYSTEM_ALIASES.items():
             alias_path = Path(alias)
             if (
                 alias_path.is_symlink()
@@ -700,7 +720,8 @@ class ProcessNamespaceConfig:
                 and any(_within(root, Path(target)) for root in roots)
             ):
                 command.extend(("--symlink", target.lstrip("/"), alias))
-        command.extend(_system_shell_alias_args(roots, code))
+        if not self.host_view:
+            command.extend(_system_shell_alias_args(roots, code))
         if code is not None and code_fd is not None:
             command.extend(("--ro-bind-fd", str(code_fd), str(code)))
         project_flag = "--ro-bind-fd" if self.project_access == "read-only" else "--bind-fd"
@@ -712,17 +733,27 @@ class ProcessNamespaceConfig:
             )
         )
         command.extend(git_sources.arguments(self.git_access))
-        command.extend(("--bind-fd", str(home_fd), SANDBOX_HOME))
+        command.extend(("--bind-fd", str(home_fd), sandbox_home))
         # Operational work products may contain private backups/review receipts.
-        # Keep materials and deliverable staging usable, but hide this subtree.
+        # Keep materials and deliverable staging usable, but hide this subtree;
+        # the host view keeps it readable and only guards it against writes.
         operational = project / ".hub" / "work"
+        if self.host_view:
+            # Always guard it, even when Hub creates it during the session.
+            for path in (project / ".hub", operational):
+                if path.is_symlink():
+                    raise NamespaceError("operational workspace must not be a symlink")
+                path.mkdir(mode=0o700, exist_ok=True)
         if operational.exists() or operational.is_symlink():
             _absolute_path(operational, "operational workspace")
             if not operational.is_dir():
                 raise NamespaceError("operational workspace must be a directory")
-            command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
+            if self.host_view:
+                command.extend(("--ro-bind", str(operational), str(operational)))
+            else:
+                command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if sock is not None and sock_fd is not None:
-            command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
+            command.extend(("--ro-bind-fd", str(sock_fd), self.socket_destination))
         # Freeze synthetic ancestor directories and aliases as well as runtime
         # bytes. This is nonrecursive: explicit project/HOME/tmp mounts retain
         # their own access modes. A failed remount must fail the owned launch.

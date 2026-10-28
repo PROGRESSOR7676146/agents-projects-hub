@@ -159,7 +159,11 @@ class PermissionServer:
         capability = self.capability
         scope = None
         granted = False
-        if self.launch.profile == "developer" and event["tool_name"] == "Bash":
+        if self.launch.profile == "workstation" and event["tool_name"] == "Bash":
+            # The owner preauthorized validated foreground Bash for this profile
+            # (ADR 0081), as Codex workspace-write runs commands without a card.
+            granted = True
+        elif self.launch.profile == "developer" and event["tool_name"] == "Bash":
             # A fresh authenticated handshake is mandatory even for cached consent.
             # A restarted/unreachable tlive cannot inherit an earlier grant.
             capability = self.client.hello()

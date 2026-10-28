@@ -153,6 +153,17 @@ tools must not trigger a host-side execution fallback. Follow
 [ADR 0075](../decisions/0075-claude-personal-developer-profile.md) for scope and
 acceptance. This configuration example grants no installation or live acceptance.
 
+For the `workstation` profile, set `"profile": "workstation"` and start with
+`/new`; no other key is needed. The whole host is readonly inside the namespace,
+including credentials, as for Codex. Writes reach the project, its Git metadata
+and the session HOME at its host path; `/tmp` is disposable and the project
+`.hub/work` is created when absent and kept readonly. Host `/run`
+stays visible, so resolvers and Docker sockets work as for other agents; the
+permission socket is at `/tmp/hub-permission.sock`, and
+foreground Bash runs without a card. The host root is shown, not trust-scanned,
+so the filesystem checks below apply to the writable and runtime mounts only.
+See [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
+
 All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
 NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;
 their aliasing and ownership semantics do not establish this boundary.

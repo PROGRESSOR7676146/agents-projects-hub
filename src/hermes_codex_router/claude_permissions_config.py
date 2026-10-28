@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .claude_tool_profiles import profile_tools
+from .claude_tool_profiles import BASH_PROFILES, profile_tools
 from .namespace_toolchain import NamespaceToolchain, parse_toolchain
 
 
@@ -45,8 +45,8 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
         raise ValueError("claude_file_permissions requires exact explicit mount configuration")
     profile = raw.get("profile", "editor")
     profile_tools(profile)
-    if "toolchain" in raw and profile != "developer":
-        raise ValueError("toolchain requires the explicit developer profile")
+    if "toolchain" in raw and profile not in BASH_PROFILES:
+        raise ValueError("toolchain requires an explicit developer or workstation profile")
 
     def path(value: Any) -> Path:
         if (
