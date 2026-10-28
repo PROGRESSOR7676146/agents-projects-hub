@@ -79,6 +79,10 @@ class FileToolSandboxConfig:
             ),
         )
 
+    @property
+    def socket_destination(self) -> str:
+        return self._namespace.socket_destination
+
     def wrap(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str) -> SandboxLaunch:
         if set(env) - _SAFE_ENV:
             raise FileToolSandboxError("provider environment includes unapproved names")

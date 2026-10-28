@@ -37,8 +37,8 @@ _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
 _SHELL_ALIAS = Path("/usr/bin/sh")
 _SHELL_TARGET = Path("/usr/bin/dash")
-# Rootful Docker, shared as with other agents (ADR 0081); /run is otherwise fresh.
-_DOCKER_SOCKET = Path("/run/docker.sock")
+# The host view keeps host /run readonly, so the socket sits in its fresh /tmp.
+_HOST_VIEW_SOCKET = "/tmp/hub-permission.sock"
 _MAX_RUNTIME_ENTRIES = 100_000
 _MAX_WRITABLE_ENTRIES = 100_000
 _MAX_SCAN_DEPTH = 128
@@ -286,7 +286,7 @@ def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = N
 def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Path | None) -> None:
     """Reject ordinary mounts shadowing namespace-owned destinations.
 
-    HOME is remapped, and the optional socket has one fixed /run destination.
+    HOME is remapped, and the optional socket has one fixed /run or /tmp destination.
     Deliberate readonly runtime nesting and the .git overlay remain valid.
     """
     destinations = (project, *roots, *((code_root,) if code_root is not None else ()))
@@ -299,24 +299,6 @@ def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Pa
     for alias in (*map(Path, _SYSTEM_ALIASES), _SHELL_ALIAS):
         if _within(project, alias) or _within(alias, project):
             raise NamespaceError("project destination overlaps a system alias")
-
-
-def _hidden_link_args(start: Path, hidden: Path) -> list[str]:
-    """Recreate each hop of a link chain that a fresh mount at hidden covers."""
-    args: list[str] = []
-    path = start
-    for _ in range(8):
-        inside = _within(path, hidden)
-        if path.is_symlink():
-            target = os.readlink(path)
-            if inside:
-                args.extend(("--dir", str(path.parent), "--symlink", target, str(path)))
-            path = Path(os.path.normpath(path.parent / target))
-            continue
-        if inside and path.is_file():
-            args.extend(("--ro-bind", str(path), str(path)))
-        break
-    return args
 
 
 def _system_shell_alias_args(roots: tuple[Path, ...], code: Path | None) -> list[str]:
@@ -438,6 +420,10 @@ class ProcessNamespaceConfig:
     def sandbox_home(self) -> str:
         """HOME inside the namespace; a readonly host root cannot hold a new mount point."""
         return str(self.session_home) if self.host_view else SANDBOX_HOME
+
+    @property
+    def socket_destination(self) -> str:
+        return _HOST_VIEW_SOCKET if self.host_view else _SANDBOX_SOCKET
 
     def _validate(
         self,
@@ -717,12 +703,11 @@ class ProcessNamespaceConfig:
                 "/proc",
                 "--tmpfs",
                 "/tmp",
-                "--tmpfs",
-                "/run",
             )
         )
         if not self.host_view:
-            command.extend(("--dir", "/home"))
+            # The host view shows host /run (sockets, resolver links) readonly.
+            command.extend(("--tmpfs", "/run", "--dir", "/home"))
         for root in roots:
             command.extend(("--ro-bind-fd", str(runtime_fds[root]), str(root)))
         for root, fd in tool_fds.items():
@@ -768,13 +753,7 @@ class ProcessNamespaceConfig:
             else:
                 command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if sock is not None and sock_fd is not None:
-            command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
-        if self.host_view:
-            # A fresh /run hides the rootful Docker socket and a resolver
-            # target such as systemd-resolved's stub file; restore both.
-            if _DOCKER_SOCKET.is_socket():
-                command.extend(("--ro-bind", str(_DOCKER_SOCKET), str(_DOCKER_SOCKET)))
-            command.extend(_hidden_link_args(Path("/etc/resolv.conf"), Path("/run")))
+            command.extend(("--ro-bind-fd", str(sock_fd), self.socket_destination))
         # Freeze synthetic ancestor directories and aliases as well as runtime
         # bytes. This is nonrecursive: explicit project/HOME/tmp mounts retain
         # their own access modes. A failed remount must fail the owned launch.

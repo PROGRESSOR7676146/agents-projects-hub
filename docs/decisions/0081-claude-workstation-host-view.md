@@ -23,7 +23,7 @@ provenance, not with isolation; it cannot defend against a hostile agent anyway.
 The explicit `workstation` profile matches Codex workspace-write:
 
 1. The pinned host root is bound read-only first; namespace-owned `/dev`,
-   `/proc`, `/tmp` and `/run` cover it. The whole host, including credentials
+   `/proc` and `/tmp` cover it, and host `/run` stays visible read-only. The whole host, including credentials
    and Hub/tlive authority, is readable. There are no visible-root lists, masks
    or secret inventories to maintain.
 2. Persistent writes reach only the project, its admitted Git metadata (as in
@@ -31,12 +31,12 @@ The explicit `workstation` profile matches Codex workspace-write:
    because a read-only root cannot hold a new mount point. The project
    `.hub/work` is created when absent and mounted read-only, so a mistake
    cannot corrupt Hub work products.
-3. The rootful `/run/docker.sock` is restored into the fresh `/run` when
-   present, as is each hop of the resolver link chain under `/run`, such as
-   systemd-resolved's stub file, and supplementary groups are kept, so Docker access matches other
-   agents. Rootless Docker and other sockets under `/run` or `/tmp` are absent;
-   sockets elsewhere in the host view stay reachable. Docker is root-equivalent: the
-   namespace is a guard against mistakes, not a boundary.
+3. Because host `/run` is not replaced, resolver links such as
+   systemd-resolved's stub file and host sockets, rootful and rootless Docker
+   included, keep working with the worker's supplementary groups, as for other
+   agents. The permission socket therefore moves to `/tmp/hub-permission.sock`;
+   only host `/tmp` sockets are absent. Docker is root-equivalent: the namespace
+   is a guard against mistakes, not a boundary.
 4. The host root is shown, not trust-scanned, so it stays out of the private
    mount and nested-mount checks. Private paths must still not overlap a
    writable or trusted runtime mount.

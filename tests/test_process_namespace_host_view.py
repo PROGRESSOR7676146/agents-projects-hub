@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import shutil
+import socket
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -13,7 +15,6 @@ from hermes_codex_router.process_namespace import (
     NamespaceError,
     NamespaceRuntime,
     ProcessNamespaceConfig,
-    _hidden_link_args,
 )
 from tests.namespace_fixture import (
     namespace_permission_refused,
@@ -22,7 +23,7 @@ from tests.namespace_fixture import (
 )
 
 _WITNESS = r"""
-import json, os, pathlib, sys
+import json, os, pathlib, socket, sys
 inputs = json.loads(sys.argv[1])
 result = {}
 def read(path):
@@ -48,6 +49,11 @@ result['home_write'] = write(os.environ['HOME'] + '/new-file')
 result['tmp_write'] = write('/tmp/new-file')
 result['system'] = pathlib.Path('/usr/share').is_dir()
 result['proc_self'] = pathlib.Path('/proc/self/status').exists()
+result['run'] = pathlib.Path('/run').is_dir()
+result['run_write'] = write('/run/hub-host-view-probe')
+with socket.socket(socket.AF_UNIX) as client:
+    client.connect(inputs['socket'])
+    client.sendall(b'witness')
 print(json.dumps(result))
 """
 
@@ -87,6 +93,23 @@ class HostViewWitnessTests(unittest.TestCase):
                 (project / ".hub" / "work" / "receipt").write_text("fictional", encoding="utf-8")
             (neighbor / "README").write_text("neighbor-source", encoding="utf-8")
             (neighbor / ".env").write_text("FICTIONAL_TOKEN=neighbor", encoding="utf-8")
+            control = base / "control"
+            control.mkdir(mode=0o700)
+            listener = socket.socket(socket.AF_UNIX)
+            self.addCleanup(listener.close)
+            listener.bind(str(control / "permission.sock"))
+            (control / "permission.sock").chmod(0o600)
+            listener.listen(1)
+            listener.settimeout(30)
+            received: list[bytes] = []
+
+            def serve() -> None:
+                connection, _ = listener.accept()
+                with connection:
+                    received.append(connection.recv(64))
+
+            server = threading.Thread(target=serve, daemon=True)
+            server.start()
             try:
                 runtime = NamespaceRuntime(bwrap, python, roots)
             except NamespaceError:
@@ -97,9 +120,11 @@ class HostViewWitnessTests(unittest.TestCase):
                 home,
                 (base / "authority",),
                 project_access="read-write",
+                network="shared",
+                permission_socket=control / "permission.sock",
                 host_view=True,
             )
-            inputs = {"neighbor": str(neighbor)}
+            inputs = {"neighbor": str(neighbor), "socket": config.socket_destination}
             argv = (str(python), "-I", "-c", _WITNESS, json.dumps(inputs))
             with config.wrap(argv, {}, project) as launch:
                 completed = subprocess.run(
@@ -123,7 +148,12 @@ class HostViewWitnessTests(unittest.TestCase):
             self.assertEqual(result["home"], str(home))
             for key in ("project_write", "home_write", "tmp_write"):
                 self.assertEqual(result[key], "written", key)
-            for key in ("work_write", "neighbor_write", "system_write"):
+            server.join(5)
+            self.assertEqual(received, [b"witness"])
+            self.assertEqual(config.socket_destination, "/tmp/hub-permission.sock")
+            # Host /run stays visible, readonly, instead of a fresh tmpfs.
+            self.assertTrue(result["run"])
+            for key in ("work_write", "neighbor_write", "system_write", "run_write"):
                 self.assertIsInstance(result[key], int, key)
             self.assertTrue(result["system"])
             self.assertTrue(result["proc_self"])
@@ -143,42 +173,6 @@ class HostViewWitnessTests(unittest.TestCase):
                 (Path("/home/example/private"),),
                 host_view=True,
             )
-
-
-class HiddenLinkTests(unittest.TestCase):
-    def test_every_hidden_hop_of_a_resolver_chain_is_recreated(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="example-links-") as raw:
-            base = Path(raw).resolve()
-            etc, run = base / "etc", base / "run"
-            (run / "resolvconf").mkdir(parents=True)
-            (run / "resolve").mkdir()
-            etc.mkdir()
-            stub = run / "resolve" / "stub-resolv.conf"
-            stub.write_text("nameserver 192.0.2.53\n", encoding="utf-8")
-            (run / "resolvconf" / "resolv.conf").symlink_to("../resolve/stub-resolv.conf")
-            (etc / "resolv.conf").symlink_to(run / "resolvconf" / "resolv.conf")
-            hop = run / "resolvconf" / "resolv.conf"
-            self.assertEqual(
-                _hidden_link_args(etc / "resolv.conf", run),
-                [
-                    "--dir",
-                    str(hop.parent),
-                    "--symlink",
-                    "../resolve/stub-resolv.conf",
-                    str(hop),
-                    "--ro-bind",
-                    str(stub),
-                    str(stub),
-                ],
-            )
-
-    def test_targets_outside_the_hidden_tree_need_nothing(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="example-links-") as raw:
-            base = Path(raw).resolve()
-            (base / "wsl").mkdir()
-            (base / "wsl" / "resolv.conf").write_text("nameserver 192.0.2.53\n")
-            (base / "resolv.conf").symlink_to(base / "wsl" / "resolv.conf")
-            self.assertEqual(_hidden_link_args(base / "resolv.conf", base / "run"), [])
 
 
 if __name__ == "__main__":

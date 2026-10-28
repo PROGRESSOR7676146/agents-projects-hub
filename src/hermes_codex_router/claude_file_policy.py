@@ -98,7 +98,7 @@ def wrap_file_tool_argv(
     isolated = {key: value for key, value in environment.items() if key in PROVIDER_ENVIRONMENT}
     isolated.update(CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
     launch = sandbox.wrap(argv, isolated, cwd)
-    launch.environment["HUB_CLAUDE_PERMISSION_SOCKET"] = "/run/hub-permission.sock"
+    launch.environment["HUB_CLAUDE_PERMISSION_SOCKET"] = sandbox.socket_destination
     return launch
 
 
