@@ -24,16 +24,11 @@ def claude_environment_prompt(sandbox: FileToolSandboxConfig) -> str:
         return "\n".join(lines)
     if sandbox.profile == "workstation":
         lines.append(
-            "File edits and foreground Bash are preauthorized. System trees and these source "
-            "trees are readable: "
-            + ", ".join(map(str, sandbox.visible_roots))
-            + ". Direct persistent writes reach only the bound project and its admitted Git "
-            "metadata. Credential directories and Hub state are not mounted. Masks for .env "
-            "files and .hub/work come from a best-effort enumeration while the launch is "
-            "assembled, covering visible trees' top levels, their direct children and the "
-            "project; entries created or swapped during or after assembly, deeper copies "
-            "and hardlinks may stay readable and must not be used. Push, "
-            "deployment and service changes belong to the owner by policy."
+            "File edits and foreground Bash are preauthorized. The whole host filesystem is "
+            "readable; persistent writes reach only the bound project, its Git metadata and "
+            "HOME, and the project's .hub/work is readonly. Docker and the network are "
+            "available. Do not use host credentials: push, deployment and service changes "
+            "belong to the owner."
         )
     else:
         lines.append(

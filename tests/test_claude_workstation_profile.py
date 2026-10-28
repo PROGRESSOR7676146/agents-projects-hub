@@ -1,4 +1,4 @@
-"""Workstation profile: wide readonly view, preauthorized foreground Bash (ADR 0080)."""
+"""Workstation profile: whole-host readonly view, preauthorized foreground Bash (ADR 0081)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from hermes_codex_router import claude_permission_host as host
 from hermes_codex_router.claude_bash_grants import BashGrantCache
 from hermes_codex_router.claude_environment import claude_environment_prompt
 from hermes_codex_router.claude_file_policy import file_tool_settings
-from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig
 from hermes_codex_router.claude_permission_protocol import event_digest
 from hermes_codex_router.claude_permissions_config import parse_claude_file_permissions
 from hermes_codex_router.state import StateError
@@ -25,35 +25,25 @@ class WorkstationConfigTests(unittest.TestCase):
     def settings(self) -> dict[str, object]:
         return ClaudePermissionsConfigTests.settings(self)  # type: ignore[arg-type]
 
-    def test_visible_roots_are_required_by_and_exclusive_to_workstation(self) -> None:
-        visible = {"visible_roots": ["/usr", "/home/example/src"]}
-        settings = parse_claude_file_permissions(
-            self.settings() | {"profile": "workstation"} | visible
-        )
+    def test_workstation_needs_no_extra_keys_and_rejects_visible_roots(self) -> None:
+        settings = parse_claude_file_permissions(self.settings() | {"profile": "workstation"})
         assert settings is not None
         self.assertEqual(settings.profile, "workstation")
-        self.assertEqual(settings.visible_roots, (Path("/usr"), Path("/home/example/src")))
-        for change in (
-            {"profile": "workstation"},
-            {"profile": "developer"} | visible,
-            visible,
-            {"profile": "workstation", "visible_roots": []},
-            {"profile": "workstation", "visible_roots": ["relative"]},
-        ):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                parse_claude_file_permissions(self.settings() | change)
+        with self.assertRaises(ValueError):
+            parse_claude_file_permissions(
+                self.settings() | {"profile": "workstation", "visible_roots": ["/usr"]}
+            )
 
     def test_toolchain_is_available_to_workstation(self) -> None:
         tools = {"roots": ["/opt/example-tools"], "path": ["/opt/example-tools/bin"]}
         settings = parse_claude_file_permissions(
-            self.settings()
-            | {"profile": "workstation", "visible_roots": ["/usr"], "toolchain": tools}
+            self.settings() | {"profile": "workstation", "toolchain": tools}
         )
         assert settings is not None and settings.toolchain is not None
 
 
 class WorkstationSandboxTests(unittest.TestCase):
-    def sandbox(self, profile: str, visible: tuple[Path, ...]) -> FileToolSandboxConfig:
+    def sandbox(self, profile: str) -> FileToolSandboxConfig:
         with patch("hermes_codex_router.claude_file_sandbox.NamespaceRuntime"):
             return FileToolSandboxConfig(
                 Path("/usr/bin/bwrap"),
@@ -66,21 +56,20 @@ class WorkstationSandboxTests(unittest.TestCase):
                 Path("/run/example-permission.sock"),
                 (Path("/home/example/private"),),
                 profile=profile,
-                visible_roots=visible,
             )
 
-    def test_visible_roots_require_exactly_the_workstation_profile(self) -> None:
-        with self.assertRaises(FileToolSandboxError):
-            self.sandbox("workstation", ())
-        with self.assertRaises(FileToolSandboxError):
-            self.sandbox("developer", (Path("/usr"),))
+    def test_only_workstation_shows_the_host_and_keeps_the_real_home(self) -> None:
+        workstation = self.sandbox("workstation")
+        self.assertTrue(workstation._namespace.host_view)
+        self.assertEqual(workstation._namespace.sandbox_home, "/home/example/session")
+        for profile in ("editor", "developer"):
+            with self.subTest(profile=profile):
+                self.assertFalse(self.sandbox(profile)._namespace.host_view)
 
-    def test_prompt_names_visible_trees_and_preauthorized_bash(self) -> None:
-        prompt = claude_environment_prompt(
-            self.sandbox("workstation", (Path("/usr"), Path("/home/example/src")))
-        )
+    def test_prompt_describes_host_view_and_preauthorized_bash(self) -> None:
+        prompt = claude_environment_prompt(self.sandbox("workstation"))
         self.assertIn("foreground Bash are preauthorized", prompt)
-        self.assertIn("/usr, /home/example/src", prompt)
+        self.assertIn("whole host filesystem is readable", prompt)
         self.assertNotIn("Bash until restart", prompt)
 
     def test_native_settings_route_bash_through_the_validating_hook(self) -> None:

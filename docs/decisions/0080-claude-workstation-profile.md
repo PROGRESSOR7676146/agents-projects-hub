@@ -1,6 +1,6 @@
 # ADR 0080: Claude workstation profile — wide read view without secrets
 
-Status: accepted owner direction; source implementation, installed acceptance pending.
+Status: superseded before installation by [ADR 0081](0081-claude-workstation-host-view.md).
 Date: 2026-10-28
 Owner: repository owner. Implementation owner: Hub maintainer.
 Contract: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).

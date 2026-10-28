@@ -100,4 +100,6 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 
 - [0079: Long human permission waits](0079-long-human-permission-waits.md) — human waiting is separate from productive deadlines; installed acceptance pending.
 
-- [0080: Claude workstation profile](0080-claude-workstation-profile.md) — wide readonly view without credential trees, preauthorized foreground Bash; installed acceptance pending.
+- [0080: Claude workstation profile](0080-claude-workstation-profile.md) — wide readonly view with masks; superseded before installation by 0081.
+
+- [0081: Claude workstation host view](0081-claude-workstation-host-view.md) — whole host readonly, Docker shared, preauthorized foreground Bash, no masks; installed acceptance pending.

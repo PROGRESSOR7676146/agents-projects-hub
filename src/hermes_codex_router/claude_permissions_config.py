@@ -22,7 +22,6 @@ class ClaudeFilePermissionsConfig:
     private_paths: tuple[Path, ...]
     profile: str = "editor"
     toolchain: NamespaceToolchain | None = None
-    visible_roots: tuple[Path, ...] = ()
 
 
 def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | None:
@@ -41,17 +40,13 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
     if (
         not isinstance(raw, dict)
         or not keys <= set(raw)
-        or set(raw) - keys - {"profile", "toolchain", "visible_roots"}
+        or set(raw) - keys - {"profile", "toolchain"}
     ):
         raise ValueError("claude_file_permissions requires exact explicit mount configuration")
     profile = raw.get("profile", "editor")
     profile_tools(profile)
     if "toolchain" in raw and profile not in BASH_PROFILES:
         raise ValueError("toolchain requires an explicit developer or workstation profile")
-    if ("visible_roots" in raw) != (profile == "workstation"):
-        raise ValueError(
-            "visible_roots is required by, and only valid for, the workstation profile"
-        )
 
     def path(value: Any) -> Path:
         if (
@@ -83,5 +78,4 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
         paths("private_paths"),
         profile,
         parse_toolchain(raw["toolchain"]) if "toolchain" in raw else None,
-        paths("visible_roots") if "visible_roots" in raw else (),
     )

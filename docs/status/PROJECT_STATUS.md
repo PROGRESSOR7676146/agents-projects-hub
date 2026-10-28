@@ -57,7 +57,7 @@ and immediate protected-card settlement have source regression coverage under
 [ADR 0077](../decisions/0077-temporary-claude-bash-consent.md); their installation
 and live callbacks remain pending. The current foreground-heartbeat follow-up
 adds reader-local regression coverage; installed long-command acceptance remains
-open in the continuation plan. [ADR 0080](../decisions/0080-claude-workstation-profile.md)
+open in the continuation plan. [ADR 0081](../decisions/0081-claude-workstation-host-view.md)
 workstation: source and namespace witness only. Older editor-only entries below retain their
 historical evidence and do not override this checkpoint.
 

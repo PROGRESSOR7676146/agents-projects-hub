@@ -59,10 +59,10 @@ receipts автоматически. При компрометации треб�
    `eval`, `sh -c` и `tmux send-keys` запрещены. Отдельный явный Claude developer
    профиль допускает native Bash со свежим human permission или явно выбранным
    временным разрешением Bash до перезапуска по
-   REQ-SEC-008. Явный профиль `workstation` (ADR 0080) показывает системные
-   деревья и перечисленные исходники только на чтение, без каталогов с
-   credentials, и выполняет проверенный foreground Bash без отдельного
-   подтверждения; это не shell-интерполяция маршрутизатором.
+   REQ-SEC-008. Явный профиль `workstation` (ADR 0081) показывает весь хост
+   только на чтение, как Codex workspace-write, пишет в проект и выполняет
+   проверенный foreground Bash без отдельного подтверждения; это не
+   shell-интерполяция маршрутизатором.
 7. Разрешены `read-only` и `workspace-write`; `danger-full-access` запрещён. MVP использует `on-request`.
 8. Hermes не может отвечать на approval автоматически. Решение принимает пользователь в Codex/tlive; timeout/неопределённость означает deny/no action.
 9. Telegram `update_id` и router `request_id` обеспечивают exactly-once dispatch при повторной доставке.

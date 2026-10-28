@@ -153,19 +153,14 @@ tools must not trigger a host-side execution fallback. Follow
 [ADR 0075](../decisions/0075-claude-personal-developer-profile.md) for scope and
 acceptance. This configuration example grants no installation or live acceptance.
 
-For the `workstation` profile, set `"profile": "workstation"` and a
-`visible_roots` list, for example `["/usr", "/etc", "/home/example/src"]`, then
-start with `/new`. Listed trees are readonly; credential directories such as
-`~/.config`, `~/.local`, `~/.cache` and `~/.ssh` must not be listed, and the
-launch refuses `/var`, `/run`, `/tmp`, `/mnt`, `/home` and a whole user home.
-Keep `.env*` files, service sockets and state-database copies out of listed
-trees: masks are a best-effort enumeration at launch of a tree's top level and
-checkouts one level down; entries created or swapped during or after launch,
-deeper copies and hardlinks under other names are readable. Foreground Bash runs
-without a card. Whole `/usr`, `/etc` and `/opt` views are exempt from the
-filesystem and nested-mount checks below: they are recursive readonly views and
-may carry host mounts such as WSL driver shares; executing their programs is
-intended in this profile. See [ADR 0080](../decisions/0080-claude-workstation-profile.md).
+For the `workstation` profile, set `"profile": "workstation"` and start with
+`/new`; no other key is needed. The whole host is readonly inside the namespace,
+including credentials, as for Codex. Writes reach the project, its Git metadata
+and the session HOME at its host path; `/tmp` is disposable and the project
+`.hub/work` is readonly. The host Docker socket is shared when present, and
+foreground Bash runs without a card. The host root is shown, not trust-scanned,
+so the filesystem checks below apply to the writable and runtime mounts only.
+See [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
 
 All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
 NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;

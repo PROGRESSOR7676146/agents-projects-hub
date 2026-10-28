@@ -161,7 +161,7 @@ class PermissionServer:
         granted = False
         if self.launch.profile == "workstation" and event["tool_name"] == "Bash":
             # The owner preauthorized validated foreground Bash for this profile
-            # (ADR 0080); the namespace view, not a human receipt, is its boundary.
+            # (ADR 0081), as Codex workspace-write runs commands without a card.
             granted = True
         elif self.launch.profile == "developer" and event["tool_name"] == "Bash":
             # A fresh authenticated handshake is mandatory even for cached consent.
@@ -427,7 +427,6 @@ def hosted_claude_launch(
                 ),
                 profile=settings.profile,
                 toolchain=settings.toolchain,
-                visible_roots=settings.visible_roots,
             )
             with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
                 pass  # Validate and release source pins; invocation acquires its own set.

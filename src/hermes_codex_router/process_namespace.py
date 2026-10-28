@@ -37,16 +37,11 @@ _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
 _SHELL_ALIAS = Path("/usr/bin/sh")
 _SHELL_TARGET = Path("/usr/bin/dash")
+# Host sockets are absent except this one, shared as with other agents (ADR 0081).
+_DOCKER_SOCKET = Path("/run/docker.sock")
 _MAX_RUNTIME_ENTRIES = 100_000
 _MAX_WRITABLE_ENTRIES = 100_000
 _MAX_SCAN_DEPTH = 128
-# A wide-view profile may show these whole system trees read-only. Everything
-# else must be an explicit narrow tree; host state and sockets stay absent.
-_SYSTEM_VISIBLE_ROOTS = frozenset(map(Path, ("/usr", "/etc", "/opt")))
-_NEVER_VISIBLE = tuple(
-    map(Path, ("/proc", "/dev", "/sys", "/run", "/tmp", "/var", "/mnt", "/root", "/boot"))
-)
-_MAX_VISIBLE_CHILDREN = 4096
 _RUNTIME_PREFIXES = (
     Path("/usr/bin"),
     Path("/usr/lib"),
@@ -288,77 +283,6 @@ def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = N
             raise NamespaceError("writable roots require a supported native Linux filesystem")
 
 
-def _validate_visible_root(path: Path) -> Path:
-    root = _absolute_path(path, "visible root")
-    if not root.is_dir():
-        raise NamespaceError("visible root must be a directory")
-    if any(_within(root, hidden) for hidden in _NEVER_VISIBLE):
-        raise NamespaceError("visible root is a host state or device tree")
-    if root not in _SYSTEM_VISIBLE_ROOTS:
-        _not_broad(root, "visible root")
-    return root
-
-
-def _masked_entries(base: Path, mounted: tuple[Path, ...]) -> list[tuple[Path, bool]]:
-    """Return canonical operational and environment-file paths to hide.
-
-    Covers a visible tree's top level and its immediate children, where project
-    checkouts live. Every path is resolved, so a symlink anywhere in it masks the
-    mounted target; targets outside every identity mount are absent anyway.
-    This is best-effort enumeration of a live tree, not a snapshot (ADR 0080).
-    """
-    try:
-        children = list(base.iterdir())
-    except OSError as exc:
-        raise NamespaceError("cannot inspect visible tree") from exc
-    if len(children) > _MAX_VISIBLE_CHILDREN:
-        raise NamespaceError("visible tree has too many top-level entries to mask")
-    candidates = [base]
-    for child in children:
-        target = _mounted_target(child, mounted)
-        if target is not None and target.is_dir() and target not in candidates:
-            candidates.append(target)
-    masks: list[tuple[Path, bool]] = []
-    for directory in candidates:
-        if any(kind and _within(directory, path) for path, kind in masks):
-            continue  # Already hidden whole by an earlier mask.
-        try:
-            names = [entry.name for entry in os.scandir(directory)]
-        except OSError as exc:
-            raise NamespaceError("cannot inspect visible tree") from exc
-        selected = [directory / name for name in names if name.casefold().startswith(".env")]
-        selected.append(directory / ".hub" / "work")
-        for entry in selected:
-            target = _mounted_target(entry, mounted)
-            if target is None:
-                continue
-            if target.is_dir():
-                masks.append((target, True))
-            elif target.is_file():
-                masks.append((target, False))
-            else:
-                raise NamespaceError("visible tree contains an unsupported masked entry")
-    return masks
-
-
-def _mounted_target(path: Path, mounted: tuple[Path, ...]) -> Path | None:
-    """Resolve a path; missing, dangling and unmounted targets expose nothing."""
-    try:
-        target = path.resolve(strict=True)
-    except (OSError, RuntimeError):
-        return None
-    return target if any(_within(target, root) for root in mounted) else None
-
-
-def _outermost_masks(masks: list[tuple[Path, bool]]) -> list[tuple[Path, bool]]:
-    """Drop duplicates and masks a masked ancestor directory already hides."""
-    kept: list[tuple[Path, bool]] = []
-    for path, directory in sorted(set(masks), key=lambda item: len(item[0].parts)):
-        if not any(kind and _within(path, other) for other, kind in kept):
-            kept.append((path, directory))
-    return kept
-
-
 def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Path | None) -> None:
     """Reject ordinary mounts shadowing namespace-owned destinations.
 
@@ -377,11 +301,9 @@ def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Pa
             raise NamespaceError("project destination overlaps a system alias")
 
 
-def _system_shell_alias_args(
-    roots: tuple[Path, ...], code: Path | None, visible: tuple[Path, ...] = ()
-) -> list[str]:
+def _system_shell_alias_args(roots: tuple[Path, ...], code: Path | None) -> list[str]:
     """Recreate one host alias to an exact already-pinned readonly shell file."""
-    sources = (*roots, *visible, *((code,) if code is not None else ()))
+    sources = (*roots, *((code,) if code is not None else ()))
     if _SHELL_TARGET not in roots or any(_within(_SHELL_ALIAS, root) for root in sources):
         return []  # An immutable ancestor mount already supplies the alias.
     try:
@@ -477,7 +399,8 @@ class ProcessNamespaceConfig:
     permission_socket: Path | None = None
     git_access: str = "read-only"
     toolchain: NamespaceToolchain | None = None
-    visible_roots: tuple[Path, ...] = ()
+    # Show the whole host read-only, like Codex workspace-write (ADR 0081).
+    host_view: bool = False
 
     def __post_init__(self) -> None:
         if self.project_access not in ("read-only", "read-write"):
@@ -490,8 +413,13 @@ class ProcessNamespaceConfig:
             raise NamespaceError("unsupported network mode")
         if self.network == "private" and self.permission_socket is not None:
             raise NamespaceError("private network profile cannot expose a permission socket")
-        if len(set(self.visible_roots)) != len(self.visible_roots):
-            raise NamespaceError("visible roots must be unique")
+        if self.host_view and self.project_access != "read-write":
+            raise NamespaceError("host view requires a writable project")
+
+    @property
+    def sandbox_home(self) -> str:
+        """HOME inside the namespace; a readonly host root cannot hold a new mount point."""
+        return str(self.session_home) if self.host_view else SANDBOX_HOME
 
     def _validate(
         self,
@@ -523,17 +451,7 @@ class ProcessNamespaceConfig:
                 raise NamespaceError("protected project and session-home mount roles overlap")
         if home_stat.st_uid != os.geteuid() or stat.S_IMODE(home_stat.st_mode) != 0o700:
             raise NamespaceError("session home must be owned by worker UID and mode 0700")
-        visible = tuple(_validate_visible_root(root) for root in self.visible_roots)
-        # Whole system trees are recursive readonly views. A source tree must not
-        # carry a nested mount, which could alias a credential tree into view.
-        _reject_nested_mounts(
-            *(
-                path
-                for path in source_fds
-                if path not in _SYSTEM_VISIBLE_ROOTS or path not in visible
-            ),
-            mount_ids=mount_ids,
-        )
+        _reject_nested_mounts(*source_fds, mount_ids=mount_ids)
         project_ids = _scan_writable_tree(project, source_fds[project])
         home_ids = _scan_writable_tree(home, source_fds[home])
         if not project_ids.isdisjoint(home_ids):
@@ -575,12 +493,6 @@ class ProcessNamespaceConfig:
             for other in sources:
                 if writable != other and (_within(writable, other) or _within(other, writable)):
                     raise NamespaceError("writable and other mounts overlap")
-        for root in visible:
-            # The writable project may sit inside a visible tree: it is bound later.
-            if _within(root, project) or _within(home, root) or _within(root, home):
-                raise NamespaceError("visible and writable mounts overlap")
-            if sock is not None and (_within(sock, root) or _within(root, sock)):
-                raise NamespaceError("permission socket overlaps a visible tree")
         if not self.private_paths:
             raise NamespaceError("private authority paths must be explicit")
         for raw in self.private_paths:
@@ -593,7 +505,7 @@ class ProcessNamespaceConfig:
             _within(source, sock) or _within(sock, source) for source in sources
         ):
             raise NamespaceError("permission socket overlaps a broad mount")
-        _validate_destinations(project, (*roots, *tools, *visible), code)
+        _validate_destinations(project, (*roots, *tools), code)
         if self.toolchain is not None:
             try:
                 validate_control_interpreters(
@@ -675,6 +587,8 @@ class ProcessNamespaceConfig:
         pins: MountPins,
         private_guard: PrivateMountGuard,
     ) -> tuple[list[str], dict[str, str]]:
+        # The host root is shown, not trust-scanned: it stays out of source_fds.
+        host_fd = pins.open(Path("/"), directory=True) if self.host_view else None
         project_fd = pins.open(Path(self.project_root), directory=True)
         git_sources = pin_git_sources(pins, project_fd, Path(self.project_root))
         home_fd = pins.open(Path(self.session_home), directory=True)
@@ -684,9 +598,6 @@ class ProcessNamespaceConfig:
         runtime_fds = {Path(root): pins.open(Path(root)) for root in self.runtime.runtime_roots}
         tools = () if self.toolchain is None else self.toolchain.roots
         tool_fds = {root: pins.open(root, directory=True) for root in tools}
-        visible_fds = {
-            Path(root): pins.open(Path(root), directory=True) for root in self.visible_roots
-        }
         code = self.runtime.code_root
         code_fd = None
         if code is not None and not any(_within(code, root) for root in runtime_fds):
@@ -697,7 +608,6 @@ class ProcessNamespaceConfig:
             Path(self.session_home): home_fd,
             **runtime_fds,
             **tool_fds,
-            **visible_fds,
         }
         if self.permission_socket is not None and sock_fd is not None:
             source_fds[Path(self.permission_socket)] = sock_fd
@@ -743,12 +653,13 @@ class ProcessNamespaceConfig:
         ):
             raise NamespaceError("invalid provider environment")
         child_env = dict(env)
+        sandbox_home = self.sandbox_home
         child_env.update(
-            HOME=SANDBOX_HOME,
-            XDG_CONFIG_HOME=f"{SANDBOX_HOME}/.config",
-            XDG_CACHE_HOME=f"{SANDBOX_HOME}/.cache",
-            XDG_STATE_HOME=f"{SANDBOX_HOME}/.local/state",
-            XDG_DATA_HOME=f"{SANDBOX_HOME}/.local/share",
+            HOME=sandbox_home,
+            XDG_CONFIG_HOME=f"{sandbox_home}/.config",
+            XDG_CACHE_HOME=f"{sandbox_home}/.cache",
+            XDG_STATE_HOME=f"{sandbox_home}/.local/state",
+            XDG_DATA_HOME=f"{sandbox_home}/.local/share",
             TMPDIR="/tmp",
             PATH="/usr/bin:/bin",
         )
@@ -769,6 +680,9 @@ class ProcessNamespaceConfig:
         ]
         if self.network == "shared":
             command.append("--share-net")
+        if host_fd is not None:
+            # First, so namespace-owned /dev, /proc, /tmp and /run cover it.
+            command.extend(("--ro-bind-fd", str(host_fd), "/"))
         command.extend(
             (
                 "--disable-userns",
@@ -791,25 +705,20 @@ class ProcessNamespaceConfig:
                 "/home",
             )
         )
-        # Wide views first: pinned runtime/tool mounts then shadow their subtrees.
-        for root, fd in visible_fds.items():
-            command.extend(("--ro-bind-fd", str(fd), str(root)))
         for root in roots:
             command.extend(("--ro-bind-fd", str(runtime_fds[root]), str(root)))
         for root, fd in tool_fds.items():
             command.extend(("--ro-bind-fd", str(fd), str(root)))
-        for alias, target in _SYSTEM_ALIASES.items():
+        for alias, target in () if self.host_view else _SYSTEM_ALIASES.items():
             alias_path = Path(alias)
             if (
                 alias_path.is_symlink()
                 and alias_path.resolve() == Path(target)
-                and (
-                    any(_within(root, Path(target)) for root in roots)
-                    or any(_within(Path(target), root) for root in visible_fds)
-                )
+                and any(_within(root, Path(target)) for root in roots)
             ):
                 command.extend(("--symlink", target.lstrip("/"), alias))
-        command.extend(_system_shell_alias_args(roots, code, tuple(visible_fds)))
+        if not self.host_view:
+            command.extend(_system_shell_alias_args(roots, code))
         if code is not None and code_fd is not None:
             command.extend(("--ro-bind-fd", str(code_fd), str(code)))
         project_flag = "--ro-bind-fd" if self.project_access == "read-only" else "--bind-fd"
@@ -821,38 +730,23 @@ class ProcessNamespaceConfig:
             )
         )
         command.extend(git_sources.arguments(self.git_access))
-        command.extend(("--bind-fd", str(home_fd), SANDBOX_HOME))
+        command.extend(("--bind-fd", str(home_fd), sandbox_home))
         # Operational work products may contain private backups/review receipts.
-        # Keep materials and deliverable staging usable, but hide this subtree.
+        # Keep materials and deliverable staging usable, but hide this subtree;
+        # the host view keeps it readable and only guards it against writes.
         operational = project / ".hub" / "work"
         if operational.exists() or operational.is_symlink():
             _absolute_path(operational, "operational workspace")
             if not operational.is_dir():
                 raise NamespaceError("operational workspace must be a directory")
-            command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
-        if visible_fds:
-            # Identity mounts only: HOME is remapped and the socket has a fixed path.
-            remapped = {Path(self.session_home)}
-            if self.permission_socket is not None:
-                remapped.add(Path(self.permission_socket))
-            mounted = tuple(path for path in source_fds if path not in remapped)
-            masks: list[tuple[Path, bool]] = []
-            for base, fd in (*visible_fds.items(), (project, project_fd)):
-                # Refuse a root already swapped from its pin; later races remain
-                # the documented residual risk of enumerating a live tree.
-                base_stat, pinned = os.stat(base, follow_symlinks=False), os.fstat(fd)
-                if (base_stat.st_dev, base_stat.st_ino) != (pinned.st_dev, pinned.st_ino):
-                    raise NamespaceError("visible tree changed during launch")
-                masks.extend(_masked_entries(base, mounted))
-            for path, directory in _outermost_masks([(operational, True), *masks]):
-                if path == operational:
-                    continue  # Mounted above whenever it exists.
-                if directory:
-                    command.extend(("--tmpfs", str(path), "--remount-ro", str(path)))
-                else:
-                    command.extend(("--ro-bind", "/dev/null", str(path)))
+            if self.host_view:
+                command.extend(("--ro-bind", str(operational), str(operational)))
+            else:
+                command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if sock is not None and sock_fd is not None:
             command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
+        if self.host_view and _DOCKER_SOCKET.is_socket():
+            command.extend(("--ro-bind", str(_DOCKER_SOCKET), str(_DOCKER_SOCKET)))
         # Freeze synthetic ancestor directories and aliases as well as runtime
         # bytes. This is nonrecursive: explicit project/HOME/tmp mounts retain
         # their own access modes. A failed remount must fail the owned launch.

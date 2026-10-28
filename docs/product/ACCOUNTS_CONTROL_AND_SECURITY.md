@@ -456,28 +456,22 @@ single-writer checks remain mandatory. See
   behind an empty read-only mount; incoming materials and artifact staging remain
   available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
   An explicitly configured `workstation` profile (source implemented; installed
-  acceptance pending) has the developer tools, Git access and toolchain and MUST
-  name 1–32 read-only `visible_roots`. Only `/usr`, `/etc` and `/opt` MAY be named
-  whole; host state, device and temporary trees, `/home` and a whole user home
-  MUST refuse. A visible tree MUST NOT contain or lie inside a private authority
-  path, overlap the session HOME or lie inside the project; the writable project
-  MAY lie inside one and keeps its writable mount. A visible tree other than
-  `/usr`, `/etc` and `/opt` MUST NOT contain a nested mount. The launch MUST mask
-  the canonical targets of `.hub/work` and case-insensitive `.env*` entries it
-  finds at each visible tree's top level, in its immediate children and in the
-  project, wherever they resolve inside a mounted tree. In this profile only,
-  these masks and the project `.hub/work` mount above are best-effort
-  enumeration of a live tree while the launch is assembled, not a boundary: entries created or swapped during or
-  after launch, deeper copies and hardlinks under other names stay readable; the
-  owner's acceptance of this residual risk is pending. Namespace-owned `/proc`,
-  `/dev`, `/tmp` and `/run` remain, so host sockets there stay absent. Services
-  reachable over the shared network or through sockets inside listed trees keep
-  their own authority. This profile preauthorizes native
-  Bash: the permission host MUST still validate each request, its fields and the
-  current job, lease, writer, session, root and stop state, and journal a single-use
-  Allow without a human receipt or wait notice. It grants no network change,
-  nested user namespace or credential, and is not hostile-agent isolation. See
-  [ADR 0080](../decisions/0080-claude-workstation-profile.md).
+  acceptance pending) has the developer tools, Git access and toolchain and
+  shows the whole host filesystem read-only, as Codex workspace-write does. Host
+  credentials and Hub/tlive authority are therefore readable; this is the
+  accepted trust model of ADR 0072, not a defect. Persistent writes MUST reach
+  only the project, its admitted Git metadata and the session HOME, which is
+  mounted at its own host path; the project `.hub/work` is read-only instead of
+  hidden. Private paths MUST NOT overlap a writable or trusted runtime mount.
+  Namespace-owned `/dev`, `/proc`, `/tmp` and `/run` remain; only the host
+  Docker socket is shared, and supplementary groups are kept, so Docker access
+  matches other agents. This profile preauthorizes native Bash: the permission
+  host MUST still validate each request, its fields and the current job, lease,
+  writer, session, root and stop state, and journal a single-use Allow without a
+  human receipt or wait notice. Push, deployment and service changes belong to
+  the owner by policy, not by a technical barrier. Damage from mistakes is
+  limited by backups, budgets and provenance, not isolation. See
+  [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
   Developer acceptance MUST prove
   the production host/native edit-test-local-Git cycle, repeated fresh Bash
   Allow/Deny, explicit Bash-grant reuse/reset/refusal, denied effects absent, exact resume, stop/cleanup and uncertainty

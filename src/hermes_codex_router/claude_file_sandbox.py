@@ -13,8 +13,8 @@ from typing import Mapping, Sequence
 from .claude_mount_pins import SandboxLaunch
 from .claude_tool_profiles import BASH_PROFILES, profile_tools
 from .namespace_toolchain import NamespaceToolchain
-from .process_namespace import SANDBOX_HOME, NamespaceRuntime, ProcessNamespaceConfig
 from .process_namespace import NamespaceError as FileToolSandboxError
+from .process_namespace import NamespaceRuntime, ProcessNamespaceConfig
 
 _SAFE_ENV = frozenset(
     {
@@ -49,15 +49,12 @@ class FileToolSandboxConfig:
     private_paths: tuple[Path, ...]
     profile: str = "editor"
     toolchain: NamespaceToolchain | None = None
-    visible_roots: tuple[Path, ...] = ()
     _namespace: ProcessNamespaceConfig = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         profile_tools(self.profile)
         if self.toolchain is not None and self.profile not in BASH_PROFILES:
             raise FileToolSandboxError("toolchain requires a developer or workstation profile")
-        if bool(self.visible_roots) != (self.profile == "workstation"):
-            raise FileToolSandboxError("visible roots require exactly the workstation profile")
         runtime = NamespaceRuntime(
             bwrap_executable=self.bwrap_executable,
             executable=self.claude_executable,
@@ -78,7 +75,7 @@ class FileToolSandboxConfig:
                 permission_socket=self.permission_socket,
                 git_access="read-write" if self.profile in BASH_PROFILES else "read-only",
                 toolchain=self.toolchain,
-                visible_roots=self.visible_roots,
+                host_view=self.profile == "workstation",
             ),
         )
 
@@ -88,7 +85,7 @@ class FileToolSandboxConfig:
         if argv and argv[0] != str(self.claude_executable):
             raise FileToolSandboxError("provider executable differs from pinned Claude executable")
         child = dict(env)
-        child["CLAUDE_CONFIG_DIR"] = f"{SANDBOX_HOME}/.claude"
+        child["CLAUDE_CONFIG_DIR"] = f"{self._namespace.sandbox_home}/.claude"
         # Native Bash may otherwise promote a long foreground command to an
         # asynchronous task, outside the owned command/stop contract.
         child["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
