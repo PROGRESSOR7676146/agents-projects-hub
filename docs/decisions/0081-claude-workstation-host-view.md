@@ -29,9 +29,13 @@ The explicit `workstation` profile matches Codex workspace-write:
 2. Persistent writes reach only the project, its admitted Git metadata (as in
    `developer`) and the session HOME, which is mounted at its own host path
    because a read-only root cannot hold a new mount point. The project
-   `.hub/work` is read-only, so a mistake cannot corrupt Hub work products.
-3. The host Docker socket is shared when present, and supplementary groups are
-   kept, so Docker access matches other agents. Docker is root-equivalent: the
+   `.hub/work` is created when absent and mounted read-only, so a mistake
+   cannot corrupt Hub work products.
+3. The rootful `/run/docker.sock` is restored into the fresh `/run` when
+   present, as is a resolver target under `/run` such as systemd-resolved's
+   stub file, and supplementary groups are kept, so Docker access matches other
+   agents. Rootless Docker and other sockets under `/run` or `/tmp` are absent;
+   sockets elsewhere in the host view stay reachable. Docker is root-equivalent: the
    namespace is a guard against mistakes, not a boundary.
 4. The host root is shown, not trust-scanned, so it stays out of the private
    mount and nested-mount checks. Private paths must still not overlap a

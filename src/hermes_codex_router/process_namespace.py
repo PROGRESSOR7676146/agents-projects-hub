@@ -37,7 +37,7 @@ _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
 _SHELL_ALIAS = Path("/usr/bin/sh")
 _SHELL_TARGET = Path("/usr/bin/dash")
-# Host sockets are absent except this one, shared as with other agents (ADR 0081).
+# Rootful Docker, shared as with other agents (ADR 0081); /run is otherwise fresh.
 _DOCKER_SOCKET = Path("/run/docker.sock")
 _MAX_RUNTIME_ENTRIES = 100_000
 _MAX_WRITABLE_ENTRIES = 100_000
@@ -701,10 +701,10 @@ class ProcessNamespaceConfig:
                 "/tmp",
                 "--tmpfs",
                 "/run",
-                "--dir",
-                "/home",
             )
         )
+        if not self.host_view:
+            command.extend(("--dir", "/home"))
         for root in roots:
             command.extend(("--ro-bind-fd", str(runtime_fds[root]), str(root)))
         for root, fd in tool_fds.items():
@@ -735,6 +735,12 @@ class ProcessNamespaceConfig:
         # Keep materials and deliverable staging usable, but hide this subtree;
         # the host view keeps it readable and only guards it against writes.
         operational = project / ".hub" / "work"
+        if self.host_view:
+            # Always guard it, even when Hub creates it during the session.
+            for path in (project / ".hub", operational):
+                if path.is_symlink():
+                    raise NamespaceError("operational workspace must not be a symlink")
+                path.mkdir(mode=0o700, exist_ok=True)
         if operational.exists() or operational.is_symlink():
             _absolute_path(operational, "operational workspace")
             if not operational.is_dir():
@@ -745,8 +751,14 @@ class ProcessNamespaceConfig:
                 command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if sock is not None and sock_fd is not None:
             command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
-        if self.host_view and _DOCKER_SOCKET.is_socket():
-            command.extend(("--ro-bind", str(_DOCKER_SOCKET), str(_DOCKER_SOCKET)))
+        if self.host_view:
+            # A fresh /run hides the rootful Docker socket and a resolver
+            # target such as systemd-resolved's stub file; restore both.
+            if _DOCKER_SOCKET.is_socket():
+                command.extend(("--ro-bind", str(_DOCKER_SOCKET), str(_DOCKER_SOCKET)))
+            resolver = Path("/etc/resolv.conf").resolve()
+            if _within(resolver, Path("/run")) and resolver.is_file():
+                command.extend(("--ro-bind", str(resolver), str(resolver)))
         # Freeze synthetic ancestor directories and aliases as well as runtime
         # bytes. This is nonrecursive: explicit project/HOME/tmp mounts retain
         # their own access modes. A failed remount must fail the owned launch.

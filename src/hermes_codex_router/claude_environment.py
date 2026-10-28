@@ -26,8 +26,8 @@ def claude_environment_prompt(sandbox: FileToolSandboxConfig) -> str:
         lines.append(
             "File edits and foreground Bash are preauthorized. The whole host filesystem is "
             "readable; persistent writes reach only the bound project, its Git metadata and "
-            "HOME, and the project's .hub/work is readonly. Docker and the network are "
-            "available. Do not use host credentials: push, deployment and service changes "
+            "HOME, and the project's .hub/work is readonly. Rootful Docker and the network "
+            "are available. Do not use host credentials: push, deployment and service changes "
             "belong to the owner."
         )
     else:

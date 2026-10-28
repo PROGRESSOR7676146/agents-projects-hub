@@ -64,6 +64,11 @@ def _python_runtime() -> tuple[Path, tuple[Path, ...]]:
 
 class HostViewWitnessTests(unittest.TestCase):
     def test_host_is_readonly_except_project_home_and_tmp(self) -> None:
+        for existing_work in (True, False):
+            with self.subTest(existing_work=existing_work):
+                self._witness(existing_work)
+
+    def _witness(self, existing_work: bool) -> None:
         bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
         require_namespace_runtime(self, bwrap)
         python, roots = _python_runtime()
@@ -76,8 +81,9 @@ class HostViewWitnessTests(unittest.TestCase):
                 path.mkdir(mode=0o700)
             (project / ".git").mkdir()
             (project / ".git" / "HEAD").write_text("fictional-head", encoding="utf-8")
-            (project / ".hub" / "work").mkdir(parents=True)
-            (project / ".hub" / "work" / "receipt").write_text("fictional", encoding="utf-8")
+            if existing_work:
+                (project / ".hub" / "work").mkdir(parents=True)
+                (project / ".hub" / "work" / "receipt").write_text("fictional", encoding="utf-8")
             (neighbor / "README").write_text("neighbor-source", encoding="utf-8")
             (neighbor / ".env").write_text("FICTIONAL_TOKEN=neighbor", encoding="utf-8")
             try:
@@ -111,7 +117,8 @@ class HostViewWitnessTests(unittest.TestCase):
             result = json.loads(completed.stdout)
             self.assertEqual(result["neighbor"], "neighbor-source")
             self.assertEqual(result["neighbor_env"], "FICTIONAL_TOKEN=neighbor")
-            self.assertEqual(result["work"], "fictional")
+            if existing_work:
+                self.assertEqual(result["work"], "fictional")
             self.assertEqual(result["home"], str(home))
             for key in ("project_write", "home_write", "tmp_write"):
                 self.assertEqual(result[key], "written", key)
@@ -122,6 +129,8 @@ class HostViewWitnessTests(unittest.TestCase):
             self.assertTrue((project / "new-file").exists())
             self.assertTrue((home / "new-file").exists())
             self.assertFalse((neighbor / "new-file").exists())
+            # A missing operational directory is created first, then guarded.
+            self.assertTrue((project / ".hub" / "work").is_dir())
             self.assertFalse((project / ".hub" / "work" / "new-file").exists())
 
     def test_host_view_requires_a_writable_project(self) -> None:
