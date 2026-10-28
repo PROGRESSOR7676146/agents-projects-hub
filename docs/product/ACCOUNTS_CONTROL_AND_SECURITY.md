@@ -452,8 +452,8 @@ single-writer checks remain mandatory. See
   The common Git directory MUST NOT be mounted wholesale. Exposed sources MUST
   retain pinning, private-authority and bounded tree checks. Unsupported layouts
   or repository administration requiring common-directory writes MUST fail
-  without an unconfined fallback. Project-contained `.hub/work` MUST be hidden
-  behind an empty read-only mount; incoming materials and artifact staging remain
+  without an unconfined fallback. Project-contained `.hub/work` present at launch
+  MUST be hidden behind an empty read-only mount; incoming materials and artifact staging remain
   available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
   An explicitly configured `workstation` profile (source implemented; installed
   acceptance pending) has the developer tools, Git access and toolchain and MUST
@@ -462,12 +462,16 @@ single-writer checks remain mandatory. See
   MUST refuse. A visible tree MUST NOT contain or lie inside a private authority
   path, overlap the session HOME or lie inside the project; the writable project
   MAY lie inside one and keeps its writable mount. A visible tree other than
-  `/usr`, `/etc` and `/opt` MUST NOT contain a nested mount. `.hub/work` and
-  case-insensitive `.env*` entries present at launch MUST be masked at each
-  visible tree's top level, in its immediate children, in visible targets of
-  symlinked children and in the project. Masking is launch-time hygiene over a
-  live tree, not a boundary: later or deeper entries stay readable. Namespace-owned `/proc`, `/dev`, `/tmp` and `/run`
-  remain, so host sockets there stay absent. This profile preauthorizes native
+  `/usr`, `/etc` and `/opt` MUST NOT contain a nested mount. The launch MUST mask
+  the canonical targets of `.hub/work` and case-insensitive `.env*` entries it
+  finds at each visible tree's top level, in its immediate children and in the
+  project, wherever they resolve inside a mounted tree. This is best-effort
+  enumeration of a live tree, not a boundary: entries created or swapped during or
+  after launch, deeper copies and hardlinks under other names stay readable; the
+  owner's acceptance of this residual risk is pending. Namespace-owned `/proc`,
+  `/dev`, `/tmp` and `/run` remain, so host sockets there stay absent. Services
+  reachable over the shared network or through sockets inside listed trees keep
+  their own authority. This profile preauthorizes native
   Bash: the permission host MUST still validate each request, its fields and the
   current job, lease, writer, session, root and stop state, and journal a single-use
   Allow without a human receipt or wait notice. It grants no network change,

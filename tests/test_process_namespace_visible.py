@@ -14,6 +14,7 @@ from hermes_codex_router.process_namespace import (
     NamespaceError,
     NamespaceRuntime,
     ProcessNamespaceConfig,
+    _masked_entries,
 )
 from tests.namespace_fixture import (
     namespace_permission_refused,
@@ -51,6 +52,8 @@ result['upper_env'] = read(inputs['neighbor'] + '/.ENV')
 result['alias_env'] = read(inputs['sources'] + '/current/.env')
 result['alias_work'] = listing(inputs['sources'] + '/current/.hub/work')
 result['alias_readme'] = read(inputs['sources'] + '/current/README')
+result['intermediate_work'] = listing(inputs['sources'] + '/linked/.hub/work')
+result['intermediate_alias'] = listing(inputs['sources'] + '/current-work')
 result['project_env'] = read('.env')
 result['project_work'] = listing('.hub/work')
 result['project_write'] = write('new-file')
@@ -110,6 +113,12 @@ class VisibleRootWitnessTests(unittest.TestCase):
             (deep / ".env").write_text("FICTIONAL_TOKEN=deep", encoding="utf-8")
             (deep / "README").write_text("deep-source", encoding="utf-8")
             (sources / "current").symlink_to(Path("archive") / "team" / "repo")
+            # Symlinked intermediate components canonicalize before nesting checks.
+            (sources / "linked").mkdir()
+            (sources / "linked" / ".hub").symlink_to(Path("..") / "archive" / "team")
+            (sources / "archive" / "team" / "work").mkdir()
+            (sources / "archive" / "team" / "work" / ".env").write_text("x", encoding="utf-8")
+            (sources / "current-work").symlink_to(Path("archive") / "team" / "work")
             secret = authority / "key"
             secret.write_text("fictional-private-key", encoding="utf-8")
             try:
@@ -157,6 +166,8 @@ class VisibleRootWitnessTests(unittest.TestCase):
                 "project_work",
                 "root_env_dir",
                 "alias_work",
+                "intermediate_work",
+                "intermediate_alias",
             ):
                 self.assertEqual(result[key], [], key)
             self.assertEqual(result["project_write"], "written")
@@ -167,6 +178,25 @@ class VisibleRootWitnessTests(unittest.TestCase):
             self.assertTrue((project / "new-file").exists())
             self.assertFalse((neighbor / "new-file").exists())
             self.assertEqual((neighbor / ".env").read_text(), "FICTIONAL_TOKEN=neighbor")
+
+
+class MaskEnumerationTests(unittest.TestCase):
+    def test_aliases_into_any_identity_mount_are_masked_at_their_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-visible-") as raw:
+            base = Path(raw).resolve()
+            sources, tools = base / "sources", base / "tools"
+            checkout = tools / "checkout"
+            (checkout / ".hub" / "work").mkdir(parents=True)
+            (checkout / ".env").write_text("x", encoding="utf-8")
+            sources.mkdir()
+            (sources / "current").symlink_to(checkout)
+            (sources / "outside").symlink_to(base / "unmounted")
+            masks = _masked_entries(sources, (sources, tools))
+            self.assertEqual(
+                sorted(masks),
+                [(checkout / ".env", False), (checkout / ".hub" / "work", True)],
+            )
+            self.assertEqual(_masked_entries(sources, (sources,)), [])
 
 
 class VisibleRootValidationTests(unittest.TestCase):

@@ -299,12 +299,13 @@ def _validate_visible_root(path: Path) -> Path:
     return root
 
 
-def _masked_entries(base: Path, visible: tuple[Path, ...]) -> list[tuple[Path, bool]]:
-    """Return operational and environment-file paths to hide, with directory flags.
+def _masked_entries(base: Path, mounted: tuple[Path, ...]) -> list[tuple[Path, bool]]:
+    """Return canonical operational and environment-file paths to hide.
 
     Covers a visible tree's top level and its immediate children, where project
-    checkouts live; a symlinked child is followed to a visible target. This is
-    launch-time hygiene over a live tree, not a snapshot (ADR 0080).
+    checkouts live. Every path is resolved, so a symlink anywhere in it masks the
+    mounted target; targets outside every identity mount are absent anyway.
+    This is best-effort enumeration of a live tree, not a snapshot (ADR 0080).
     """
     try:
         children = list(base.iterdir())
@@ -314,7 +315,7 @@ def _masked_entries(base: Path, visible: tuple[Path, ...]) -> list[tuple[Path, b
         raise NamespaceError("visible tree has too many top-level entries to mask")
     candidates = [base]
     for child in children:
-        target = _visible_target(child, visible) if child.is_symlink() else child
+        target = _mounted_target(child, mounted)
         if target is not None and target.is_dir() and target not in candidates:
             candidates.append(target)
     masks: list[tuple[Path, bool]] = []
@@ -326,11 +327,9 @@ def _masked_entries(base: Path, visible: tuple[Path, ...]) -> list[tuple[Path, b
         except OSError as exc:
             raise NamespaceError("cannot inspect visible tree") from exc
         selected = [directory / name for name in names if name.casefold().startswith(".env")]
-        work = directory / ".hub" / "work"
-        if work.exists() or work.is_symlink():
-            selected.append(work)
+        selected.append(directory / ".hub" / "work")
         for entry in selected:
-            target = _visible_target(entry, visible) if entry.is_symlink() else entry
+            target = _mounted_target(entry, mounted)
             if target is None:
                 continue
             if target.is_dir():
@@ -342,13 +341,13 @@ def _masked_entries(base: Path, visible: tuple[Path, ...]) -> list[tuple[Path, b
     return masks
 
 
-def _visible_target(link: Path, visible: tuple[Path, ...]) -> Path | None:
-    """Resolve a link inside a visible tree; outside or dangling targets are absent."""
+def _mounted_target(path: Path, mounted: tuple[Path, ...]) -> Path | None:
+    """Resolve a path; missing, dangling and unmounted targets expose nothing."""
     try:
-        target = link.resolve(strict=True)
+        target = path.resolve(strict=True)
     except (OSError, RuntimeError):
         return None
-    return target if any(_within(target, root) for root in visible) else None
+    return target if any(_within(target, root) for root in mounted) else None
 
 
 def _outermost_masks(masks: list[tuple[Path, bool]]) -> list[tuple[Path, bool]]:
@@ -832,14 +831,19 @@ class ProcessNamespaceConfig:
                 raise NamespaceError("operational workspace must be a directory")
             command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if visible_fds:
-            visible = (*visible_fds, project)
+            # Identity mounts only: HOME is remapped and the socket has a fixed path.
+            remapped = {Path(self.session_home)}
+            if self.permission_socket is not None:
+                remapped.add(Path(self.permission_socket))
+            mounted = tuple(path for path in source_fds if path not in remapped)
             masks: list[tuple[Path, bool]] = []
             for base, fd in (*visible_fds.items(), (project, project_fd)):
-                # Enumerate the object that is mounted, not a swapped host path.
+                # Refuse a root already swapped from its pin; later races remain
+                # the documented residual risk of enumerating a live tree.
                 base_stat, pinned = os.stat(base, follow_symlinks=False), os.fstat(fd)
                 if (base_stat.st_dev, base_stat.st_ino) != (pinned.st_dev, pinned.st_ino):
                     raise NamespaceError("visible tree changed during launch")
-                masks.extend(_masked_entries(base, visible))
+                masks.extend(_masked_entries(base, mounted))
             for path, directory in _outermost_masks([(operational, True), *masks]):
                 if path == operational:
                     continue  # Mounted above whenever it exists.

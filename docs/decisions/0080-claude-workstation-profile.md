@@ -42,14 +42,16 @@ trees. Credential directories stay absent.
    sockets: keep service sockets out of listed source trees.
 2. The operator home is not mounted as a whole. An explicit list of source trees
    (for example the operator's project directory) is visible read-only, with
-   `.hub/work` and case-insensitive `.env*` entries masked at each tree's top
-   level and in its immediate children, where checkouts live, including visible
-   targets of symlinked children, and in the writable project. Masks under a
-   masked directory are dropped, and a source tree with a nested mount refuses.
-   The masks are launch-time hygiene over a live tree, not a snapshot: an entry
-   created after launch, such as a new Hub lane's `.hub/work`, or a deeper copy
-   stays readable. Private operator notes (handoff, review receipts)
-   are not visible. Credential directories such as `~/.config`, `~/.local`,
+   the canonical targets of `.hub/work` and case-insensitive `.env*` entries
+   masked at each tree's top level and in its immediate children, where
+   checkouts live, and in the writable project. Every path is resolved, so an
+   alias into any mounted tree masks its target; masks under a masked directory
+   are dropped, and a source tree with a nested mount refuses. The masks are
+   best-effort enumeration of a live tree, not a snapshot: an entry created or
+   swapped during or after launch, such as a new Hub lane's `.hub/work`, a deeper
+   copy or a hardlink under another name stays readable. Private operator notes
+   (handoff, review receipts) live in configuration directories that are never
+   mounted; a copy placed in a listed tree is readable. Credential directories such as `~/.config`, `~/.local`,
    `~/.cache`, `~/.ssh`, provider homes and tlive are never mounted. A host
    inventory on 2026-10-28 found tokens, keys, Telegram sessions and
    state-database copies throughout those directories, so a per-file deny-list
@@ -78,9 +80,11 @@ trees. Credential directories stay absent.
 7. Human-only approval, first-valid-answer, stop, no uncertain replay, the
    single writer and immutable root-owned runtime and hook code are unchanged.
 
-Push, deployment, service restarts and credential use remain outside the
-namespace: their credentials are masked, so they stay with the owner or the
-host session.
+Push, deployment and credential use need credentials that are not mounted, so
+they stay with the owner or the host session. Services reachable over the shared
+network, or through a socket placed in a listed tree, keep only their own
+authentication. Writes to external linked-worktree Git metadata follow the
+`developer` rules of ADR 0076.
 
 ## Consultation and resolved questions
 
@@ -99,12 +103,20 @@ nested mount under a source tree escaped the mount check. Narrowed instead of
 fixed: masks enumerate a live tree once, so a race-free promise would need a
 snapshot per launch; the boundary is the allowlist, not the masks.
 
+GPT Astra (high) reviewed the fixes. It found the narrowed wording inconsistent
+across documents and the prompt, and mask paths not canonical when a symlink was
+an intermediate component or targeted another mounted tree. All masks are now
+resolved against every identity mount before nesting checks, and every
+statement is best-effort. Owner acceptance of the remaining race, deep-copy and
+hardlink risk is pending; review does not replace it.
+
 ## Consequences
 
 Claude gains the same practical reach as Codex for reading and running project
 work. The protected property narrows to what matters in a trusted personal
-installation: the model cannot read the listed secrets, write outside the
-project or approve for the owner. It is not hostile-agent or same-UID isolation.
-New source trees and secret locations need installation review: a secret copied
-into a visible source tree is readable unless masked. `editor` and `developer`
+installation: the model cannot read credential directories that are never
+mounted, persistently write outside the project and its Git metadata, or approve
+for the owner. It is not hostile-agent or same-UID isolation. New source trees
+and secret locations need installation review: a secret copied into a visible
+source tree is readable unless a launch-time mask happens to cover it. `editor` and `developer`
 keep their current behavior and evidence.
