@@ -301,6 +301,24 @@ def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Pa
             raise NamespaceError("project destination overlaps a system alias")
 
 
+def _hidden_link_args(start: Path, hidden: Path) -> list[str]:
+    """Recreate each hop of a link chain that a fresh mount at hidden covers."""
+    args: list[str] = []
+    path = start
+    for _ in range(8):
+        inside = _within(path, hidden)
+        if path.is_symlink():
+            target = os.readlink(path)
+            if inside:
+                args.extend(("--dir", str(path.parent), "--symlink", target, str(path)))
+            path = Path(os.path.normpath(path.parent / target))
+            continue
+        if inside and path.is_file():
+            args.extend(("--ro-bind", str(path), str(path)))
+        break
+    return args
+
+
 def _system_shell_alias_args(roots: tuple[Path, ...], code: Path | None) -> list[str]:
     """Recreate one host alias to an exact already-pinned readonly shell file."""
     sources = (*roots, *((code,) if code is not None else ()))
@@ -756,9 +774,7 @@ class ProcessNamespaceConfig:
             # target such as systemd-resolved's stub file; restore both.
             if _DOCKER_SOCKET.is_socket():
                 command.extend(("--ro-bind", str(_DOCKER_SOCKET), str(_DOCKER_SOCKET)))
-            resolver = Path("/etc/resolv.conf").resolve()
-            if _within(resolver, Path("/run")) and resolver.is_file():
-                command.extend(("--ro-bind", str(resolver), str(resolver)))
+            command.extend(_hidden_link_args(Path("/etc/resolv.conf"), Path("/run")))
         # Freeze synthetic ancestor directories and aliases as well as runtime
         # bytes. This is nonrecursive: explicit project/HOME/tmp mounts retain
         # their own access modes. A failed remount must fail the owned launch.

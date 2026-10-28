@@ -464,8 +464,8 @@ single-writer checks remain mandatory. See
   mounted at its own host path; the project `.hub/work` is created when absent
   and mounted read-only instead of hidden. Private paths MUST NOT overlap a
   writable or trusted runtime mount. Namespace-owned `/dev`, `/proc`, `/tmp` and
-  `/run` remain; the rootful `/run/docker.sock` and a resolver target under
-  `/run` are restored into the fresh `/run`, and supplementary groups are kept,
+  `/run` remain; the rootful `/run/docker.sock` and each resolver link-chain hop
+  under `/run` are restored into the fresh `/run`, and supplementary groups are kept,
   so rootful Docker access matches other agents. Rootless Docker and other
   sockets under `/run` or `/tmp` are absent; sockets elsewhere in the host view
   stay reachable. This profile preauthorizes native Bash: the permission

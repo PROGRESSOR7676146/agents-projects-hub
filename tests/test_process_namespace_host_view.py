@@ -13,6 +13,7 @@ from hermes_codex_router.process_namespace import (
     NamespaceError,
     NamespaceRuntime,
     ProcessNamespaceConfig,
+    _hidden_link_args,
 )
 from tests.namespace_fixture import (
     namespace_permission_refused,
@@ -142,6 +143,42 @@ class HostViewWitnessTests(unittest.TestCase):
                 (Path("/home/example/private"),),
                 host_view=True,
             )
+
+
+class HiddenLinkTests(unittest.TestCase):
+    def test_every_hidden_hop_of_a_resolver_chain_is_recreated(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-links-") as raw:
+            base = Path(raw).resolve()
+            etc, run = base / "etc", base / "run"
+            (run / "resolvconf").mkdir(parents=True)
+            (run / "resolve").mkdir()
+            etc.mkdir()
+            stub = run / "resolve" / "stub-resolv.conf"
+            stub.write_text("nameserver 192.0.2.53\n", encoding="utf-8")
+            (run / "resolvconf" / "resolv.conf").symlink_to("../resolve/stub-resolv.conf")
+            (etc / "resolv.conf").symlink_to(run / "resolvconf" / "resolv.conf")
+            hop = run / "resolvconf" / "resolv.conf"
+            self.assertEqual(
+                _hidden_link_args(etc / "resolv.conf", run),
+                [
+                    "--dir",
+                    str(hop.parent),
+                    "--symlink",
+                    "../resolve/stub-resolv.conf",
+                    str(hop),
+                    "--ro-bind",
+                    str(stub),
+                    str(stub),
+                ],
+            )
+
+    def test_targets_outside_the_hidden_tree_need_nothing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-links-") as raw:
+            base = Path(raw).resolve()
+            (base / "wsl").mkdir()
+            (base / "wsl" / "resolv.conf").write_text("nameserver 192.0.2.53\n")
+            (base / "resolv.conf").symlink_to(base / "wsl" / "resolv.conf")
+            self.assertEqual(_hidden_link_args(base / "resolv.conf", base / "run"), [])
 
 
 if __name__ == "__main__":

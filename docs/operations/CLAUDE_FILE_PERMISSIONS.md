@@ -158,8 +158,8 @@ For the `workstation` profile, set `"profile": "workstation"` and start with
 including credentials, as for Codex. Writes reach the project, its Git metadata
 and the session HOME at its host path; `/tmp` is disposable and the project
 `.hub/work` is created when absent and kept readonly. The rootful
-`/run/docker.sock` and a resolver target under `/run` are restored when present
-(rootless Docker under `/run/user` is not), and
+`/run/docker.sock` and each resolver link-chain hop under `/run` are restored
+when present (rootless Docker under `/run/user` is not), and
 foreground Bash runs without a card. The host root is shown, not trust-scanned,
 so the filesystem checks below apply to the writable and runtime mounts only.
 See [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
