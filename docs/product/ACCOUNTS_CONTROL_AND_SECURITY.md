@@ -479,7 +479,8 @@ single-writer checks remain mandatory. See
   sockets, Docker included, work with the kept supplementary groups as for other
   agents, and the permission socket is at `/tmp/hub-permission.sock`. Only host
   `/tmp` sockets are absent. Nested user namespaces are admitted so the commit
-  gate runs; inherited mounts MUST stay locked read-only. This
+  gate runs, with a writable namespace-owned `/proc` for their user maps;
+  inherited mounts MUST stay locked read-only. This
   profile preauthorizes native Bash: the permission
   host MUST still validate each request, its fields and the current job, lease,
   writer, session, root and stop state, and journal a single-use Allow without a
