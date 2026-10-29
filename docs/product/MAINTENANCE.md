@@ -23,7 +23,7 @@ This normative module is part of the
   to one each; extra processes require an explicit external-worker rollout.
   Claude defaults to text-only queue execution. The opt-in protected file-tool
   boundary has offline coverage; scoped installed checks, native/Telegram and
-  live CPA route acceptance remain pending. Global same-UID/admin authority-data
+  live CPA or subscription route acceptance remain pending. Global same-UID/admin authority-data
   isolation is not claimed under REQ-SEC-008, rather than pending. Existing
   unsupported managed local/steering boundaries remain unsupported.
 - Topic creation depends on the deployment bot's Telegram Manage Topics

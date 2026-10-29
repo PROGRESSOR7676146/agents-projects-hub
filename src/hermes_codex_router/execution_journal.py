@@ -15,6 +15,7 @@ CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
     {
         "claude_cpa_route_unverified",
         "claude_cpa_credential_ambiguous",
+        "claude_subscription_route_unverified",
         "claude_cli_unavailable",
         "claude_cli_capabilities_unverified",
         "claude_image_input_unverified",

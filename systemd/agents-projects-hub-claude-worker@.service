@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=simple
 ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub worker %h/.config/agents-projects-hub/hub.json --agent claude --slot %i
 EnvironmentFile=-%h/.config/agents-projects-hub/environment
+# Optional subscription token for auth_route "subscription" (ADR 0082); only
+# Claude workers read it.
+EnvironmentFile=-%h/.config/agents-projects-hub/claude-subscription.env
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20

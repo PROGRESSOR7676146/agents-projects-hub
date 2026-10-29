@@ -32,6 +32,7 @@ PROVIDER_ENVIRONMENT = frozenset(
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
         "LANG",
         "LC_ALL",
         "TZ",
