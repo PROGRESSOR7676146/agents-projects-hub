@@ -1042,12 +1042,19 @@ class ExternalRuntimeTests(unittest.TestCase):
             with patch.dict("os.environ", both, clear=True):
                 adapter.run_turn(cwd=Path(directory), prompt="hello", project_id="beta")
                 adapter.run_turn(cwd=Path(directory), prompt="hello", project_id="alpha")
+                # Scrubbing applies to the launch copy, never the worker itself.
+                self.assertEqual(dict(os.environ), both)
             # The second account never reaches a turn under its own name.
             self.assertEqual(tokens, [("second", ()), ("first", ())])
             # A mapped project never falls back to another account, and an
             # unidentified turn cannot choose one.
             for env, project_id in (
                 ({"CLAUDE_CODE_OAUTH_TOKEN": "first"}, "beta"),
+                (
+                    {"CLAUDE_CODE_OAUTH_TOKEN": "first", "CLAUDE_CODE_OAUTH_TOKEN_SECOND": ""},
+                    "beta",
+                ),
+                ({"CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second"}, "alpha"),
                 (both, None),
             ):
                 with (

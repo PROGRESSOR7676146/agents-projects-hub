@@ -114,10 +114,14 @@ For `auth_route: subscription` ([ADR 0082](../decisions/0082-claude-subscription
 4. Set `"auth_route": "subscription"` on the Claude agent and restart only the
    Claude workers through the service manager. `developer` is refused on this
    route; `editor` and `workstation` are allowed.
-5. On the exact deployed revision, record the CLI version and accept one
-   text-only and one editor turn, one turn in each bound project with its
-   account identified, an injected API key refused before launch, and a turn
-   with a deliberately invalid token failing rather than succeeding.
+5. On the exact deployed revision, record the CLI version and, for every
+   Claude worker unit, its effective environment files and Claude home. Claude
+   turns run only in these queue workers; the provider service refuses Claude.
+   Accept one text-only, one editor and one workstation turn, a new and a
+   resumed turn in each bound project and in a default project with the account
+   identified, an injected API key refused before launch, and a turn with a
+   deliberately invalid token failing rather than succeeding. A limit on one
+   account must end that turn with a limit notice, not move it to the other.
 
 Rollback: remove `subscription_token_by_project`, set `"auth_route": "cpa"`,
 take `claude-subscription.env` out of the Claude workers' environment (the CPA
