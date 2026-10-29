@@ -56,7 +56,9 @@ This normative module is part of the
   the billing route. A project MAY be bound in configuration to its own fixed
   account token; other projects use the default token. A bound project MUST
   fail rather than fall back to another account, and Hub MUST NOT pool, rotate
-  or switch accounts by limits. See
+  or switch accounts by limits. A Claude launch MUST load no user, project or
+  local settings file, MUST receive at most the one selected subscription token,
+  and a non-Claude launch MUST receive none. See
   [ADR 0082](../decisions/0082-claude-subscription-route.md).
   The default worker MUST expose no Claude built-in tools, customizations,
   skills, or MCP servers and MUST deny permission prompts. An explicit local

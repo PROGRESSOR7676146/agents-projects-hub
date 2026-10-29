@@ -125,6 +125,12 @@ _CLAUDE_CLOUD_SELECTORS = (
 CLAUDE_SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 
 
+def _pop_claude_project_tokens(environment: dict[str, str]) -> dict[str, str]:
+    """Remove the whole per-project token family, whether or not a name is mappable."""
+    prefix = CLAUDE_SUBSCRIPTION_TOKEN + "_"
+    return {key: environment.pop(key) for key in tuple(environment) if key.startswith(prefix)}
+
+
 def _claude_route_environment(
     environment: dict[str, str],
     route: str,
@@ -134,11 +140,7 @@ def _claude_route_environment(
 ) -> None:
     """Refuse an ambiguous route before a productive Claude CLI invocation."""
     # Per-project account tokens never reach the CLI under their own names.
-    project_tokens = {
-        key: environment.pop(key)
-        for key in tuple(environment)
-        if CLAUDE_PROJECT_TOKEN.fullmatch(key)
-    }
+    project_tokens = _pop_claude_project_tokens(environment)
     if route == "subscription":
         # Each project uses one fixed account (ADR 0082); a mapped project
         # without its own token fails instead of falling back to another account.
@@ -349,8 +351,12 @@ class ExternalCliAdapter:
                     raise ProviderUnavailableError(
                         "claude_resume_invalid", "Claude session identity is invalid."
                     ) from exc
+            # No settings file may add an `env` block or `apiKeyHelper` that
+            # changes the credential or billing route (ADR 0082).
             argv = [
                 self.executable,
+                "--setting-sources",
+                "",
                 "--print",
                 "--output-format",
                 "stream-json",
@@ -622,6 +628,10 @@ class ExternalCliAdapter:
                 self.claude_token_by_project,
                 project_id,
             )
+        else:
+            # Claude subscription accounts never reach another provider.
+            _pop_claude_project_tokens(environment)
+            environment.pop(CLAUDE_SUBSCRIPTION_TOKEN, None)
         return environment
 
     def _prepare_claude_input(

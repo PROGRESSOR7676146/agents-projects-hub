@@ -61,11 +61,8 @@ class DeveloperStopTests(unittest.TestCase):
                 )
                 adapter = controls.adapter(fixture.root, body)
                 child = Path(adapter.executable)
-                developer_help = (
-                    HELP.replace(
-                        "Values: default, dontAsk, plan", "Values: default, dontAsk, plan, manual"
-                    )
-                    + "  --setting-sources  example option\n"
+                developer_help = HELP.replace(
+                    "Values: default, dontAsk, plan", "Values: default, dontAsk, plan, manual"
                 )
                 child.write_text(child.read_text().replace(repr(HELP), repr(developer_help)))
                 worker = fixture.worker(cast(Any, adapter))

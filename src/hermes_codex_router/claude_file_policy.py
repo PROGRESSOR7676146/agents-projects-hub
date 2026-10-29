@@ -89,7 +89,6 @@ def file_tool_argv(argv: tuple[str, ...], sandbox: FileToolSandboxConfig) -> tup
     mutable[mutable.index("--tools") + 1] = "Read,Glob,Grep,Write,Edit" + (
         ",Bash" if sandbox.profile in BASH_PROFILES else ""
     )
-    mutable[1:1] = ["--setting-sources", ""]
     return tuple(mutable)
 
 

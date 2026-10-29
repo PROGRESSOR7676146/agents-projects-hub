@@ -34,6 +34,7 @@ _REQUIRED_OPTIONS = frozenset(
         "strict-mcp-config",
         "disable-slash-commands",
         "settings",
+        "setting-sources",
         "permission-mode",
         "permission-prompts",
         "tools",
@@ -121,8 +122,7 @@ def _has_required_advertisement(
         )
         and (
             not file_tools
-            or "setting-sources" in entries
-            and any(
+            or any(
                 re.search(r"(?<![\w-])manual(?![\w-])", stanza)
                 for stanza in entries["permission-mode"]
             )

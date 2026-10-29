@@ -1010,6 +1010,8 @@ class ExternalRuntimeTests(unittest.TestCase):
 
         def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
             env = cast(dict[str, str], kwargs["env"])
+            # No settings file may inject another credential or billing route.
+            self.assertEqual(argv[1:3], ("--setting-sources", ""))
             tokens.append(
                 (
                     env.get("CLAUDE_CODE_OAUTH_TOKEN"),
@@ -1022,7 +1024,14 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
             return subprocess.CompletedProcess(argv, 0, output, "")
 
-        both = {"CLAUDE_CODE_OAUTH_TOKEN": "first", "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second"}
+        # Names that are not valid mapping references are scrubbed as well.
+        both = {
+            "CLAUDE_CODE_OAUTH_TOKEN": "first",
+            "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second",
+            "CLAUDE_CODE_OAUTH_TOKEN_second": "malformed",
+            "CLAUDE_CODE_OAUTH_TOKEN_A_B_C_D": "too-many-parts",
+            "CLAUDE_CODE_OAUTH_TOKEN_" + "X" * 17: "too-long",
+        }
         with tempfile.TemporaryDirectory() as directory:
             adapter = ExternalCliAdapter(
                 "claude",
@@ -1055,7 +1064,7 @@ class ExternalRuntimeTests(unittest.TestCase):
                     {
                         "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
                         "ANTHROPIC_AUTH_TOKEN": "example",
-                        "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second",
+                        "CLAUDE_CODE_OAUTH_TOKEN_second": "malformed",
                     },
                     clear=True,
                 ),
@@ -1448,6 +1457,32 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(result.provider_session_id, "ses_1")
         self.assertEqual(result.text, "Visible answer")
         self.assertNotIn("--auto", calls[0])
+
+    def test_non_claude_runtime_never_receives_a_claude_subscription_token(self) -> None:
+        environments: list[dict[str, str]] = []
+
+        def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            environments.append(cast(dict[str, str], kwargs["env"]))
+            output = '{"sessionID":"ses_1"}\n{"part":{"text":"Visible answer"}}\n'
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        tokens = {
+            "CLAUDE_CODE_OAUTH_TOKEN": "first",
+            "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second",
+            "CLAUDE_CODE_OAUTH_TOKEN_second": "malformed",
+            "LANG": "C.UTF-8",
+        }
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict("os.environ", tokens, clear=True),
+        ):
+            ExternalCliAdapter("opencode", run=fake_run).run_turn(
+                cwd=Path(directory), prompt="hello", project_id="beta"
+            )
+        self.assertEqual(
+            [key for key in environments[0] if key.startswith("CLAUDE_CODE_OAUTH_TOKEN")], []
+        )
+        self.assertEqual(environments[0]["LANG"], "C.UTF-8")
 
     def test_opencode_effort_is_passed_as_provider_variant(self) -> None:
         adapter = ExternalCliAdapter("opencode", executable="/usr/bin/opencode")

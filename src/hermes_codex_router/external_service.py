@@ -644,6 +644,7 @@ class ExternalAgentService:
             ):
                 result = self.adapter.run_turn(
                     cwd=project.root,
+                    project_id=project.project_id,
                     prompt=telegram_turn_prompt(
                         prompt,
                         runtime=self.agent.runtime,
@@ -663,10 +664,7 @@ class ExternalAgentService:
             self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
             if isinstance(exc, ProviderLimitError):
                 self.state.record_runtime_event(
-                    self.agent.agent_id,
-                    "warning",
-                    "provider_limit",
-                    exc.limit.to_json(),
+                    self.agent.agent_id, "warning", "provider_limit", exc.limit.to_json()
                 )
                 visible = (
                     f"{self.agent.display_name}: {exc.limit.window} limit exhausted. "

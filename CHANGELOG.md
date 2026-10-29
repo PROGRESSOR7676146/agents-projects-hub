@@ -8,7 +8,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Add an explicit Claude `auth_route: subscription` that uses the subscription
   token directly instead of CPA, refuses competing credentials before launch
   and excludes the `developer` profile (ADR 0082). A project can be bound to its
-  own fixed subscription account without fallback to another one.
+  own fixed subscription account without fallback to another one. Claude
+  launches load no user, project or local settings file, and non-Claude
+  launches never receive a Claude subscription token.
 
 - Add explicit Claude Bash consent until worker/tlive restart and immediately
   settle protected permission cards after a valid decision.
