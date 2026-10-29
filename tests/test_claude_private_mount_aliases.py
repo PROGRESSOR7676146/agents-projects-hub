@@ -21,7 +21,15 @@ import hermes_codex_router.claude_mount_pins as mounts
 import hermes_codex_router.claude_private_mounts as private_mounts
 import hermes_codex_router.process_namespace as namespace
 from tests.fd_fixture import assert_descriptor_cleanup
-from tests.namespace_fixture import namespace_permission_refused, namespace_unavailable
+from tests.namespace_fixture import (
+    namespace_permission_refused,
+    namespace_unavailable,
+    require_mapped_host_root,
+)
+
+
+def setUpModule() -> None:
+    require_mapped_host_root()
 
 
 class ClaudePrivateMountAliasTests(unittest.TestCase):

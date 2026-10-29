@@ -19,8 +19,13 @@ from tests.fd_fixture import assert_descriptor_cleanup
 from tests.namespace_fixture import (
     namespace_permission_refused,
     namespace_unavailable,
+    require_mapped_host_root,
     require_namespace_runtime,
 )
+
+
+def setUpModule() -> None:
+    require_mapped_host_root()
 
 
 class NamespaceToolchainTests(unittest.TestCase):

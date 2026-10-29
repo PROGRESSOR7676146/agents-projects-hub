@@ -17,6 +17,11 @@ from hermes_codex_router.process_namespace import (
     ProcessNamespaceConfig,
 )
 from tests.fd_fixture import assert_descriptor_cleanup
+from tests.namespace_fixture import require_mapped_host_root
+
+
+def setUpModule() -> None:
+    require_mapped_host_root()
 
 
 class ProcessNamespaceTests(unittest.TestCase):

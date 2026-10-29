@@ -189,12 +189,13 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             guard.recheck()
 
     def test_only_a_nested_cgroup_root_outside_its_namespace_is_opaque(self) -> None:
-        row = "1 0 0:25 /.. /sys/fs/cgroup ro - {} {} rw\n"
-        with patch.object(
-            private_mounts, "_read_mountinfo", return_value=row.format("cgroup2", "cgroup2")
-        ):
-            self.assertIsNone(private_mounts.read_mount_table()[1].root)
-        for filesystem, root in (("ext4", "/.."), ("cgroup2", "/../escape"), ("cgroup2", "/../..")):
+        # One /.. hop per nesting level of the reader's cgroup namespace.
+        for filesystem, root in (("cgroup2", "/.."), ("cgroup", "/../../..")):
+            with self.subTest(filesystem=filesystem, root=root):
+                table = f"1 0 0:25 {root} /sys/fs/cgroup ro - {filesystem} example rw\n"
+                with patch.object(private_mounts, "_read_mountinfo", return_value=table):
+                    self.assertIsNone(private_mounts.read_mount_table()[1].root)
+        for filesystem, root in (("ext4", "/.."), ("cgroup2", "/../escape"), ("tmpfs", "/../..")):
             with self.subTest(filesystem=filesystem, root=root):
                 table = f"1 0 0:25 {root} /sys/fs/cgroup ro - {filesystem} example rw\n"
                 with patch.object(private_mounts, "_read_mountinfo", return_value=table):

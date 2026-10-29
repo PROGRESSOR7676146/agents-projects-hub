@@ -148,8 +148,9 @@ class HostViewWitnessTests(unittest.TestCase):
                 (project / ".hub" / "work" / "receipt").write_text("fictional", encoding="utf-8")
             (neighbor / "README").write_text("neighbor-source", encoding="utf-8")
             (neighbor / ".env").write_text("FICTIONAL_TOKEN=neighbor", encoding="utf-8")
-            control = base / "control"
-            control.mkdir(mode=0o700)
+            # A short socket parent: a deep HOME can exceed the AF_UNIX path limit.
+            control = Path(tempfile.mkdtemp(prefix="hub-socket-"))
+            self.addCleanup(shutil.rmtree, control, True)
             listener = socket.socket(socket.AF_UNIX)
             self.addCleanup(listener.close)
             listener.bind(str(control / "permission.sock"))

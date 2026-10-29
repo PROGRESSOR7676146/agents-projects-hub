@@ -91,11 +91,12 @@ def read_mount_table() -> dict[int, _Mount]:
         # Kernel namespace handles are legitimate unrelated mounts. They have
         # an opaque root such as net:[123], never a provider filesystem source.
         # A cgroup mount seen from a nested cgroup namespace reports its root
-        # outside that namespace as /.. ; it is equally never a source.
+        # outside that namespace as one /.. hop per nesting level, such as
+        # /../../.. in a container; it is equally never a source.
         root = (
             None
             if (tail[0] == "nsfs" and re.fullmatch(r"[a-z]+:\[[0-9]+\]", fields[3]))
-            or (tail[0] in ("cgroup", "cgroup2") and fields[3] == "/..")
+            or (tail[0] in ("cgroup", "cgroup2") and re.fullmatch(r"(/\.\.)+", fields[3]))
             else _mount_path(fields[3])
         )
         mounts[identity] = _Mount(
