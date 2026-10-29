@@ -95,7 +95,7 @@ def read_mount_table() -> dict[int, _Mount]:
         root = (
             None
             if (tail[0] == "nsfs" and re.fullmatch(r"[a-z]+:\[[0-9]+\]", fields[3]))
-            or (tail[0] in ("cgroup", "cgroup2") and re.fullmatch(r"/\.\.(/\.\.)*", fields[3]))
+            or (tail[0] in ("cgroup", "cgroup2") and fields[3] == "/..")
             else _mount_path(fields[3])
         )
         mounts[identity] = _Mount(

@@ -194,12 +194,30 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             private_mounts, "_read_mountinfo", return_value=row.format("cgroup2", "cgroup2")
         ):
             self.assertIsNone(private_mounts.read_mount_table()[1].root)
-        for filesystem, root in (("ext4", "/.."), ("cgroup2", "/../escape")):
+        for filesystem, root in (("ext4", "/.."), ("cgroup2", "/../escape"), ("cgroup2", "/../..")):
             with self.subTest(filesystem=filesystem, root=root):
                 table = f"1 0 0:25 {root} /sys/fs/cgroup ro - {filesystem} example rw\n"
                 with patch.object(private_mounts, "_read_mountinfo", return_value=table):
                     with self.assertRaisesRegex(PrivateMountError, "malformed"):
                         private_mounts.read_mount_table()
+
+    def test_an_opaque_root_never_provides_source_or_private_provenance(self) -> None:
+        with MountPins() as pins:
+            fd = pins.open(self.source)
+            identity = pins.mount_id(fd)
+            device = self.source.stat().st_dev
+            row = f"{identity} 1 {os.major(device)}:{os.minor(device)} /.. / ro - cgroup2 cgroup2 rw\n"
+            with patch.object(private_mounts, "_read_mountinfo", return_value=row):
+                table = private_mounts.read_mount_table()
+                for authority in (False, True):
+                    with self.subTest(private_authority=authority):
+                        with self.assertRaisesRegex(PrivateMountError, "does not match its pin"):
+                            private_mounts._coordinate(
+                                self.source, fd, identity, table, private_authority=authority
+                            )
+                with PrivateMountGuard() as guard:
+                    with self.assertRaisesRegex(PrivateMountError, "does not match its pin"):
+                        guard.check({self.source: fd}, {self.source: identity}, (self.private,))
 
     def test_mount_table_read_errors_and_size_bound_refuse(self) -> None:
         for error in (PermissionError("fixture"), UnicodeError("fixture")):
