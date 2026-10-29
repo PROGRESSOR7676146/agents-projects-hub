@@ -33,12 +33,22 @@ def nested():
     if pid == 0:
         os.close(reader)
         report = {}
+        uid, gid = os.getuid(), os.getgid()
         try:
             os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNS)
             report['unshare'] = 0
         except OSError as error:
             report['unshare'] = error.errno
         if report['unshare'] == 0:
+            # Nested bwrap and unshare -U write these maps through /proc.
+            try:
+                for name, line in (('uid_map', f'0 {uid} 1'), ('setgroups', 'deny'),
+                                   ('gid_map', f'0 {gid} 1')):
+                    with open(f'/proc/self/{name}', 'w') as stream:
+                        stream.write(line)
+                report['map'] = 0
+            except OSError as error:
+                report['map'] = error.errno
             libc = ctypes.CDLL(None, use_errno=True)
             def mount(*args):
                 return 0 if libc.mount(*args) == 0 else ctypes.get_errno()
@@ -91,6 +101,7 @@ result['home_write'] = write(os.environ['HOME'] + '/new-file')
 result['tmp_write'] = write('/tmp/new-file')
 result['system'] = pathlib.Path('/usr/share').is_dir()
 result['proc_self'] = pathlib.Path('/proc/self/status').exists()
+result['proc_sys_write'] = write('/proc/sys/vm/swappiness')
 result['nested'] = nested()
 result['run'] = pathlib.Path('/run').is_dir()
 result['run_write'] = write('/run/hub-host-view-probe')
@@ -211,11 +222,24 @@ class HostViewWitnessTests(unittest.TestCase):
             # inherited readonly root stays locked inside them.
             self.assertEqual(
                 result["nested"],
-                {"unshare": 0, "control": 0, "root_readonly": True, "unlock": errno.EPERM},
+                {
+                    "unshare": 0,
+                    "map": 0,
+                    "control": 0,
+                    "root_readonly": True,
+                    "unlock": errno.EPERM,
+                },
             )
             # Host /run stays visible, readonly, instead of a fresh tmpfs.
             self.assertTrue(result["run"])
-            for key in ("work_write", "neighbor_write", "system_write", "run_write"):
+            # /proc stays writable for nested maps; host sysctls stay denied.
+            for key in (
+                "work_write",
+                "neighbor_write",
+                "system_write",
+                "run_write",
+                "proc_sys_write",
+            ):
                 self.assertIsInstance(result[key], int, key)
             self.assertTrue(result["system"])
             self.assertTrue(result["proc_self"])

@@ -701,12 +701,12 @@ class ProcessNamespaceConfig:
                 "/dev",
                 "--proc",
                 "/proc",
-                "--remount-ro",
-                "/proc",
-                "--tmpfs",
-                "/tmp",
             )
         )
+        if not self.host_view:
+            # Nested bwrap and unshare -U write their maps under /proc/self.
+            command.extend(("--remount-ro", "/proc"))
+        command.extend(("--tmpfs", "/tmp"))
         if not self.host_view:
             # The host view shows host /run (sockets, resolver links) readonly.
             command.extend(("--tmpfs", "/run", "--dir", "/home"))

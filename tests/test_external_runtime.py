@@ -815,7 +815,9 @@ class ExternalRuntimeTests(unittest.TestCase):
             with (
                 patch(
                     "hermes_codex_router.external_runtime.time",
-                    SimpleNamespace(monotonic=clock.monotonic),
+                    # A loaded host can still see the leader alive at
+                    # graceful termination, which then polls with sleep.
+                    SimpleNamespace(monotonic=clock.monotonic, sleep=time.sleep),
                 ),
                 self.assertRaisesRegex(RuntimeError, "timed out"),
             ):
