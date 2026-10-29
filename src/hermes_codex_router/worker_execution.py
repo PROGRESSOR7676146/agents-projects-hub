@@ -466,6 +466,7 @@ def invoke_external_provider_turn(
         try:
             result = adapter.run_turn(
                 cwd=project.root,
+                project_id=project.project_id,
                 prompt=prompt,
                 session_id=(
                     None if claude_session_binding.is_new else claude_session_binding.session_id

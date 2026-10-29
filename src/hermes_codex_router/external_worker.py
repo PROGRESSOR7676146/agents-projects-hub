@@ -196,6 +196,7 @@ class ExternalQueueWorker:
                 executable=self.agent.executable,
                 runtime_home=self.agent.runtime_home,
                 claude_auth_route=self.agent.auth_route,
+                claude_token_by_project=dict(self.agent.subscription_token_by_project),
             )
         self._stop = threading.Event()
         self.activity = WorkerActivityBarrier()

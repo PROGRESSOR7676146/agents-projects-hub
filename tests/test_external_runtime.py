@@ -1004,6 +1004,79 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(result.text, "Visible answer")
         self.assertNotIn("--bare", calls[0])
 
+    def test_claude_subscription_route_binds_each_project_to_its_own_account(self) -> None:
+        session = str(uuid.uuid4())
+        tokens: list[tuple[str | None, tuple[str, ...]]] = []
+
+        def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            env = cast(dict[str, str], kwargs["env"])
+            tokens.append(
+                (
+                    env.get("CLAUDE_CODE_OAUTH_TOKEN"),
+                    tuple(key for key in env if key.startswith("CLAUDE_CODE_OAUTH_TOKEN_")),
+                )
+            )
+            output = (
+                '{"type":"result","subtype":"success","is_error":false,'
+                f'"session_id":"{session}","result":"Visible answer"}}\n'
+            )
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        both = {"CLAUDE_CODE_OAUTH_TOKEN": "first", "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second"}
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = ExternalCliAdapter(
+                "claude",
+                run=fake_run,
+                claude_auth_route="subscription",
+                claude_token_by_project={"beta": "CLAUDE_CODE_OAUTH_TOKEN_SECOND"},
+            )
+            with patch.dict("os.environ", both, clear=True):
+                adapter.run_turn(cwd=Path(directory), prompt="hello", project_id="beta")
+                adapter.run_turn(cwd=Path(directory), prompt="hello", project_id="alpha")
+            # The second account never reaches a turn under its own name.
+            self.assertEqual(tokens, [("second", ()), ("first", ())])
+            # A mapped project never falls back to another account, and an
+            # unidentified turn cannot choose one.
+            for env, project_id in (
+                ({"CLAUDE_CODE_OAUTH_TOKEN": "first"}, "beta"),
+                (both, None),
+            ):
+                with (
+                    self.subTest(project_id=project_id),
+                    patch.dict("os.environ", env, clear=True),
+                    self.assertRaises(ProviderUnavailableError) as failure,
+                ):
+                    adapter.run_turn(cwd=Path(directory), prompt="hello", project_id=project_id)
+                self.assertEqual(failure.exception.code, "claude_subscription_route_unverified")
+            cpa = ExternalCliAdapter("claude", run=fake_run)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                        "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second",
+                    },
+                    clear=True,
+                ),
+                self.assertRaises(ProviderUnavailableError) as failure,
+            ):
+                cpa.run_turn(cwd=Path(directory), prompt="hello", project_id="beta")
+            self.assertEqual(failure.exception.code, "claude_cpa_credential_ambiguous")
+        self.assertEqual(len(tokens), 2)
+        for route, mapping in (
+            ("cpa", {"beta": "CLAUDE_CODE_OAUTH_TOKEN_SECOND"}),
+            ("subscription", {"beta": "ANTHROPIC_API_KEY"}),
+            ("subscription", {"beta": "CLAUDE_CODE_OAUTH_TOKEN"}),
+        ):
+            with (
+                self.subTest(route=route, mapping=mapping),
+                self.assertRaises(ExternalRuntimeError),
+            ):
+                ExternalCliAdapter(
+                    "claude", claude_auth_route=route, claude_token_by_project=mapping
+                )
+
     def test_claude_subscription_route_refuses_the_developer_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

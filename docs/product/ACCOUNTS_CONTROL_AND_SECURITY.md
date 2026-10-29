@@ -53,8 +53,10 @@ This normative module is part of the
   MUST NOT be combined with the `developer` profile. The token MUST come from a
   private owner-created file, never configuration, logs or Telegram. The account's
   extra usage MUST be off before activation; configuration alone does not prove
-  the billing route. One account serves every project; Hub MUST NOT pool,
-  rotate or select accounts per project. See
+  the billing route. A project MAY be bound in configuration to its own fixed
+  account token; other projects use the default token. A bound project MUST
+  fail rather than fall back to another account, and Hub MUST NOT pool, rotate
+  or switch accounts by limits. See
   [ADR 0082](../decisions/0082-claude-subscription-route.md).
   The default worker MUST expose no Claude built-in tools, customizations,
   skills, or MCP servers and MUST deny permission prompts. An explicit local

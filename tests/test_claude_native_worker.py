@@ -162,6 +162,10 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertIsNone(adapter.calls[0]["session_id"])
         native = self.assert_binding_visible_before_invocation(adapter)
         self.assertEqual(adapter.calls[0]["new_session_id"], native)
+        # The project selects its fixed subscription account (ADR 0082).
+        self.assertEqual(
+            adapter.calls[0]["project_id"], self.fixture.registry.projects[0].project_id
+        )
         self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
         self.assertEqual(worker.state.get_provider_result(job_id).provider_session_id, native)
         checkpoint = ExecutionJournal(worker.state).read(job_id)

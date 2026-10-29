@@ -12,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Mapping
 from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
@@ -42,6 +42,7 @@ from .claude_stream import (
     parse_claude_stream,
 )
 from .diagnostic_log import survived
+from .hub_config import CLAUDE_PROJECT_TOKEN
 from .owned_process_exit import peek_exit_code
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
@@ -121,14 +122,38 @@ _CLAUDE_CLOUD_SELECTORS = (
 )
 
 
-def _claude_route_environment(environment: dict[str, str], route: str, profile: str | None) -> None:
+CLAUDE_SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
+
+
+def _claude_route_environment(
+    environment: dict[str, str],
+    route: str,
+    profile: str | None,
+    token_by_project: Mapping[str, str],
+    project_id: str | None,
+) -> None:
     """Refuse an ambiguous route before a productive Claude CLI invocation."""
+    # Per-project account tokens never reach the CLI under their own names.
+    project_tokens = {
+        key: environment.pop(key)
+        for key in tuple(environment)
+        if CLAUDE_PROJECT_TOKEN.fullmatch(key)
+    }
     if route == "subscription":
+        # Each project uses one fixed account (ADR 0082); a mapped project
+        # without its own token fails instead of falling back to another account.
+        if token_by_project:
+            if project_id is None:
+                environment.pop(CLAUDE_SUBSCRIPTION_TOKEN, None)
+            elif project_id in token_by_project:
+                environment[CLAUDE_SUBSCRIPTION_TOKEN] = project_tokens.get(
+                    token_by_project[project_id], ""
+                )
         # An API key, bearer token or proxy outranks the subscription token and
         # would silently change the billing route (ADR 0082). The developer
         # namespace hides private paths, so its Bash must not see the token.
         if (
-            not environment.get("CLAUDE_CODE_OAUTH_TOKEN")
+            not environment.get(CLAUDE_SUBSCRIPTION_TOKEN)
             or profile == "developer"
             or any(
                 environment.get(key)
@@ -165,9 +190,13 @@ def _claude_route_environment(environment: dict[str, str], route: str, profile: 
         raise ProviderUnavailableError(
             "claude_cpa_route_unverified", "Claude requires an explicit local CPA route."
         )
-    if bool(environment.get("ANTHROPIC_AUTH_TOKEN")) == bool(
-        environment.get("ANTHROPIC_API_KEY")
-    ) or any(environment.get(key) for key in ("CLAUDE_CODE_OAUTH_TOKEN", *_CLAUDE_CLOUD_SELECTORS)):
+    if (
+        bool(environment.get("ANTHROPIC_AUTH_TOKEN")) == bool(environment.get("ANTHROPIC_API_KEY"))
+        or any(
+            environment.get(key) for key in (CLAUDE_SUBSCRIPTION_TOKEN, *_CLAUDE_CLOUD_SELECTORS)
+        )
+        or any(project_tokens.values())
+    ):
         raise ProviderUnavailableError(
             "claude_cpa_credential_ambiguous",
             "Claude CPA credentials or provider selection are ambiguous.",
@@ -184,16 +213,22 @@ class ExternalCliAdapter:
         opencode_log_path: Path | None = None,
         antigravity_log_path: Path | None = None,
         claude_auth_route: str = "cpa",
+        claude_token_by_project: Mapping[str, str] | None = None,
         run: Run = subprocess.run,
     ) -> None:
         if runtime not in {"gemini", "antigravity", "opencode", "claude"}:
             raise ExternalRuntimeError(f"unsupported external runtime: {runtime}")
-        if claude_auth_route not in CLAUDE_AUTH_ROUTES or (
-            runtime != "claude" and claude_auth_route != "cpa"
+        token_by_project = dict(claude_token_by_project or {})
+        if (
+            claude_auth_route not in CLAUDE_AUTH_ROUTES
+            or (runtime != "claude" and claude_auth_route != "cpa")
+            or (token_by_project and claude_auth_route != "subscription")
+            or not all(CLAUDE_PROJECT_TOKEN.fullmatch(name) for name in token_by_project.values())
         ):
             raise ExternalRuntimeError("unsupported Claude authentication route")
         self.runtime = runtime
         self.claude_auth_route = claude_auth_route
+        self.claude_token_by_project = token_by_project
         self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
         self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
         self.opencode_log_path = (
@@ -385,6 +420,7 @@ class ExternalCliAdapter:
         claude_sandbox: FileToolSandboxConfig | None = None,
         claude_permission_wait: PermissionWaitClock | None = None,
         claude_images: tuple[VerifiedClaudeImage, ...] = (),
+        project_id: str | None = None,
     ) -> ExternalTurnResult:
         if self.runtime == "claude" and claude_sandbox is not None and prompt.strip():
             prompt = claude_environment_prompt(claude_sandbox) + "\n\n" + prompt
@@ -397,9 +433,9 @@ class ExternalCliAdapter:
             new_session_id=new_session_id,
             structured_input=bool(claude_images),
         )
-        environment = os.environ.copy()
+        environment = self._turn_environment(claude_sandbox, project_id)
         input_data = self._prepare_claude_input(
-            prompt, claude_images, session_id or new_session_id, claude_sandbox, environment
+            prompt, claude_images, session_id or new_session_id, claude_sandbox
         )
         if claude_sandbox is not None:
             if self.runtime != "claude" or not self._uses_default_runner:
@@ -574,18 +610,27 @@ class ExternalCliAdapter:
             else None,
         )
 
+    def _turn_environment(
+        self, sandbox: FileToolSandboxConfig | None, project_id: str | None
+    ) -> dict[str, str]:
+        environment = os.environ.copy()
+        if self.runtime == "claude":
+            _claude_route_environment(
+                environment,
+                self.claude_auth_route,
+                sandbox.profile if sandbox else None,
+                self.claude_token_by_project,
+                project_id,
+            )
+        return environment
+
     def _prepare_claude_input(
         self,
         prompt: str,
         images: tuple[VerifiedClaudeImage, ...],
         session_id: str | None,
         sandbox: FileToolSandboxConfig | None,
-        environment: dict[str, str],
     ) -> bytes | None:
-        if self.runtime == "claude":
-            _claude_route_environment(
-                environment, self.claude_auth_route, sandbox.profile if sandbox else None
-            )
         if not images:
             return None
         if (
