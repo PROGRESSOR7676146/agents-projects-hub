@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -150,6 +151,27 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assert_no_result(worker.state, job_id)
         self.assertFalse(worker.run_cycle())
         self.assertEqual(len(adapter.calls), 1)
+
+    def test_worker_moves_subscription_tokens_out_of_its_own_environment(self) -> None:
+        tokens = {
+            "CLAUDE_CODE_OAUTH_TOKEN": "first",
+            "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second",
+        }
+        with patch.dict("os.environ", tokens):
+            worker = ExternalQueueWorker(
+                self.fixture.config,
+                "claude",
+                registry=self.fixture.registry,
+                worker_id="example-claude-worker",
+            )
+            self.addCleanup(worker.close)
+            # Helper subprocesses inherit nothing; only Claude launches get one.
+            self.assertEqual(
+                [key for key in os.environ if key.startswith("CLAUDE_CODE_OAUTH_TOKEN")], []
+            )
+        self.assertEqual(
+            cast(ExternalCliAdapter, worker.adapter).claude_subscription_tokens, tokens
+        )
 
     def test_first_invocation_receives_new_uuid_already_committed_with_root(self) -> None:
         job_id = self.enqueue(1)

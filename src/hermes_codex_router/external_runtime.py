@@ -12,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, Mapping
+from typing import Callable, Iterator, Mapping, MutableMapping
 from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
@@ -125,6 +125,19 @@ _CLAUDE_CLOUD_SELECTORS = (
 CLAUDE_SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 
 
+def take_claude_subscription_tokens(environment: MutableMapping[str, str]) -> dict[str, str]:
+    """Move every subscription token out of a worker's own process environment.
+
+    The adapter then adds them only to Claude launch environments, so no helper
+    subprocess can inherit an account token (ADR 0082).
+    """
+    return {
+        key: environment.pop(key)
+        for key in tuple(environment)
+        if key == CLAUDE_SUBSCRIPTION_TOKEN or key.startswith(CLAUDE_SUBSCRIPTION_TOKEN + "_")
+    }
+
+
 def _pop_claude_project_tokens(environment: dict[str, str]) -> dict[str, str]:
     """Remove the whole per-project token family, whether or not a name is mappable."""
     prefix = CLAUDE_SUBSCRIPTION_TOKEN + "_"
@@ -216,6 +229,7 @@ class ExternalCliAdapter:
         antigravity_log_path: Path | None = None,
         claude_auth_route: str = "cpa",
         claude_token_by_project: Mapping[str, str] | None = None,
+        claude_subscription_tokens: Mapping[str, str] | None = None,
         run: Run = subprocess.run,
     ) -> None:
         if runtime not in {"gemini", "antigravity", "opencode", "claude"}:
@@ -231,6 +245,7 @@ class ExternalCliAdapter:
         self.runtime = runtime
         self.claude_auth_route = claude_auth_route
         self.claude_token_by_project = token_by_project
+        self.claude_subscription_tokens = dict(claude_subscription_tokens or {})
         self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
         self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
         self.opencode_log_path = (
@@ -621,6 +636,7 @@ class ExternalCliAdapter:
     ) -> dict[str, str]:
         environment = os.environ.copy()
         if self.runtime == "claude":
+            environment.update(self.claude_subscription_tokens)
             _claude_route_environment(
                 environment,
                 self.claude_auth_route,

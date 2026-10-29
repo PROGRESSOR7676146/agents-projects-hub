@@ -1046,6 +1046,17 @@ class ExternalRuntimeTests(unittest.TestCase):
                 self.assertEqual(dict(os.environ), both)
             # The second account never reaches a turn under its own name.
             self.assertEqual(tokens, [("second", ()), ("first", ())])
+            # A worker keeps the tokens in memory, not in its own environment.
+            held = ExternalCliAdapter(
+                "claude",
+                run=fake_run,
+                claude_auth_route="subscription",
+                claude_token_by_project={"beta": "CLAUDE_CODE_OAUTH_TOKEN_SECOND"},
+                claude_subscription_tokens=both,
+            )
+            with patch.dict("os.environ", {}, clear=True):
+                held.run_turn(cwd=Path(directory), prompt="hello", project_id="beta")
+            self.assertEqual(tokens.pop(), ("second", ()))
             # A mapped project never falls back to another account, and an
             # unidentified turn cannot choose one.
             for env, project_id in (

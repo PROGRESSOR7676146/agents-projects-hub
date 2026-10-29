@@ -52,7 +52,9 @@ owner chose two accounts instead, each permanently bound to its own project.
 5. The owner creates each token and writes it to a private 0600 environment
    file read only by the Claude worker units. Hub never puts it in `hub.json`,
    Git, prompts, logs or Telegram. Exposure to a model is limited to what
-   decision 4 accepts. Non-Claude provider launches receive no Claude token.
+   decision 4 accepts. A Claude worker moves every subscription token out of
+   its own process environment at start and adds only the selected one to a
+   Claude launch, so helper subprocesses and other providers receive none.
 6. Before activation the owner confirms that the account's extra usage is off.
    This is the subscription form of the no-paid-fallback rule; configuration
    alone does not prove the billing route.
