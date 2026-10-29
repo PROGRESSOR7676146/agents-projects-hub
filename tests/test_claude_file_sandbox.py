@@ -138,6 +138,21 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             self.assertEqual(launch.environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
             self.assertEqual(launch.environment["HOME"], "/home/example")
 
+    def test_real_permission_wrapper_forwards_only_route_credentials(self) -> None:
+        from hermes_codex_router.claude_file_policy import wrap_file_tool_argv
+
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            wrap_file_tool_argv(
+                (str(self.executable), "-c", "pass"),
+                {"CLAUDE_CODE_OAUTH_TOKEN": "example", "GH_TOKEN": "example"},
+                self.project,
+                self.config,
+            ) as launch,
+        ):
+            self.assertEqual(launch.environment["CLAUDE_CODE_OAUTH_TOKEN"], "example")
+            self.assertNotIn("GH_TOKEN", launch.environment)
+
     def test_project_cannot_also_be_the_writable_session_home(self) -> None:
         # A second writable alias at HOME would expose .git without the
         # project's readonly overlay, even with different pinned descriptors.

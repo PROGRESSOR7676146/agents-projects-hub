@@ -39,12 +39,23 @@ This normative module is part of the
   ordering for a rotating app-server. tlive and any shared app-server remain
   independent; neither is a hard requirement of the other.
 - **REQ-AUTH-009 (Claude repository scaffold; live acceptance pending):** A
-  Hub-owned Claude Code CLI turn routed through CPA MUST require an explicit
+  Hub-owned Claude Code CLI turn MUST use the Claude agent's explicit
+  `auth_route`, `cpa` by default. A turn routed through CPA MUST require an explicit
   loopback `ANTHROPIC_BASE_URL` and exactly one CPA client credential source
-  before invocation. Cloud-provider selectors and an ambiguous mix of bearer
-  token and API key MUST fail before a provider process starts. The private CPA
+  before invocation. Cloud-provider selectors, a subscription token and an
+  ambiguous mix of bearer token and API key MUST fail before a provider process
+  starts. The private CPA
   configuration MUST exclude paid/API and extra-usage fallback before deployment;
   a local URL check alone does not prove its upstream account or billing route.
+  The `subscription` route (source implemented; installed acceptance pending)
+  MUST require a non-empty `CLAUDE_CODE_OAUTH_TOKEN` and MUST refuse any CPA URL,
+  bearer token, API key or cloud-provider selector before a process starts. It
+  MUST NOT be combined with the `developer` profile. The token MUST come from a
+  private owner-created file, never configuration, logs or Telegram. The account's
+  extra usage MUST be off before activation; configuration alone does not prove
+  the billing route. One account serves every project; Hub MUST NOT pool,
+  rotate or select accounts per project. See
+  [ADR 0082](../decisions/0082-claude-subscription-route.md).
   The default worker MUST expose no Claude built-in tools, customizations,
   skills, or MCP servers and MUST deny permission prompts. An explicit local
   file-tool opt-in MAY use the protected human boundary of REQ-SEC-008;

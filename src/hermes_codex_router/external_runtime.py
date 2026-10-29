@@ -113,38 +113,61 @@ def _json_values(output: str) -> list[dict[str, object]]:
     return values
 
 
-def _claude_cpa_environment(environment: dict[str, str]) -> None:
+CLAUDE_AUTH_ROUTES = frozenset({"cpa", "subscription"})
+_CLAUDE_CLOUD_SELECTORS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
+
+
+def _claude_route_environment(environment: dict[str, str], route: str, profile: str | None) -> None:
     """Refuse an ambiguous route before a productive Claude CLI invocation."""
+    if route == "subscription":
+        # An API key, bearer token or proxy outranks the subscription token and
+        # would silently change the billing route (ADR 0082). The developer
+        # namespace hides private paths, so its Bash must not see the token.
+        if (
+            not environment.get("CLAUDE_CODE_OAUTH_TOKEN")
+            or profile == "developer"
+            or any(
+                environment.get(key)
+                for key in (
+                    "ANTHROPIC_BASE_URL",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "ANTHROPIC_API_KEY",
+                    *_CLAUDE_CLOUD_SELECTORS,
+                )
+            )
+        ):
+            raise ProviderUnavailableError(
+                "claude_subscription_route_unverified",
+                "Claude requires exactly the configured subscription token.",
+            )
+        return
     try:
-        route = urlsplit(environment.get("ANTHROPIC_BASE_URL", ""))
-        local_port = route.port
+        route_url = urlsplit(environment.get("ANTHROPIC_BASE_URL", ""))
+        local_port = route_url.port
     except ValueError as exc:
         raise ProviderUnavailableError(
             "claude_cpa_route_unverified", "Claude requires an explicit local CPA route."
         ) from exc
     if (
-        route.scheme != "http"
-        or route.hostname not in {"127.0.0.1", "::1"}
+        route_url.scheme != "http"
+        or route_url.hostname not in {"127.0.0.1", "::1"}
         or local_port is None
-        or route.username is not None
-        or route.password is not None
-        or route.path not in {"", "/"}
-        or route.query
-        or route.fragment
+        or route_url.username is not None
+        or route_url.password is not None
+        or route_url.path not in {"", "/"}
+        or route_url.query
+        or route_url.fragment
     ):
         raise ProviderUnavailableError(
             "claude_cpa_route_unverified", "Claude requires an explicit local CPA route."
         )
     if bool(environment.get("ANTHROPIC_AUTH_TOKEN")) == bool(
         environment.get("ANTHROPIC_API_KEY")
-    ) or any(
-        environment.get(key)
-        for key in (
-            "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX",
-            "CLAUDE_CODE_USE_FOUNDRY",
-        )
-    ):
+    ) or any(environment.get(key) for key in ("CLAUDE_CODE_OAUTH_TOKEN", *_CLAUDE_CLOUD_SELECTORS)):
         raise ProviderUnavailableError(
             "claude_cpa_credential_ambiguous",
             "Claude CPA credentials or provider selection are ambiguous.",
@@ -160,11 +183,17 @@ class ExternalCliAdapter:
         runtime_home: Path | None = None,
         opencode_log_path: Path | None = None,
         antigravity_log_path: Path | None = None,
+        claude_auth_route: str = "cpa",
         run: Run = subprocess.run,
     ) -> None:
         if runtime not in {"gemini", "antigravity", "opencode", "claude"}:
             raise ExternalRuntimeError(f"unsupported external runtime: {runtime}")
+        if claude_auth_route not in CLAUDE_AUTH_ROUTES or (
+            runtime != "claude" and claude_auth_route != "cpa"
+        ):
+            raise ExternalRuntimeError("unsupported Claude authentication route")
         self.runtime = runtime
+        self.claude_auth_route = claude_auth_route
         self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
         self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
         self.opencode_log_path = (
@@ -554,7 +583,9 @@ class ExternalCliAdapter:
         environment: dict[str, str],
     ) -> bytes | None:
         if self.runtime == "claude":
-            _claude_cpa_environment(environment)
+            _claude_route_environment(
+                environment, self.claude_auth_route, sandbox.profile if sandbox else None
+            )
         if not images:
             return None
         if (

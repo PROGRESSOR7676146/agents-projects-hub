@@ -25,6 +25,7 @@ from hermes_codex_router.claude_stream import (
 )
 from hermes_codex_router.external_runtime import (
     ExternalCliAdapter,
+    ExternalRuntimeError,
     ExternalTurnInterrupted,
     ExternalTurnResult,
     ProviderLimitError,
@@ -953,11 +954,85 @@ class ExternalRuntimeTests(unittest.TestCase):
                     "ANTHROPIC_AUTH_TOKEN": "example",
                     "CLAUDE_CODE_USE_BEDROCK": "1",
                 },
+                {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                    "CLAUDE_CODE_OAUTH_TOKEN": "example",
+                },
             ):
                 with self.subTest(env=tuple(env)), patch.dict("os.environ", env, clear=True):
                     with self.assertRaises(ProviderUnavailableError):
                         adapter.run_turn(cwd=Path(directory), prompt="hello")
         self.assertEqual(calls, [])
+
+    def test_claude_subscription_route_admits_only_the_native_token(self) -> None:
+        session = str(uuid.uuid4())
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            output = (
+                '{"type":"result","subtype":"success","is_error":false,'
+                f'"session_id":"{session}","result":"Visible answer"}}\n'
+            )
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        token = {"CLAUDE_CODE_OAUTH_TOKEN": "example"}
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = ExternalCliAdapter("claude", run=fake_run, claude_auth_route="subscription")
+            # An API key or proxy would silently outrank the subscription token.
+            for env in (
+                {},
+                {"CLAUDE_CODE_OAUTH_TOKEN": ""},
+                token | {"ANTHROPIC_API_KEY": "example"},
+                token | {"ANTHROPIC_AUTH_TOKEN": "example"},
+                token | {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317"},
+                token | {"CLAUDE_CODE_USE_VERTEX": "1"},
+            ):
+                with (
+                    self.subTest(env=tuple(env)),
+                    patch.dict("os.environ", env, clear=True),
+                    self.assertRaises(ProviderUnavailableError) as failure,
+                ):
+                    adapter.run_turn(cwd=Path(directory), prompt="hello")
+                self.assertEqual(failure.exception.code, "claude_subscription_route_unverified")
+            self.assertEqual(calls, [])
+            with patch.dict("os.environ", token, clear=True):
+                result = adapter.run_turn(cwd=Path(directory), prompt="hello")
+        self.assertEqual(result.text, "Visible answer")
+        self.assertNotIn("--bare", calls[0])
+
+    def test_claude_subscription_route_refuses_the_developer_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    profile="developer",
+                    project_root=root,
+                    toolchain=None,
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=Path("/usr/bin/true"),
+                ),
+            )
+            adapter = ExternalCliAdapter("claude", claude_auth_route="subscription")
+            with (
+                patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "example"}, clear=True),
+                patch("hermes_codex_router.external_runtime.wrap_file_tool_argv") as wrap,
+                self.assertRaises(ProviderUnavailableError) as failure,
+            ):
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+        self.assertEqual(failure.exception.code, "claude_subscription_route_unverified")
+        wrap.assert_not_called()
+
+    def test_claude_auth_route_is_explicit_and_claude_only(self) -> None:
+        self.assertEqual(ExternalCliAdapter("claude").claude_auth_route, "cpa")
+        for runtime, route in (("claude", "pool"), ("claude", ""), ("opencode", "subscription")):
+            with (
+                self.subTest(runtime=runtime, route=route),
+                self.assertRaises(ExternalRuntimeError),
+            ):
+                ExternalCliAdapter(runtime, claude_auth_route=route)
 
     def test_claude_start_and_exact_resume_use_only_terminal_visible_result(self) -> None:
         session = str(uuid.uuid4())

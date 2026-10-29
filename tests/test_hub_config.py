@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router.hub_config import (
+    HubConfig,
     HubConfigError,
     load_codex_worker_config,
     load_controller_config,
@@ -651,6 +652,71 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(
                 self.write_config(message_batch_quiet_ms=2000, message_batch_max_ms=1000)
             )
+
+    def test_claude_auth_route_is_explicit_and_excludes_the_developer_profile(self) -> None:
+        claude: dict[str, object] = {
+            "agent_id": "claude",
+            "display_name": "Claude",
+            "telegram_username": "project_claude_bot",
+            "runtime": "claude",
+            "token_file": str(self.token),
+            "terminal_enabled": False,
+            "default_model": "sonnet",
+        }
+
+        def load(agent: dict[str, object], **overrides: object) -> HubConfig:
+            return load_hub_config(
+                self.write_config(
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    external_worker_agent_ids=["claude"],
+                    agents=[agent],
+                    **overrides,
+                )
+            )
+
+        self.assertEqual(load(claude).agents[0].auth_route, "cpa")
+        subscription: dict[str, object] = claude | {"auth_route": "subscription"}
+        self.assertEqual(load(subscription).agents[0].auth_route, "subscription")
+        for invalid in ("pool", "", None, True):
+            with (
+                self.subTest(auth_route=invalid),
+                self.assertRaisesRegex(HubConfigError, "auth_route"),
+            ):
+                load(claude | {"auth_route": invalid})
+        opencode = {
+            "agent_id": "opencode",
+            "display_name": "OpenCode",
+            "telegram_username": "project_opencode_bot",
+            "runtime": "opencode",
+            "token_file": str(self.token),
+            "terminal_enabled": False,
+            "auth_route": "cpa",
+        }
+        with self.assertRaisesRegex(HubConfigError, "auth_route.*Claude"):
+            load_hub_config(self.write_config(agents=[opencode]))
+        permissions = {
+            "tlive_config": "/home/example/private/tlive.json",
+            "tlive_home": "/home/example/private/tlive",
+            "provider_home": "/home/example/provider",
+            "runtime_roots": ["/usr/bin"],
+            "python_executable": "/usr/bin/python3",
+            "hook_code_root": "/home/example/runtime",
+            "bwrap_executable": "/usr/bin/bwrap",
+            "private_paths": ["/home/example/private"],
+        }
+        for profile in ("editor", "workstation"):
+            with self.subTest(profile=profile):
+                config = load(
+                    subscription, claude_file_permissions=permissions | {"profile": profile}
+                )
+                assert config.claude_file_permissions is not None
+                self.assertEqual(config.claude_file_permissions.profile, profile)
+        with self.assertRaisesRegex(HubConfigError, "subscription.*developer"):
+            load(subscription, claude_file_permissions=permissions | {"profile": "developer"})
+        self.assertIsNotNone(
+            load(claude, claude_file_permissions=permissions | {"profile": "developer"})
+        )
 
     def test_rejects_inline_hub_bot_token(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "inline token"):

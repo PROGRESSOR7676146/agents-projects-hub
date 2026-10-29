@@ -29,7 +29,7 @@ check, generated manifest or completed checklist does not authorize deployment.
 | Private paths and endpoints | Existing descriptor/mount/private-path negative checks; keys/state and operations-drain endpoint absent from confined provider/hook views. Filesystem IPC visibility is limited to the exact per-turn permission socket; shared networking leaves loopback/abstract sockets reachable. Check the confined launch's reachable authority listeners, including FD transfer/signing/management; unknown authority-bearing exposure blocks activation. Use fictional sentinels with positive controls at intended authority locations, never real keys or destructive controls. No host-wide same-UID exclusion claim. |
 | Identity and recovery | Canonical root, native session/mode/home, generation, lease and unresolved jobs; SQLite-consistent backup plus matching retained spool/history/config. Preserve uncertainty and original delivery evidence. |
 | Acceptance scope | One disposable root/topic, finite native calls/effects/waits, four fresh human Write/Edit Allow/Deny decisions, stop/restart/stale tests, result/delivery recovery and cleanup ownership. Three roots belong to separate core acceptance. |
-| Subscription | Private CPA upstream attestation and installed CLI→CPA→subscription observation; no paid/API/extra-usage fallback. The exposed client credential must grant no CPA management or host-control capability. Loopback configuration or a review call is insufficient. |
+| Subscription | Private CPA upstream attestation and installed CLI→CPA→subscription observation; no paid/API/extra-usage fallback. The exposed client credential must grant no CPA management or host-control capability. Loopback configuration or a review call is insufficient. With `auth_route: subscription` (ADR 0082) see [subscription route](#subscription-route) instead. |
 
 No automatic reset, replay, reconciliation or approval is used to make the gate
 green. Any unknown required result remains open with its exact evidence limit.
@@ -86,9 +86,30 @@ skips are not namespace evidence; strict required fixtures must actually run.
    fresh Write/Edit Allow/Deny, exact resume, identity, stop, restart, stale/
    duplicate refusal and result/delivery recovery. Synthetic receipts are not
    human acceptance. Automate deterministic checks, never the human decisions.
-4. Confirm the actual CPA subscription route and required component revision
+4. Confirm the actual CPA or direct subscription route and required component revision
    convergence. Record offline, scoped installed, native and human/Telegram
    evidence separately. The accepted same-UID/admin risk cannot become a pass.
+
+## Subscription route
+
+For `auth_route: subscription` ([ADR 0082](../decisions/0082-claude-subscription-route.md)):
+
+1. The owner runs `claude setup-token` and writes
+   `CLAUDE_CODE_OAUTH_TOKEN=<token>` to
+   `~/.config/agents-projects-hub/claude-subscription.env` with mode 0600. Only
+   the Claude worker units read this file. Agents never see or copy the token.
+2. Remove `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`
+   from the environment of the Claude workers; the preflight refuses them. The
+   worker's own Claude settings must not define `apiKeyHelper`.
+3. The owner confirms that the account's extra usage is off.
+4. Set `"auth_route": "subscription"` on the Claude agent and restart only the
+   Claude workers through the service manager. `developer` is refused on this
+   route; `editor` and `workstation` are allowed.
+5. Accept one text-only and one editor turn on the exact deployed revision, and
+   check that an injected API key is refused before launch.
+
+Rollback is `"auth_route": "cpa"` with the CPA variables restored and a Claude
+worker restart. Renew the token before its one-year expiry.
 
 ## Stop, rollback and closure
 

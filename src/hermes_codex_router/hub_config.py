@@ -45,6 +45,8 @@ class AgentDefinition:
     runtime_home: Path | None = None
     service_unit: str | None = None
     model_catalog: tuple[ProviderModel, ...] | None = None
+    # Claude only: "cpa" (loopback proxy) or "subscription" (native token, ADR 0082).
+    auth_route: str = "cpa"
 
 
 @dataclass(frozen=True, slots=True)
@@ -591,6 +593,11 @@ def _parse_agent(
             )
         except ValueError as exc:
             raise HubConfigError(str(exc)) from None
+    auth_route = data.get("auth_route", "cpa")
+    if "auth_route" in data and runtime != "claude":
+        raise HubConfigError(f"auth_route is supported only for Claude, not {agent_id}")
+    if not isinstance(auth_route, str) or auth_route not in {"cpa", "subscription"}:
+        raise HubConfigError(f"auth_route is invalid for {agent_id}")
     executable = data.get("executable")
     if executable is not None and (not isinstance(executable, str) or not executable.strip()):
         raise HubConfigError(f"executable is invalid for {agent_id}")
@@ -623,6 +630,7 @@ def _parse_agent(
         runtime_home=runtime_home,
         service_unit=service_unit,
         model_catalog=model_catalog,
+        auth_route=auth_route,
     )
 
 
@@ -1075,6 +1083,12 @@ def load_hub_config(
         raise HubConfigError("claude_file_permissions requires an external Claude worker")
     if claude_image_input and claude_file_permissions is not None:
         raise HubConfigError("claude_image_input cannot be combined with claude_file_permissions")
+    if (
+        claude_file_permissions is not None
+        and claude_file_permissions.profile == "developer"
+        and any(agent.auth_route == "subscription" for agent in agents)
+    ):
+        raise HubConfigError("Claude subscription auth_route cannot use the developer profile")
     project_provisioning = _parse_project_provisioning(
         root,
         hub_bot=hub_bot,

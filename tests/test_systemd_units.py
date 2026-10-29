@@ -121,6 +121,23 @@ class SystemdTopologyTests(unittest.TestCase):
                 self.assertTrue(service.getboolean("NoNewPrivileges"))
                 self.assertEqual(int(service["UMask"], 8), 0o077)
 
+    def test_only_claude_workers_read_the_subscription_token_file(self) -> None:
+        token = "EnvironmentFile=-%h/.config/agents-projects-hub/claude-subscription.env"
+        claude = (
+            "agents-projects-hub-claude-worker@.service",
+            "agents-projects-hub-worker@claude.service.d/zz-claude-host-uid.conf",
+        )
+        for name in claude:
+            with self.subTest(unit=name):
+                self.assertIn(token, self.unit(name))
+        units = (self.root / "systemd").rglob("*")
+        readers = sorted(
+            path.relative_to(self.root / "systemd").as_posix()
+            for path in units
+            if path.is_file() and "claude-subscription.env" in path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(readers, sorted(claude))
+
     def test_bootstrap_installs_claude_primary_namespace_override(self) -> None:
         installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
         dropin = "agents-projects-hub-worker@claude.service.d/zz-claude-host-uid.conf"
