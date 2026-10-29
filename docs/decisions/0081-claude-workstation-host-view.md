@@ -52,6 +52,11 @@ The explicit `workstation` profile matches Codex workspace-write:
    root is unmapped there, so test modules that launch the real root-owned
    runtime skip inside the profile; CI's required namespace job and the host
    run them.
+7. Parallel native calls queue at the permission host and are answered in
+   turn, instead of the ADR 0052 immediate Deny: Bash waits for no human here.
+   A request behind a rarer human card waits for it, so there is still one card
+   at a time. Each hook keeps its own deadline and the backlog is bounded, so
+   queueing is best effort: a timeout or refused connection still denies.
 
 Push, deployment and service changes belong to the owner by policy and prompt
 instruction, not by a technical barrier.

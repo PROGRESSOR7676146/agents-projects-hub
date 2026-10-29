@@ -43,7 +43,8 @@ waiting notices use the existing durable Hub sender and become stale when the
 request or binding is no longer current.
 Session mode and the session-home digest are persisted with the native identity;
 switching between text-only and file-tool storage requires a fresh `/new` session.
-Concurrent hook requests are denied without queuing; an abandoned native hook
+Concurrent hook requests are denied without queuing (the `workstation` profile
+queues them, [ADR 0081](0081-claude-workstation-host-view.md)); an abandoned native hook
 revokes its human wait. Tool-result events are validated and discarded, with
 separate bounded raw/event budgets and the existing visible-text limit retained.
 
