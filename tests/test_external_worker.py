@@ -394,7 +394,9 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         started: list[int] = []
 
         class FakeWorker:
-            def __init__(self, _config: HubConfig, _agent_id: str, *, worker_slot: int = 1) -> None:
+            def __init__(
+                self, _config: HubConfig, _agent_id: str, *, worker_slot: int = 1, **_: object
+            ) -> None:
                 started.append(worker_slot)
 
             def run_forever(self, *, poll_seconds: float) -> None:
@@ -1552,7 +1554,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         class FakeWorker:
             instance: "FakeWorker | None" = None
 
-            def __init__(self, _config: HubConfig, agent_id: str) -> None:
+            def __init__(self, _config: HubConfig, agent_id: str, **_: object) -> None:
                 self.agent_id = agent_id
                 self.closed = False
                 FakeWorker.instance = self

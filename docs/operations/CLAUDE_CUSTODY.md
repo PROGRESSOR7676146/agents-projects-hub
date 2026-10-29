@@ -128,7 +128,8 @@ take `claude-subscription.env` out of the Claude workers' environment (the CPA
 route refuses any subscription token), restore the CPA variables, validate the
 configuration and restart the Claude workers. A bound project then runs on the
 CPA account; pause it instead if that is unacceptable. Renew each token from its
-own account before its one-year expiry.
+own account before its one-year expiry. A worker reads the tokens once at start,
+so a changed token takes effect only after a Claude worker restart.
 
 ## Stop, rollback and closure
 
