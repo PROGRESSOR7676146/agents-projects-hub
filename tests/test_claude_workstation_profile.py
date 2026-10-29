@@ -161,6 +161,36 @@ class WorkstationBashTests(unittest.TestCase):
         self.assertEqual(self.fixture._statuses(), ["allow"] * 3)
         self.assertEqual(self.fixture.peer.requests, [])
 
+    def _write_card_and_queued_bash(self):
+        self.fixture.peer.release.clear()
+        card = self.fixture._hook(self.fixture._event())
+        self.fixture._await_request()
+        queued = self.fixture._hook(
+            self.fixture._event(tool_name="Bash", tool_input={"command": "printf queued"})
+        )
+        time.sleep(0.5)
+        # One human wait at a time: the Bash request waits behind the card.
+        self.assertTrue(queued[0].is_alive())
+        self.assertEqual(len(self.fixture.peer.requests), 1)
+        return card, queued
+
+    def test_a_queued_request_waits_behind_a_human_card_without_a_second_card(self):
+        card, queued = self._write_card_and_queued_bash()
+        self.fixture._finish(*card, "allow")
+        queued[0].join(5)
+        self.assertEqual(queued[1].get("behavior"), "allow")
+        self.assertEqual(len(self.fixture.peer.requests), 1)
+        self.assertEqual(self.fixture._statuses(), ["allow", "allow"])
+
+    def test_close_denies_the_active_and_the_queued_request(self):
+        card, queued = self._write_card_and_queued_bash()
+        self.fixture.server.close()
+        for thread, result in (card, queued):
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(result.get("behavior"), "deny")
+        self.assertNotIn("allow", self.fixture._statuses())
+
     def test_prompted_file_operations_still_need_a_human(self):
         self.fixture.peer.decision = "deny"
         self.assertEqual(

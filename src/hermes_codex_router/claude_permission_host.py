@@ -230,8 +230,9 @@ class PermissionServer:
                 connection.close()  # Reject before request bytes or SQLite are touched.
                 continue
             if self.launch.profile == "workstation":
-                # Parallel native Bash calls queue here: none waits for a human
-                # (ADR 0081), so each is answered after the one in flight.
+                # Parallel native calls queue here and are answered in turn:
+                # Bash needs no human (ADR 0081); a rarer prompted request
+                # still has one card at a time, and each hook keeps its deadline.
                 while (
                     not self.stop.is_set()
                     and self.inflight is not None
