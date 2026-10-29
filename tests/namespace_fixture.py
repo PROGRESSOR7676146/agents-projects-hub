@@ -18,6 +18,20 @@ def namespace_unavailable(case: unittest.TestCase, reason: str) -> NoReturn:
     case.skipTest(reason)
 
 
+def require_mapped_host_root() -> None:
+    """Skip a module whose root-owned runtime checks cannot hold in this namespace.
+
+    Inside a nested user namespace without a host-root mapping, such as the
+    workstation profile, host root files show the overflow owner. The runtime
+    ownership checks then refuse every real launch; CI and the host run them.
+    """
+    if os.stat("/").st_uid != 0:
+        reason = "host root is unmapped in this nested user namespace"
+        if os.environ.get("HUB_REQUIRE_NAMESPACE_TESTS") == "1":
+            raise AssertionError(f"required namespace fixture unavailable: {reason}")
+        raise unittest.SkipTest(reason)
+
+
 def require_namespace_runtime(case: unittest.TestCase, executable: Path) -> None:
     """Keep builder mocks separate from the actual required bwrap capability."""
     try:

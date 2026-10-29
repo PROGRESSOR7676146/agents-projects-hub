@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import shutil
 import socket
@@ -22,7 +23,48 @@ from tests.namespace_fixture import (
     require_namespace_runtime,
 )
 
-_WITNESS = r"""
+_NESTED = r"""
+import ctypes, json, os
+def nested():
+    # A child enters a nested user and mount namespace, proves mount works
+    # there, then tries to clear only the readonly flag of the inherited root.
+    reader, writer = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(reader)
+        report = {}
+        try:
+            os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNS)
+            report['unshare'] = 0
+        except OSError as error:
+            report['unshare'] = error.errno
+        if report['unshare'] == 0:
+            libc = ctypes.CDLL(None, use_errno=True)
+            def mount(*args):
+                return 0 if libc.mount(*args) == 0 else ctypes.get_errno()
+            report['control'] = mount(b'none', b'/tmp', b'tmpfs', 0, None)
+            flags = os.statvfs('/').f_flag
+            kept = 0
+            for st, ms in ((os.ST_NOSUID, 2), (os.ST_NODEV, 4), (os.ST_NOEXEC, 8),
+                           (os.ST_NOATIME, 1024), (os.ST_NODIRATIME, 2048),
+                           (os.ST_RELATIME, 1 << 21)):
+                if flags & st:
+                    kept |= ms
+            report['root_readonly'] = bool(flags & os.ST_RDONLY)
+            # MS_REMOUNT | MS_BIND with every other flag kept, MS_RDONLY cleared.
+            report['unlock'] = mount(None, b'/', None, 32 | 4096 | kept, None)
+        os.write(writer, json.dumps(report).encode())
+        os._exit(0)
+    os.close(writer)
+    with os.fdopen(reader) as stream:
+        report = json.loads(stream.read())
+    os.waitpid(pid, 0)
+    return report
+"""
+
+_WITNESS = (
+    _NESTED
+    + r"""
 import json, os, pathlib, socket, sys
 inputs = json.loads(sys.argv[1])
 result = {}
@@ -49,6 +91,7 @@ result['home_write'] = write(os.environ['HOME'] + '/new-file')
 result['tmp_write'] = write('/tmp/new-file')
 result['system'] = pathlib.Path('/usr/share').is_dir()
 result['proc_self'] = pathlib.Path('/proc/self/status').exists()
+result['nested'] = nested()
 result['run'] = pathlib.Path('/run').is_dir()
 result['run_write'] = write('/run/hub-host-view-probe')
 with socket.socket(socket.AF_UNIX) as client:
@@ -56,6 +99,7 @@ with socket.socket(socket.AF_UNIX) as client:
     client.sendall(b'witness')
 print(json.dumps(result))
 """
+)
 
 
 def _python_runtime() -> tuple[Path, tuple[Path, ...]]:
@@ -78,9 +122,20 @@ class HostViewWitnessTests(unittest.TestCase):
     def _witness(self, existing_work: bool) -> None:
         bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
         require_namespace_runtime(self, bwrap)
+        # Outside the profile first: a host that refuses nested namespaces to
+        # this test process cannot witness the profile's nested sandboxes.
         python, roots = _python_runtime()
         if not all(path.exists() for path in roots):
             namespace_unavailable(self, "system Python runtime fixture unavailable")
+        probe = subprocess.run(
+            (str(python), "-I", "-c", _NESTED + "print(json.dumps(nested()))"),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        if json.loads(probe.stdout)["unshare"] != 0:
+            namespace_unavailable(self, "host refuses nested user namespaces")
         with tempfile.TemporaryDirectory(prefix="example-host-", dir=Path.home()) as raw:
             base = Path(raw)
             project, neighbor, home = (base / name for name in ("project", "neighbor", "home"))
@@ -93,8 +148,9 @@ class HostViewWitnessTests(unittest.TestCase):
                 (project / ".hub" / "work" / "receipt").write_text("fictional", encoding="utf-8")
             (neighbor / "README").write_text("neighbor-source", encoding="utf-8")
             (neighbor / ".env").write_text("FICTIONAL_TOKEN=neighbor", encoding="utf-8")
-            control = base / "control"
-            control.mkdir(mode=0o700)
+            # A short socket parent: a deep HOME can exceed the AF_UNIX path limit.
+            control = Path(tempfile.mkdtemp(prefix="hub-socket-"))
+            self.addCleanup(shutil.rmtree, control, True)
             listener = socket.socket(socket.AF_UNIX)
             self.addCleanup(listener.close)
             listener.bind(str(control / "permission.sock"))
@@ -151,6 +207,12 @@ class HostViewWitnessTests(unittest.TestCase):
             server.join(5)
             self.assertEqual(received, [b"witness"])
             self.assertEqual(config.socket_destination, "/tmp/hub-permission.sock")
+            # Nested namespaces work where the host admits them, and the
+            # inherited readonly root stays locked inside them.
+            self.assertEqual(
+                result["nested"],
+                {"unshare": 0, "control": 0, "root_readonly": True, "unlock": errno.EPERM},
+            )
             # Host /run stays visible, readonly, instead of a fresh tmpfs.
             self.assertTrue(result["run"])
             for key in ("work_write", "neighbor_write", "system_write", "run_write"):
