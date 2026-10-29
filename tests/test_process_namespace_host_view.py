@@ -101,7 +101,15 @@ result['home_write'] = write(os.environ['HOME'] + '/new-file')
 result['tmp_write'] = write('/tmp/new-file')
 result['system'] = pathlib.Path('/usr/share').is_dir()
 result['proc_self'] = pathlib.Path('/proc/self/status').exists()
-result['proc_sys_write'] = write('/proc/sys/vm/swappiness')
+def opens(path):
+    # Open for writing only, so a missing guard never changes a sysctl.
+    try:
+        os.close(os.open(path, os.O_WRONLY))
+    except OSError as error:
+        return error.errno
+    return 'opened'
+result['vm_sysctl'] = opens('/proc/sys/vm/swappiness')
+result['net_sysctl'] = opens('/proc/sys/net/ipv4/ip_forward')
 result['nested'] = nested()
 result['run'] = pathlib.Path('/run').is_dir()
 result['run_write'] = write('/run/hub-host-view-probe')
@@ -232,15 +240,12 @@ class HostViewWitnessTests(unittest.TestCase):
             )
             # Host /run stays visible, readonly, instead of a fresh tmpfs.
             self.assertTrue(result["run"])
-            # /proc stays writable for nested maps; host sysctls stay denied.
-            for key in (
-                "work_write",
-                "neighbor_write",
-                "system_write",
-                "run_write",
-                "proc_sys_write",
-            ):
+            for key in ("work_write", "neighbor_write", "system_write", "run_write"):
                 self.assertIsInstance(result[key], int, key)
+            # /proc stays writable for nested maps; host and shared-network
+            # sysctls are still refused by ownership.
+            for key in ("vm_sysctl", "net_sysctl"):
+                self.assertIn(result[key], (errno.EACCES, errno.EPERM, errno.EROFS), key)
             self.assertTrue(result["system"])
             self.assertTrue(result["proc_self"])
             self.assertTrue((project / "new-file").exists())
