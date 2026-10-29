@@ -44,11 +44,14 @@ The explicit `workstation` profile matches Codex workspace-write:
    still validates each request, job, writer and root, and journals the Allow.
    Stop, the single writer, no uncertain replay and immutable runtime and hook
    code are unchanged. Networking stays shared.
-6. Nested user namespaces are admitted, so the namespace tests of a commit
-   gate and other sandboxes run inside the profile. Mounts inherited by a
-   nested namespace stay locked: it cannot make the host view writable. Mount
-   evidence treats a cgroup root reported outside a nested cgroup namespace
-   (`/..`) as opaque, like a namespace handle; it is never a mount source.
+6. Nested user namespaces are admitted, so the commit gate and other
+   sandboxes run inside the profile. Mounts inherited by a nested namespace
+   stay locked: it cannot make the host view writable. Mount evidence treats a
+   cgroup root reported outside the reader's cgroup namespace (one `/..` per
+   level) as opaque, like a namespace handle; it is never a mount source. Host
+   root is unmapped there, so test modules that launch the real root-owned
+   runtime skip inside the profile; CI's required namespace job and the host
+   run them.
 
 Push, deployment and service changes belong to the owner by policy and prompt
 instruction, not by a technical barrier.

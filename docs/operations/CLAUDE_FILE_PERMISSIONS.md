@@ -161,7 +161,8 @@ and the session HOME at its host path; `/tmp` is disposable and the project
 stays visible, so resolvers and Docker sockets work as for other agents; the
 permission socket is at `/tmp/hub-permission.sock`, and
 foreground Bash runs without a card. Nested user namespaces work, so the
-full commit gate, namespace tests included, runs inside it. The host root is shown, not trust-scanned,
+commit gate runs inside it; modules that launch the real root-owned runtime
+skip there and run in CI and on the host. The host root is shown, not trust-scanned,
 so the filesystem checks below apply to the writable and runtime mounts only.
 See [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
 
