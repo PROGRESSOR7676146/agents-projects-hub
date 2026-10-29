@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -138,6 +139,27 @@ class WorkstationBashTests(unittest.TestCase):
         with self.assertRaises(StateError):
             self.command()
         self.assertEqual(self.fixture._statuses(), [])
+
+    def test_parallel_native_bash_calls_queue_and_each_is_allowed(self):
+        # Hold each decision long enough that three native hooks overlap.
+        decide = host.PermissionServer._decision
+
+        def slow(server, *args, **kwargs):
+            time.sleep(0.3)
+            return decide(server, *args, **kwargs)
+
+        with patch.object(host.PermissionServer, "_decision", slow):
+            hooks = [
+                self.fixture._hook(
+                    self.fixture._event(tool_name="Bash", tool_input={"command": f"printf {n}"})
+                )
+                for n in range(3)
+            ]
+            for thread, _ in hooks:
+                thread.join(10)
+        self.assertEqual([result.get("behavior") for _, result in hooks], ["allow"] * 3)
+        self.assertEqual(self.fixture._statuses(), ["allow"] * 3)
+        self.assertEqual(self.fixture.peer.requests, [])
 
     def test_prompted_file_operations_still_need_a_human(self):
         self.fixture.peer.decision = "deny"

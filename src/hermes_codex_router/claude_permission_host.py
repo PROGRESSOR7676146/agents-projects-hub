@@ -82,7 +82,7 @@ class PermissionServer:
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
         path.chmod(0o600)
-        self.listener.listen(1)
+        self.listener.listen(8)
         self.listener.settimeout(0.2)
         self.thread = threading.Thread(
             target=self._serve, name="claude-permission-host", daemon=True
@@ -229,6 +229,15 @@ class PermissionServer:
             except PeerCredentialError:
                 connection.close()  # Reject before request bytes or SQLite are touched.
                 continue
+            if self.launch.profile == "workstation":
+                # Parallel native Bash calls queue here: none waits for a human
+                # (ADR 0081), so each is answered after the one in flight.
+                while (
+                    not self.stop.is_set()
+                    and self.inflight is not None
+                    and self.inflight.is_alive()
+                ):
+                    self.inflight.join(0.2)
             if self.stop.is_set() or self.inflight is not None and self.inflight.is_alive():
                 connection.close()  # No queue: another hook gets native Deny immediately.
                 continue
