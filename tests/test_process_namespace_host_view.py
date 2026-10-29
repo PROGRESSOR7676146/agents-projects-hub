@@ -23,7 +23,7 @@ from tests.namespace_fixture import (
 )
 
 _WITNESS = r"""
-import json, os, pathlib, socket, sys
+import ctypes, json, os, pathlib, socket, sys
 inputs = json.loads(sys.argv[1])
 result = {}
 def read(path):
@@ -49,6 +49,20 @@ result['home_write'] = write(os.environ['HOME'] + '/new-file')
 result['tmp_write'] = write('/tmp/new-file')
 result['system'] = pathlib.Path('/usr/share').is_dir()
 result['proc_self'] = pathlib.Path('/proc/self/status').exists()
+def nested():
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNS)
+        except OSError:
+            os._exit(10)
+        libc = ctypes.CDLL(None, use_errno=True)
+        # MS_REMOUNT | MS_BIND without MS_RDONLY: try to unlock the host view.
+        if libc.mount(None, b'/', None, 32 | 4096, None) == 0:
+            os._exit(20)
+        os._exit(30)
+    return os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+result['nested'] = nested()
 result['run'] = pathlib.Path('/run').is_dir()
 result['run_write'] = write('/run/hub-host-view-probe')
 with socket.socket(socket.AF_UNIX) as client:
@@ -151,6 +165,10 @@ class HostViewWitnessTests(unittest.TestCase):
             server.join(5)
             self.assertEqual(received, [b"witness"])
             self.assertEqual(config.socket_destination, "/tmp/hub-permission.sock")
+            # Nested user namespaces are admitted (a host LSM may still refuse
+            # them, code 10), but the inherited readonly root stays locked.
+            self.assertIn(result["nested"], (10, 30))
+            self.assertNotIn("--disable-userns", launch.argv)
             # Host /run stays visible, readonly, instead of a fresh tmpfs.
             self.assertTrue(result["run"])
             for key in ("work_write", "neighbor_write", "system_write", "run_write"):

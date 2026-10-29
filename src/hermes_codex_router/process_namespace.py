@@ -685,12 +685,14 @@ class ProcessNamespaceConfig:
         if self.network == "shared":
             command.append("--share-net")
         if host_fd is not None:
-            # First, so namespace-owned /dev, /proc, /tmp and /run cover it.
+            # First, so namespace-owned /dev, /proc and /tmp cover it.
             command.extend(("--ro-bind-fd", str(host_fd), "/"))
+        else:
+            # The host view admits nested sandboxes, such as the namespace
+            # tests of a commit gate; inherited readonly mounts stay locked.
+            command.extend(("--disable-userns", "--assert-userns-disabled"))
         command.extend(
             (
-                "--disable-userns",
-                "--assert-userns-disabled",
                 "--cap-drop",
                 "ALL",
                 "--new-session",

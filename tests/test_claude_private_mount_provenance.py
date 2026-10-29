@@ -177,6 +177,7 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             f"{identity} 1 {os.major(device)}:{os.minor(device)} "
             f"/independent\\040materials\\134copy {self.source} rw - ext4 example rw\n"
             f"{identity + 1} 1 0:999 net:[123] /run/example-namespace rw - nsfs nsfs rw\n"
+            f"{identity + 2} 1 0:998 /.. /sys/fs/cgroup ro - cgroup2 cgroup2 rw\n"
         )
         with (
             MountPins() as pins,
@@ -186,6 +187,19 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             fd = pins.open(self.source)
             guard.check({self.source: fd}, {self.source: identity}, (self.private,))
             guard.recheck()
+
+    def test_only_a_nested_cgroup_root_outside_its_namespace_is_opaque(self) -> None:
+        row = "1 0 0:25 /.. /sys/fs/cgroup ro - {} {} rw\n"
+        with patch.object(
+            private_mounts, "_read_mountinfo", return_value=row.format("cgroup2", "cgroup2")
+        ):
+            self.assertIsNone(private_mounts.read_mount_table()[1].root)
+        for filesystem, root in (("ext4", "/.."), ("cgroup2", "/../escape")):
+            with self.subTest(filesystem=filesystem, root=root):
+                table = f"1 0 0:25 {root} /sys/fs/cgroup ro - {filesystem} example rw\n"
+                with patch.object(private_mounts, "_read_mountinfo", return_value=table):
+                    with self.assertRaisesRegex(PrivateMountError, "malformed"):
+                        private_mounts.read_mount_table()
 
     def test_mount_table_read_errors_and_size_bound_refuse(self) -> None:
         for error in (PermissionError("fixture"), UnicodeError("fixture")):

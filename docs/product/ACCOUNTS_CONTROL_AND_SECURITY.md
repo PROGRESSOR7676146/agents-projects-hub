@@ -467,7 +467,9 @@ single-writer checks remain mandatory. See
   remain; host `/run` stays visible read-only, so resolver links and host
   sockets, Docker included, work with the kept supplementary groups as for other
   agents, and the permission socket is at `/tmp/hub-permission.sock`. Only host
-  `/tmp` sockets are absent. This profile preauthorizes native Bash: the permission
+  `/tmp` sockets are absent. Nested user namespaces are admitted so commit-gate
+  namespace tests run; inherited mounts MUST stay locked read-only. This
+  profile preauthorizes native Bash: the permission
   host MUST still validate each request, its fields and the current job, lease,
   writer, session, root and stop state, and journal a single-use Allow without a
   human receipt or wait notice. Push, deployment and service changes belong to
