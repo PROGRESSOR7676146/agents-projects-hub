@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,11 @@ class ClaudeSessionModeError(StateError):
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _session_home_digest(home: Path, profile: str) -> str:
+    store = str(home.resolve())
+    return _digest(store if profile == "editor" else f"hub.claude.session/{profile}/v1\x00" + store)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +102,7 @@ class ClaudePermissionJournal:
         profile_tools(profile)
         if mode not in {"text_only", "file_tools"} or mode == "text_only" and profile != "editor":
             raise StateError("unsupported Claude session mode")
-        store = str(home.resolve())
-        home_digest = _digest(
-            store if profile == "editor" else f"hub.claude.session/{profile}/v1\x00" + store
-        )
+        home_digest = _session_home_digest(home, profile)
         with self.state._immediate_transaction():
             self._binding(job_id, token, native, root)
             row = self.connection.execute(
@@ -115,6 +118,49 @@ class ClaudePermissionJournal:
                 )
             elif tuple(row) != (mode, home_digest):
                 raise ClaudeSessionModeError("Claude session mode or home changed")
+
+    def session_mode_compatibility(
+        self,
+        *,
+        agent_ids: tuple[str, ...],
+        mode: str,
+        home: Path,
+        profile: str,
+        project_roots: Mapping[str, Path],
+        execution_root: Callable[[int], Path],
+    ) -> tuple[int, int]:
+        """Inspect resumable bindings without pinning, migrating or starting work."""
+        profile_tools(profile)
+        if mode not in {"text_only", "file_tools"} or mode == "text_only" and profile != "editor":
+            raise StateError("unsupported Claude session mode")
+        rows = self.connection.execute(
+            "SELECT s.agent_id,t.topic_id,t.project_id,s.provider_session_id,m.mode,m.home_digest "
+            "FROM agent_sessions s JOIN topics t ON t.topic_id=s.topic_id "
+            "LEFT JOIN claude_permission_session_modes m "
+            "ON m.provider_session_id=s.provider_session_id "
+            "WHERE s.status IN ('active','satellite') AND s.provider_session_id IS NOT NULL"
+        ).fetchall()
+        checked = incompatible = 0
+        for row in rows:
+            if row["agent_id"] not in agent_ids or row["project_id"] not in project_roots:
+                continue
+            checked += 1
+            if row["mode"] is None:
+                # Legacy text sessions may acquire their first text-only pin;
+                # existing native sessions cannot silently acquire file tools.
+                incompatible += mode != "text_only"
+                continue
+            canonical_uuid(row["provider_session_id"])
+            store = (
+                home / row["provider_session_id"]
+                if mode == "file_tools"
+                else home
+                if home.is_absolute()
+                else execution_root(int(row["topic_id"])) / home
+            )
+            if (row["mode"], row["home_digest"]) != (mode, _session_home_digest(store, profile)):
+                incompatible += 1
+        return checked, incompatible
 
     def _current(self, launch: PermissionLaunch) -> None:
         digest, generation = self._binding(

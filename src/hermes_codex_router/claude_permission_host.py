@@ -354,7 +354,10 @@ def hosted_claude_launch(
     except ClaudeSessionModeError:
         raise ProviderUnavailableError(
             "claude_session_mode_changed",
-            "Claude session mode or session storage changed. The productive turn was not started; use /new before changing mode.",
+            "Claude's configured access profile or session storage no longer matches this saved "
+            "conversation. No model work was started; the conversation was preserved. Restore "
+            "the previous configuration to resume it, or deliberately use /new to start a "
+            "separate conversation with the changed settings.",
         ) from None
     except StateError:
         raise ProviderUnavailableError(

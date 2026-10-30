@@ -15,6 +15,7 @@ from tests.fault_matrix_support import FaultMatrixHarness, RecordingAdapter
 ROOT = Path(__file__).resolve().parents[1]
 ACTOR = ROOT / "tests" / "fault_matrix_actor.py"
 TIMEOUT_SECONDS = 8.0
+BOOTSTRAP_TIMEOUT_SECONDS = 30.0
 
 
 class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
@@ -44,10 +45,23 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
             text=True,
         )
         self.children.append(child)
+        # Imports, Git setup and component construction are not the fault
+        # scenario. Keep its existing deadline after explicit readiness.
+        self.wait_marker(
+            child,
+            self.base / f"actor-{child.pid}.ready",
+            timeout_seconds=BOOTSTRAP_TIMEOUT_SECONDS,
+        )
         return child
 
-    def wait_marker(self, child: subprocess.Popen[str], marker: Path) -> None:
-        deadline = time.monotonic() + TIMEOUT_SECONDS
+    def wait_marker(
+        self,
+        child: subprocess.Popen[str],
+        marker: Path,
+        *,
+        timeout_seconds: float = TIMEOUT_SECONDS,
+    ) -> None:
+        deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             if marker.exists():
                 return
