@@ -136,6 +136,7 @@ def legacy_selection_columns(path: Path):
 
 def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema54 proof from fictional historical fixtures."""
+    remove_claude_corrections_schema(connection)
     tables = ("telegram_send_receipts", "telegram_send_attempts")
     existing = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -147,6 +148,20 @@ def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TRIGGER IF EXISTS telegram_outbox_purpose_replace")
     if "purpose" in {row[1] for row in connection.execute("PRAGMA table_info(telegram_outbox)")}:
         connection.execute("ALTER TABLE telegram_outbox DROP COLUMN purpose")
+    for table in tables:
+        if table in existing:
+            connection.execute(f"DROP TABLE {table}")
+
+
+def remove_claude_corrections_schema(connection: sqlite3.Connection) -> None:
+    """Remove only empty schema55 ledgers from fictional old-schema fixtures."""
+    tables = ("claude_input_children", "claude_input_runs")
+    existing = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    for table in tables:
+        if table in existing:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
     for table in tables:
         if table in existing:
             connection.execute(f"DROP TABLE {table}")

@@ -275,8 +275,8 @@ This normative module is part of the
   provider, and a chat-action failure cannot block execution or result delivery.
 - **REQ-QUEUE-009 (Implemented):** Durable input membership MUST retain every
   Telegram `(chat_id, message_id)` exactly once even when several inputs form
-  one provider turn or a later Codex input is absorbed through same-turn
-  steering. A crash after an ambiguous provider acceptance MUST NOT replay that
+  one provider turn or a later input uses Codex steering or bounded Claude
+  streamed input under REQ-ROUTE-010. A crash after an ambiguous provider acceptance MUST NOT replay that
   input automatically.
 - **REQ-QUEUE-010 (Implemented in schema 33):** Inbound Telegram material
   identity, binding, content class, private spool path, byte count, SHA-256,

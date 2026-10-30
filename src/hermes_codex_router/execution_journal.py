@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .claude_correction_state import ClaudeCorrectionState
 from .codex_failure import MAX_PARTIAL_TEXT
 from .progress_delivery import ProgressDeliveryQueue
 from .schema_claude_material_notice import MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
@@ -22,6 +23,7 @@ CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
         "claude_permission_host_unverified",
         "claude_session_mode_changed",
         "claude_material_notice_unverified",
+        "claude_stream_input_unverified",
     }
 )
 
@@ -398,6 +400,7 @@ class ExecutionJournal:
                 "WHERE job_id=?",
                 (text, material_notice, datetime.now(timezone.utc).isoformat(), job_id),
             )
+            ClaudeCorrectionState(self.connection).validate_completion(job_id)
 
     def validated_claude_partial(
         self, job_id: str, token: str, session_id: str, *, cwd: Path
@@ -423,9 +426,14 @@ class ExecutionJournal:
     def claim_stale(self, agent_id: str, worker_id: str) -> ProviderJobRecord | None:
         now = datetime.now(timezone.utc)
         with self.state._immediate_transaction():
+            child_filter = (
+                "AND NOT EXISTS (SELECT 1 FROM claude_input_children child WHERE child.child_job_id=provider_jobs.job_id) "
+                if ClaudeCorrectionState(self.connection).available()
+                else ""
+            )
             row = self.connection.execute(
                 "SELECT job_id FROM provider_jobs WHERE agent_id = ? AND status = 'executing' "
-                "AND lease_expires_at <= ? ORDER BY created_at LIMIT 1",
+                "AND lease_expires_at <= ? " + child_filter + "ORDER BY created_at LIMIT 1",
                 (agent_id, now.isoformat()),
             ).fetchone()
             if row is None:
@@ -436,5 +444,8 @@ class ExecutionJournal:
                 "UPDATE provider_jobs SET lease_token = ?, lease_owner = ?, lease_expires_at = ? "
                 "WHERE job_id = ?",
                 (str(uuid.uuid4()), worker_id, (now + timedelta(seconds=120)).isoformat(), row[0]),
+            )
+            ClaudeCorrectionState(self.connection).heartbeat(
+                str(row[0]), now.isoformat(), (now + timedelta(seconds=120)).isoformat()
             )
             return self.state.get_provider_job(str(row[0]))

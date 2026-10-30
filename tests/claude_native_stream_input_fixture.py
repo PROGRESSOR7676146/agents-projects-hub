@@ -53,7 +53,9 @@ def validate_observation(report: dict[str, Any], scenario: str) -> None:
         raise ValueError("example_native_input_observation_unproven")
 
 
-def run_native_input(executable: Path, digest: str, scenario: str) -> dict[str, Any]:
+def run_native_input(
+    executable: Path, digest: str, scenario: str, *, owned_runner: bool = False
+) -> dict[str, Any]:
     from tests.claude_native_transport_fixture import _copy_native_binary
     from tests.native_process_capture import capture_owned_process
     from tests.native_runtime_mounts import native_runtime_mounts
@@ -97,6 +99,18 @@ def run_native_input(executable: Path, digest: str, scenario: str) -> dict[str, 
                 "--ro-bind",
                 str(Path(__file__).with_name("native_process_capture.py")),
                 "/opt/example/native_process_capture.py",
+                *(
+                    [
+                        "--ro-bind",
+                        str(Path(__file__).with_name("claude_owned_input_fixture.py")),
+                        "/opt/example/claude_owned_input_fixture.py",
+                        "--ro-bind",
+                        str(Path(__file__).resolve().parents[1] / "src" / "hermes_codex_router"),
+                        "/opt/example/source/hermes_codex_router",
+                    ]
+                    if owned_runner
+                    else []
+                ),
                 "--proc",
                 "/proc",
                 "--dev",
@@ -110,6 +124,7 @@ def run_native_input(executable: Path, digest: str, scenario: str) -> dict[str, 
                 scenario,
                 str(sentinel),
                 str(listener.getsockname()[1]),
+                *(["owned"] if owned_runner else []),
             ]
             code, raw = capture_owned_process(
                 argv,
@@ -119,7 +134,8 @@ def run_native_input(executable: Path, digest: str, scenario: str) -> dict[str, 
                 stderr_limit=65536,
             )
         if code != 0:
-            raise ValueError("example_native_input_actor_failed")
+            failure = json.loads(raw)
+            raise ValueError("example_native_input_actor_failed: " + str(failure))
         report = json.loads(raw)
         validate_observation(report, scenario)
         return report
@@ -381,7 +397,7 @@ def _successful_read(request: dict[str, Any]) -> bool:
     return False
 
 
-def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
+def actor(scenario: str, sentinel: str, port: str, mode: str = "characterize") -> dict[str, Any]:
     sys.path.insert(0, "/opt/example")
     from native_process_capture import capture_owned_process
 
@@ -455,9 +471,16 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
         )
         if code != 0 or version.decode().strip() != "2.1.296 (Claude Code)":
             raise ValueError("example_native_input_version_mismatch")
-        code, frames, stderr_bytes, open_until_results = _capture(
-            argv, environment, first, release, scenario
-        )
+        if mode == "owned":
+            from claude_owned_input_fixture import capture_owned_input
+
+            code, frames, stderr_bytes, open_until_results = capture_owned_input(
+                argv, environment, first, release, scenario
+            )
+        else:
+            code, frames, stderr_bytes, open_until_results = _capture(
+                argv, environment, first, release, scenario
+            )
     finally:
         _stop_server(server, thread, release, counts, lock)
     # No request handler survives shutdown of the serial server. Copy only
@@ -507,5 +530,15 @@ if __name__ == "__main__":
         validate_observation(observation, sys.argv[1])
         print(json.dumps(observation))
     except Exception as error:
-        print(json.dumps({"fixture_failed": True, "category": type(error).__name__}))
+        print(
+            json.dumps(
+                {
+                    "fixture_failed": True,
+                    "category": type(error).__name__,
+                    "reason": str(error)
+                    if type(error).__name__ == "ClaudeStreamError"
+                    else "unavailable",
+                }
+            )
+        )
         raise SystemExit(1) from None

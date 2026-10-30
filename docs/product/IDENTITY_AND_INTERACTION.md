@@ -86,12 +86,35 @@ Routing precedence is deterministic:
   closes the batch. An unaddressed continuation inside the quiet window inherits
   the open batch target, including when the first part addressed a satellite
   provider rather than changing the topic's active provider.
-- **REQ-ROUTE-010 (Implemented for socket-backed Codex; deterministic fallback
-  elsewhere):** Input arriving after a normal Codex turn starts SHOULD use
+- **REQ-ROUTE-010 (Implemented for socket-backed Codex; opt-in Claude source,
+  live acceptance pending; deterministic fallback elsewhere):** Input arriving after a normal Codex turn starts SHOULD use
   provider-native `turn/steer`. Explicit rejection returns it to FIFO; an
   ambiguous steering outcome becomes `indeterminate`. A runtime without safe
   same-turn steering MUST receive the input as one subsequent FIFO turn rather
   than dropping, simulating, or screen-scraping it.
+  An explicit local `claude_stream_input` gate, default false and requiring an
+  owned external Claude worker without image input, MAY submit one compatible
+  text-only FIFO successor through native streamed stdin during an invocation.
+  Remaining input MUST retain FIFO. Explicit context, handoff, retry and material
+  jobs MUST retain ordinary FIFO. The original job MUST retain process, native
+  session, root, tool profile, permission host and writer ownership until the
+  complete stream and owned cleanup settle. A child MUST be reserved durably
+  before its first byte can be written, and MUST NOT be requeued after that fence.
+  A matching processed-input UUID/session/content receipt MUST be recorded
+  against the next terminal-result ordinal; the UUID MUST NOT become a provider
+  turn ID. A child received before result 1 shares that result; a later receipt
+  MUST await result 2. First result MUST close further correction admission.
+  Native stdin MUST remain open until every submitted input has its receipt and
+  covering result. Hub MUST NOT interrupt a tool to simulate steering. Success
+  requires the entire bounded stream, successful exit and cleanup; then raw
+  aggregate completion MUST be saved before one atomic parent result/outbox and
+  child completion commit. Two native successful results MAY share one ordered
+  delivery. Missing/conflicting receipts, EOF, persistence failure and mixed or
+  failed correction results MUST retain uncertainty for submitted children,
+  without replay; an exact confirmed owner stop MAY cancel the invocation and
+  its submitted child under the existing session/cleanup rules. Input not yet
+  reserved remains normal FIFO. Native receipt ordering is processing evidence,
+  not proof that the model followed the correction.
 
 ### Telegram interaction contract
 
