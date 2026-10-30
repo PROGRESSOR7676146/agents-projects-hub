@@ -5,6 +5,21 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-30
+
+- Package the merged schema-54 source stack since 0.8.1. Source publication,
+  installation and live acceptance remain separate gates.
+- Publish passive runtime health from standalone direct-message polling, using
+  the existing health store. Successful polls advance health; processing and
+  shutdown failures remain visible without a new service or model call.
+- Add the opt-in Claude developer and workstation profiles, linked-worktree
+  confinement, protected foreground tools and bounded native permission waits.
+- Preserve worker resources until physical cleanup completes, add optional
+  exact-incarnation worker drain control, and guard maintenance restoration
+  with native process and listener custody checks.
+- Retain durable tlive approval ownership and uncertain outcomes; preserve late
+  Telegram receipts and allow later results past independent delivery notices.
+
 - Add an explicit Claude `auth_route: subscription` that uses the subscription
   token directly instead of CPA, refuses competing credentials before launch
   and excludes the `developer` profile (ADR 0082). A project can be bound to its
