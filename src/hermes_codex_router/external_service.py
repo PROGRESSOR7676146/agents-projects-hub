@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .artifact_delivery import deliver_staged_artifacts_immediately
 from .artifacts import create_job_staging
+from .diagnostic_log import survived
 from .external_admission import record_external_turn
 from .external_runtime import ExternalCliAdapter, ProviderLimitError
 from .hub_config import HubConfig
@@ -90,6 +93,10 @@ class ExternalAgentService:
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
+        self._health_started_at = datetime.now(timezone.utc)
+        # Standard Hub per-instance token, NOT an OS process-start proof.
+        # The observer must independently bind the live PID/incarnation.
+        self._health_process_start_marker = uuid.uuid4().hex
         self._stop = threading.Event()
         self._transport_consecutive_failures = 0
         self._transport_reported_signature: tuple[str, str, int | None] | None = None
@@ -722,36 +729,73 @@ class ExternalAgentService:
         )
         return True
 
+    def _publish_health(
+        self, *, activity_state: str = "idle", error_code: str | None = None
+    ) -> None:
+        """Cache this ingress loop, never probe the provider or another process."""
+        if not self.direct_messages_only:
+            return
+        if self._stop.is_set():
+            activity_state, error_code = "unknown", "external_service_stopped"
+        try:
+            self.state.upsert_runtime_health(
+                component="controller",
+                instance_id=f"external-ingress-{self.agent.agent_id}-dm",
+                runtime=self.agent.runtime,
+                agent_id=self.agent.agent_id,
+                pid=os.getpid(),
+                process_start_marker=self._health_process_start_marker,
+                started_at=self._health_started_at,
+                heartbeat_at=datetime.now(timezone.utc),
+                success_at=self._transport_success_at,
+                error_code=error_code,
+                activity_state=activity_state,
+            )
+        except Exception as error:
+            survived("external_service.health_publish", error)
+
     def run_forever(self) -> None:
-        self.state.record_runtime_event(
-            self.agent.agent_id,
-            "info",
-            "service_started",
-            f"runtime={self.agent.runtime}; polling",
-        )
-        offset = self.state.get_bot_offset(self.agent.agent_id)
-        while not self._stop.is_set():
-            try:
-                updates = self.telegram.updates(offset=offset, timeout=5)
-                self._record_telegram_poll_success()
-                for update in updates:
-                    if self._stop.is_set():
-                        break
-                    update_id = update.get("update_id")
-                    if not isinstance(update_id, int):
-                        continue
-                    try:
-                        self.handle_update(update)
-                    except Exception as exc:
-                        self.state.record_runtime_event(
-                            self.agent.agent_id,
-                            "error",
-                            "update_error",
-                            type(exc).__name__,
-                        )
-                    finally:
-                        offset = update_id + 1
-                        self.state.set_bot_offset(self.agent.agent_id, offset)
-            except TelegramError as exc:
-                self._record_telegram_poll_failure(exc)
-                self._stop.wait(3)
+        try:
+            self.state.record_runtime_event(
+                self.agent.agent_id,
+                "info",
+                "service_started",
+                f"runtime={self.agent.runtime}; polling",
+            )
+            offset = self.state.get_bot_offset(self.agent.agent_id)
+            while not self._stop.is_set():
+                try:
+                    updates = self.telegram.updates(offset=offset, timeout=5)
+                    self._record_telegram_poll_success()
+                    self._publish_health()
+                    for update in updates:
+                        if self._stop.is_set():
+                            break
+                        update_id = update.get("update_id")
+                        if not isinstance(update_id, int):
+                            continue
+                        self._publish_health(activity_state="unknown")
+                        error_code: str | None = "external_update_aborted"
+                        try:
+                            self.handle_update(update)
+                            error_code = None
+                        except Exception as exc:
+                            error_code = "external_update_error"
+                            self.state.record_runtime_event(
+                                self.agent.agent_id,
+                                "error",
+                                "update_error",
+                                type(exc).__name__,
+                            )
+                        finally:
+                            offset = update_id + 1
+                            self.state.set_bot_offset(self.agent.agent_id, offset)
+                            self._publish_health(error_code=error_code)
+                except TelegramError as exc:
+                    self._record_telegram_poll_failure(exc)
+                    self._publish_health(
+                        activity_state="unknown", error_code="telegram_poll_failed"
+                    )
+                    self._stop.wait(3)
+        finally:
+            self._publish_health(activity_state="unknown", error_code="external_service_stopped")
