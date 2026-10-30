@@ -99,7 +99,7 @@ class WorkerLeaseHeartbeatTests(unittest.TestCase):
                 (expiry, self.job_id),
             )
         clock = [before]
-        original = state._provider_job_state._write_transaction
+        original = state._provider_job_state._transaction
 
         @contextmanager
         def lock_acquired_later():
@@ -113,7 +113,7 @@ class WorkerLeaseHeartbeatTests(unittest.TestCase):
                 return clock[0]
 
         with (
-            patch.object(state._provider_job_state, "_write_transaction", lock_acquired_later),
+            patch.object(state._provider_job_state, "_transaction", lock_acquired_later),
             patch("hermes_codex_router.state_provider_jobs.datetime", LockClock),
             self.assertRaises(StateError),
         ):
@@ -150,6 +150,68 @@ class WorkerLeaseHeartbeatTests(unittest.TestCase):
             self.maintain(stop)
         self.assertEqual(stop.waits, [1, 30])
         self.assertEqual(calls, 2)
+
+    def test_real_writer_acquisition_cannot_revive_ownership_expired_during_wait(self) -> None:
+        state = self.worker.state
+        before = datetime.now(timezone.utc)
+        expiry = (before + timedelta(seconds=1)).isoformat()
+        with state._connection:
+            state._connection.execute(
+                "UPDATE provider_jobs SET lease_expires_at=? WHERE job_id=?",
+                (expiry, self.job_id),
+            )
+        clock = [before]
+        ready = threading.Event()
+        attempted = threading.Event()
+        release = threading.Event()
+        errors: list[BaseException] = []
+
+        def competing_writer() -> None:
+            connection = sqlite3.connect(self.fixture.config.state_path, timeout=1)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                ready.set()
+                if not attempted.wait(5):
+                    raise AssertionError("renewal did not attempt its transaction")
+                # Move the injected live clock while this actual writer still
+                # owns the lock. Renewal must sample it after acquiring that lock.
+                clock[0] = before + timedelta(seconds=2)
+                connection.rollback()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                connection.close()
+                release.set()
+
+        class LockClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0]
+
+        def trace(statement: str) -> None:
+            if statement.strip().upper().startswith("BEGIN"):
+                attempted.set()
+
+        writer_thread = threading.Thread(target=competing_writer)
+        writer_thread.start()
+        try:
+            self.assertTrue(ready.wait(5), errors)
+            state._connection.set_trace_callback(trace)
+            with (
+                patch("hermes_codex_router.state_provider_jobs.datetime", LockClock),
+                self.assertRaises(StateError),
+            ):
+                state.heartbeat_provider_job(self.job_id, self.token, lease_seconds=120)
+            self.assertTrue(release.wait(5))
+        finally:
+            attempted.set()
+            state._connection.set_trace_callback(None)
+            writer_thread.join(timeout=6)
+        self.assertFalse(writer_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(state.get_provider_job(self.job_id).lease_expires_at, expiry)
+        self.assertEqual(state.get_provider_job(self.job_id).attempt_count, 1)
+        self.assertEqual(self.adapter.calls, 0)
 
     def test_same_text_without_sqlite_lock_code_does_not_authorize_retry(self) -> None:
         stop = BoundedStop(lambda _: None)
