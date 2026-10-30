@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import threading
 import unittest
+from contextlib import closing
 from typing import Any, cast
+from unittest.mock import patch
 
 import test_codex_worker as codex_fixtures
 import test_external_worker as external_fixtures
 
 from hermes_codex_router.codex_appserver import StoredTurnOutcome, TurnResult
+from hermes_codex_router.codex_live_control import CodexLiveControl
 from hermes_codex_router.codex_worker import CodexQueueWorker
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState
@@ -15,6 +18,7 @@ from hermes_codex_router.state import HubState
 
 class StopCertaintyTests(unittest.TestCase):
     def test_interrupt_acknowledgement_or_failure_never_proves_codex_terminal(self) -> None:
+        testcase = self
         for interrupt_fails in (False, True):
             for outcome_status in ("active", "unknown"):
                 with self.subTest(interrupt_fails=interrupt_fails, outcome=outcome_status):
@@ -24,13 +28,19 @@ class StopCertaintyTests(unittest.TestCase):
                     released = threading.Event()
                     interrupted = threading.Event()
                     reads: list[dict[str, object]] = []
+                    controls: list[CodexLiveControl] = []
 
                     class MainClient(codex_fixtures.WorkerClient):
                         def wait_for_turn(self, _turn_id: str) -> TurnResult:
                             # Submit after native acceptance, so preparation
                             # cannot exhaust a separate sender-thread deadline.
                             request_stop()
-                            if not released.wait(3):
+                            control = controls[0]
+                            with closing(control.state_factory()) as state:
+                                request = state.pending_emergency_stop_for_job(job_id)
+                                assert request is not None
+                                testcase.assertTrue(control._interrupt(state, request))
+                            if not released.is_set():
                                 raise AssertionError("fictional stop did not reach the worker")
                             raise RuntimeError("fictional transport loss; turn outcome unconfirmed")
 
@@ -121,7 +131,12 @@ class StopCertaintyTests(unittest.TestCase):
                             state.close()
 
                     try:
-                        self.assertTrue(worker.run_cycle())
+                        # This fixture controls observation order; the actual
+                        # interrupt/guard path still owns every stop decision.
+                        with patch.object(
+                            CodexLiveControl, "start", autospec=True, side_effect=controls.append
+                        ):
+                            self.assertTrue(worker.run_cycle())
                         self.assertTrue(interrupted.is_set())
                         self.assertEqual(
                             [

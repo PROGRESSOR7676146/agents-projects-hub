@@ -805,7 +805,9 @@ class ExternalRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             child_pid = Path(directory) / "descendant-pid"
             source = (
-                "import os, pathlib, subprocess, sys\n"
+                "import os, pathlib, subprocess, sys, time\n"
+                # Startup must not race the real 0.2-second productive budget.
+                "time.sleep(0.3)\n"
                 "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
                 f"marker = pathlib.Path({str(child_pid)!r})\n"
                 "ready = marker.with_suffix('.ready')\n"
@@ -813,12 +815,22 @@ class ExternalRuntimeTests(unittest.TestCase):
                 "ready.replace(marker)\n"
             )
             clock = LeaderExitClock(child_pid)
+
+            def productive_deadline(
+                seconds: float, wait: PermissionWaitClock | None
+            ) -> ProductiveDeadline:
+                # Start at virtual zero even if the leader exits before Popen returns.
+                initialized = False
+                deadline = ProductiveDeadline(
+                    seconds, wait, clock=lambda: clock.monotonic() if initialized else 0.0
+                )
+                initialized = True
+                return deadline
+
             with (
                 patch(
                     "hermes_codex_router.external_runtime.ProductiveDeadline",
-                    side_effect=lambda seconds, wait: ProductiveDeadline(
-                        seconds, wait, clock=clock.monotonic
-                    ),
+                    side_effect=productive_deadline,
                 ),
                 patch(
                     "hermes_codex_router.external_runtime.time",

@@ -45,9 +45,11 @@ class ScriptedTransport:
         root: Path,
         active: threading.Event,
         release: threading.Event,
+        first_activity_done: threading.Event,
         approval_count: int = 1,
     ):
         self.name, self.root, self.active, self.release = name, root, active, release
+        self.first_activity_done = first_activity_done
         self.thread, self.turn = f"example-thread-{name}", f"example-turn-{name}"
         self.incoming: deque[dict] = deque()
         self.sent: list[dict] = []
@@ -132,11 +134,24 @@ class ScriptedTransport:
     def receive(self, timeout: float | None = None) -> dict:
         if not self.incoming and self.name == "a" and not self.completed_wait:
             self.active.set()
+            self.incoming.extend(self.own_completion())
+        if (
+            self.name == "a"
+            and self.incoming
+            and self.incoming[0].get("method") == "turn/completed"
+        ):
+            # Queue the activity first and hold only the completion notification.
             if not self.release.wait(30):
                 raise AssertionError("second worker did not reach its saved result boundary")
             self.completed_wait = True
             # The owning connection receives its own late final, never B's result.
-            self.incoming.extend(self.own_completion())
+        if (
+            self.name == "b"
+            and self.incoming
+            and self.incoming[0].get("method") == "turn/completed"
+            and not self.first_activity_done.wait(30)
+        ):
+            raise AssertionError("first worker did not consume its sequential approvals")
         if not self.incoming:
             raise EOFError("fictional protocol script exhausted")
         return self.incoming.popleft()
@@ -191,11 +206,14 @@ class NotificationConservationTests(unittest.TestCase):
 
     def run_pair(self, *, resume: bool, approval_count: int = 1):
         observed = []
+        first_activity_done = threading.Event()
         original_record = TaskActivityState.record_activity
 
         def record_activity(activity, job_id, token, event, **kwargs):
             result = original_record(activity, job_id, token, event, **kwargs)
             observed.append((job_id, event.kind))
+            if job_id == first and event.kind == "visible_message_completed":
+                first_activity_done.set()
             return result
 
         activity_patch = patch.object(
@@ -235,6 +253,7 @@ class NotificationConservationTests(unittest.TestCase):
                 root=root,
                 active=active,
                 release=release,
+                first_activity_done=first_activity_done,
                 approval_count=approval_count,
             )
             for name, root in (("a", self.root_a), ("b", self.root_b))
@@ -262,6 +281,9 @@ class NotificationConservationTests(unittest.TestCase):
         try:
             self.assertTrue(active.wait(5))
             self.assertEqual(errors, [])
+            # A remains executing with its final held; finish its activity burst
+            # before B's constructor performs unrelated schema reconciliation.
+            self.assertTrue(first_activity_done.wait(30))
             worker = CodexQueueWorker(
                 self.config,
                 registry=self.registry,
@@ -275,6 +297,14 @@ class NotificationConservationTests(unittest.TestCase):
                     current.status, "result_ready", (current.error_code, current.error_detail)
                 )
                 self.assertEqual(worker.state.get_provider_job(first).status, "executing")
+                # All durable activity precedes the held final, so releasing A
+                # cannot put 129 approval writes inside the thread-join budget.
+                self.assertTrue(first_activity_done.is_set())
+                self.assertEqual(
+                    [kind for observed_job, kind in observed if observed_job == first],
+                    ["approval_requested", "approval_resolved"] * approval_count
+                    + ["visible_message_completed"],
+                )
                 accepted = ExecutionJournal(worker.state).read(first)
                 assert accepted is not None
                 self.assertEqual(accepted["provider_turn_id"], "example-turn-a")
@@ -346,7 +376,13 @@ class NotificationConservationTests(unittest.TestCase):
     def test_old_unfiltered_retention_rule_reproduces_preparation_overflow(self):
         active, release = threading.Event(), threading.Event()
         active.set()
-        transport = ScriptedTransport(name="b", root=self.root_b, active=active, release=release)
+        transport = ScriptedTransport(
+            name="b",
+            root=self.root_b,
+            active=active,
+            release=release,
+            first_activity_done=threading.Event(),
+        )
         client = CodexAppServerClient(transport)
         # Model the old raw-notification retention rule without widening production limits.
         with patch(
