@@ -815,12 +815,22 @@ class ExternalRuntimeTests(unittest.TestCase):
                 "ready.replace(marker)\n"
             )
             clock = LeaderExitClock(child_pid)
+
+            def productive_deadline(
+                seconds: float, wait: PermissionWaitClock | None
+            ) -> ProductiveDeadline:
+                # Start at virtual zero even if the leader exits before Popen returns.
+                initialized = False
+                deadline = ProductiveDeadline(
+                    seconds, wait, clock=lambda: clock.monotonic() if initialized else 0.0
+                )
+                initialized = True
+                return deadline
+
             with (
                 patch(
                     "hermes_codex_router.external_runtime.ProductiveDeadline",
-                    side_effect=lambda seconds, wait: ProductiveDeadline(
-                        seconds, wait, clock=clock.monotonic
-                    ),
+                    side_effect=productive_deadline,
                 ),
                 patch(
                     "hermes_codex_router.external_runtime.time",

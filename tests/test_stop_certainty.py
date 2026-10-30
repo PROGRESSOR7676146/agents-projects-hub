@@ -18,6 +18,7 @@ from hermes_codex_router.state import HubState
 
 class StopCertaintyTests(unittest.TestCase):
     def test_interrupt_acknowledgement_or_failure_never_proves_codex_terminal(self) -> None:
+        testcase = self
         for interrupt_fails in (False, True):
             for outcome_status in ("active", "unknown"):
                 with self.subTest(interrupt_fails=interrupt_fails, outcome=outcome_status):
@@ -38,7 +39,7 @@ class StopCertaintyTests(unittest.TestCase):
                             with closing(control.state_factory()) as state:
                                 request = state.pending_emergency_stop_for_job(job_id)
                                 assert request is not None
-                                control._interrupt(state, request)
+                                testcase.assertTrue(control._interrupt(state, request))
                             if not released.is_set():
                                 raise AssertionError("fictional stop did not reach the worker")
                             raise RuntimeError("fictional transport loss; turn outcome unconfirmed")
