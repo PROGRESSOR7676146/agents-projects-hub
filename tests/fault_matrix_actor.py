@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,10 @@ from typing import Any, cast
 
 from hermes_codex_router.external_runtime import ExternalTurnResult
 from tests.fault_matrix_support import FaultMatrixHarness, RecordingBot
+
+
+def ready(harness: FaultMatrixHarness) -> None:
+    (harness.base / f"actor-{os.getpid()}.ready").touch(exist_ok=False)
 
 
 class MarkerAdapter:
@@ -89,6 +94,7 @@ def controller_once(harness: FaultMatrixHarness, arguments: list[str]) -> None:
     )
     poller.service = service
     service.telegram = cast(Any, poller)
+    ready(harness)
     try:
         service.run_forever()
     finally:
@@ -114,6 +120,7 @@ def controller_block_after_enqueue(harness: FaultMatrixHarness, arguments: list[
         return handled
 
     service.handle_update = handle_then_block  # type: ignore[method-assign]
+    ready(harness)
     service.run_forever()
 
 
@@ -122,6 +129,7 @@ def worker_actor(harness: FaultMatrixHarness, mode: str, arguments: list[str]) -
     marker = Path(raw_marker)
     adapter = MarkerAdapter(agent_id, marker, block=mode == "worker-block-in-adapter")
     worker = harness.worker(agent_id, adapter)
+    ready(harness)
     if mode == "worker-block-after-lease":
         job = worker.state.lease_provider_job(agent_id, worker.worker_id)
         if job is None:
@@ -142,6 +150,7 @@ def sender_actor(harness: FaultMatrixHarness, mode: str, arguments: list[str]) -
     bot = BlockingBot(marker) if mode == "sender-block-after-acceptance" else MarkerBot(marker)
     hub = RecordingBot()
     sender = harness.sender(opencode=bot, antigravity=bot, codex=bot, hub=hub)
+    ready(harness)
     try:
         if mode == "sender-block-before-send":
             lease = sender.state.lease_telegram_outbox("opencode", sender.sender_id, now=now)

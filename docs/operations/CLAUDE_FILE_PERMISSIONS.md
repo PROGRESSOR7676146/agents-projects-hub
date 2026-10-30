@@ -53,6 +53,14 @@ These are separately authorized live checks, not a claim from source tests.
    Native sessions pin mode and a home digest. Use `/new` before enabling or
    disabling file tools or moving the session store; transcripts are not silently
    copied across homes. Configuration rollback restores behavior for new sessions.
+   Before switching the configured profile or storage, run the candidate's
+   `agents-projects-hub doctor SHADOW_CONFIG` against current state with the
+   intended worker environment. Its required `claude_session_modes` check
+   detects incompatible active and satellite conversations without invoking a
+   model or changing session pins. Stop the rollout on that failure: retain the
+   previous configuration for existing conversations, or arrange explicitly
+   chosen new conversations before the change. Never rewrite stored digests to
+   bypass the mismatch or automatically replay a refused task.
 2. Stage the exact tlive release using the
    [pinned patch procedure](../../integrations/tlive/README.md). Verify source
    hashes after patching and building; do not modify the running installation.

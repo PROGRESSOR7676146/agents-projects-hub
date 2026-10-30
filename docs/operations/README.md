@@ -41,6 +41,11 @@ Operational truth is split by purpose:
   `agents-projects-hub doctor HUB_CONFIG` reads it only, and
   `agents-projects-hub monitor HUB_CONFIG` records only its own health, alert
   and repair bookkeeping.
+  Doctor's required `claude_session_modes` check compares resumable Claude
+  conversations with the proposed access profile and session storage. It
+  reports aggregate compatibility without exposing native identities or
+  rewriting sessions; check it before a profile/storage rollout as described in
+  the [Claude preparation procedure](CLAUDE_FILE_PERMISSIONS.md#prepare-an-isolated-candidate).
 - Cache-only status and component health: `agents-projects-hub status HUB_CONFIG` reports
   the expected Controller and monitor, the standalone sender when configured,
   and every configured external provider worker as `healthy`, `degraded`,

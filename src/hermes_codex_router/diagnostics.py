@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .claude_permissions_journal import ClaudePermissionJournal
 from .codex_proxy_health import probe_codex_config_proxy
 from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
 from .hermes_plugin_compatibility import probe_running_plugin
@@ -24,6 +25,7 @@ from .registry import load_registry
 from .release_identity import CURRENT_RELEASE
 from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
+from .topic_execution import resolve_topic_execution_root
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +89,7 @@ def _telegram_contract_checks(
 
 def run_doctor(config: HubConfig) -> dict[str, object]:
     checks: list[Check] = []
+    registry = None
     try:
         registry = load_registry(config.registry_path)
         checks.append(Check("registry", True, f"{len(registry.projects)} projects"))
@@ -113,6 +116,34 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                 )
             )
             checks.extend(_telegram_contract_checks(state.telegram_contract_provenance()))
+            claude_agents = tuple(
+                agent.agent_id for agent in config.agents if agent.runtime == "claude"
+            )
+            if registry is not None and claude_agents:
+                settings = config.claude_file_permissions
+                checked, incompatible = ClaudePermissionJournal(state).session_mode_compatibility(
+                    agent_ids=claude_agents,
+                    mode="text_only" if settings is None else "file_tools",
+                    home=Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"))
+                    if settings is None
+                    else settings.provider_home,
+                    profile="editor" if settings is None else settings.profile,
+                    project_roots={
+                        project.project_id: project.root for project in registry.projects
+                    },
+                    execution_root=lambda topic_id: resolve_topic_execution_root(
+                        state, registry, state.get_topic(topic_id)
+                    ),
+                )
+                checks.append(
+                    Check(
+                        "claude_session_modes",
+                        incompatible == 0,
+                        f"checked={checked} incompatible={incompatible}. "
+                        "Keep the previous configuration to resume existing conversations; "
+                        "use /new only when deliberately changing their access profile or storage.",
+                    )
+                )
         finally:
             state.close()
     except Exception as exc:
