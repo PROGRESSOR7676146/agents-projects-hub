@@ -6,6 +6,7 @@ import json
 import os
 import selectors
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -31,6 +32,8 @@ def validate_observation(report: dict[str, Any], scenario: str) -> None:
         "correction_in_requests": [False, True],
         "initial_in_requests": [True, True],
         "tool_result_in_requests": [False, scenario == "tool-loop"],
+        "successful_read_in_requests": [False, scenario == "tool-loop"],
+        "stdin_open_until_results": True,
         "results": 1 if scenario == "tool-loop" else 2,
         "successes": [True] if scenario == "tool-loop" else [True, True],
         "echoed_ids": list(INPUT_IDS),
@@ -110,7 +113,7 @@ def run_native_input(executable: Path, digest: str, scenario: str) -> dict[str, 
             code, raw = capture_owned_process(
                 argv,
                 {"PATH": "/usr/bin:/bin", "HOME": "/home/example", "LANG": "C.UTF-8"},
-                timeout=50,
+                timeout=70,
                 stdout_limit=8192,
                 stderr_limit=65536,
             )
@@ -162,13 +165,17 @@ def _response(tool: bool) -> bytes:
 
 
 def _capture(
-    argv: list[str], environment: dict[str, str], first: threading.Event, release: threading.Event
-) -> tuple[int, list[dict[str, Any]], int]:
+    argv: list[str],
+    environment: dict[str, str],
+    first: threading.Event,
+    release: threading.Event,
+    scenario: str,
+) -> tuple[int, list[dict[str, Any]], int, bool]:
     from native_process_capture import owned_fixture_process
 
-    frames = []
+    inputs = []
     for text, identity in zip((INITIAL, CORRECTION), INPUT_IDS, strict=True):
-        frames.append(
+        inputs.append(
             (
                 json.dumps(
                     {
@@ -182,11 +189,16 @@ def _capture(
                 + "\n"
             ).encode()
         )
-    output = bytearray()
+    frames: list[dict[str, Any]] = []
+    pending = bytearray()
+    output_bytes = 0
+    terminals = 0
+    closed_after_results = False
+    expected_results = 1 if scenario == "tool-loop" else 2
     stderr_bytes = 0
-    with owned_fixture_process(argv, environment, stdin=-1) as process:
+    with owned_fixture_process(argv, environment, stdin=subprocess.PIPE) as process:
         assert process.stdin and process.stdout and process.stderr
-        process.stdin.write(frames[0])
+        process.stdin.write(inputs[0])
         process.stdin.flush()
         sent = False
         deadline = time.monotonic() + 35
@@ -198,9 +210,8 @@ def _capture(
                 if time.monotonic() >= deadline:
                     raise ValueError("example_native_input_timeout")
                 if first.is_set() and not sent:
-                    process.stdin.write(frames[1])
+                    process.stdin.write(inputs[1])
                     process.stdin.flush()
-                    process.stdin.close()
                     sent = True
                     release.set()
                 for key, _ in selector.select(0.05):
@@ -208,10 +219,23 @@ def _capture(
                     if not chunk:
                         selector.unregister(key.fileobj)
                     elif key.fileobj is process.stdout:
-                        output.extend(chunk)
+                        output_bytes += len(chunk)
+                        pending.extend(chunk)
+                        while b"\n" in pending:
+                            line, _, tail = pending.partition(b"\n")
+                            pending = bytearray(tail)
+                            frame = json.loads(line)
+                            if not isinstance(frame, dict):
+                                raise ValueError("example_native_input_invalid_frame")
+                            frames.append(frame)
+                            if frame.get("type") == "result":
+                                terminals += 1
+                                if terminals == expected_results:
+                                    process.stdin.close()
+                                    closed_after_results = True
                     else:
                         stderr_bytes += len(chunk)
-                    if len(output) > 2097152 or stderr_bytes > 65536:
+                    if output_bytes > 2097152 or stderr_bytes > 65536:
                         raise ValueError("example_native_input_output_bound")
             while os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
                 if time.monotonic() >= deadline:
@@ -219,19 +243,20 @@ def _capture(
                 time.sleep(0.01)
         if not sent:
             raise ValueError("example_native_input_first_request_missing")
+        if pending:
+            raise ValueError("example_native_input_incomplete_frame")
     assert process.returncode is not None
-    return process.returncode, [json.loads(line) for line in output.splitlines()], stderr_bytes
+    return process.returncode, frames, stderr_bytes, closed_after_results
 
 
-def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
-    sys.path.insert(0, "/opt/example")
-    from native_process_capture import capture_owned_process
-
-    first, release = threading.Event(), threading.Event()
-    requests: list[dict[str, Any]] = []
-    counts = {"posts": 0, "violations": 0, "heads": 0}
-    lock = threading.Lock()
-
+def _make_server(
+    scenario: str,
+    first: threading.Event,
+    release: threading.Event,
+    requests: list[dict[str, Any]],
+    counts: dict[str, int],
+    lock: Any,
+) -> ThreadingHTTPServer:
     class Server(ThreadingHTTPServer):
         daemon_threads = True
 
@@ -248,6 +273,16 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
         def log_message(self, format: str, *args: Any) -> None:
             pass
 
+        def violation(self) -> None:
+            with lock:
+                counts["violations"] += 1
+
+        def send_error(
+            self, code: int, message: str | None = None, explain: str | None = None
+        ) -> None:
+            self.violation()
+            super().send_error(code, message, explain)
+
         def respond(self, code, body=b"", content_type="application/json"):
             self.send_response(code)
             self.send_header("Content-Type", content_type)
@@ -261,7 +296,7 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
                 counts["heads"] += 1
                 valid = counts["heads"] <= 1 and self.path == "/api/hello"
             if not valid:
-                counts["violations"] += 1
+                self.violation()
             self.respond(200 if valid else 400)
 
         def do_POST(self):
@@ -274,7 +309,7 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
                 or not 0 < size <= 300000
                 or self.path not in ("/v1/messages", "/v1/messages?beta=true")
             ):
-                counts["violations"] += 1
+                self.violation()
                 self.respond(400)
                 return
             body = json.loads(self.rfile.read(size))
@@ -284,19 +319,46 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
                 or body.get("stream") is not True
                 or {t["name"] for t in body.get("tools", [])} != tools
             ):
-                counts["violations"] += 1
+                self.violation()
                 self.respond(400)
                 return
-            requests.append(body)
+            with lock:
+                requests.append(body)
             if ordinal == 1:
                 first.set()
                 if not release.wait(10):
-                    counts["violations"] += 1
+                    self.violation()
                     self.respond(400)
                     return
             self.respond(
                 200, _response(scenario == "tool-loop" and ordinal == 1), "text/event-stream"
             )
+
+    return Server(("127.0.0.1", 0), Handler)
+
+
+def _successful_read(request: dict[str, Any]) -> bool:
+    for message in request.get("messages", []):
+        content = message.get("content", [])
+        if isinstance(content, list) and any(
+            isinstance(block, dict)
+            and block.get("type") == "tool_result"
+            and block.get("is_error", False) is False
+            and "example-fictional-seed" in json.dumps(block.get("content"))
+            for block in content
+        ):
+            return True
+    return False
+
+
+def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
+    sys.path.insert(0, "/opt/example")
+    from native_process_capture import capture_owned_process
+
+    first, release = threading.Event(), threading.Event()
+    requests: list[dict[str, Any]] = []
+    counts = {"posts": 0, "violations": 0, "heads": 0}
+    lock = threading.Lock()
 
     with socket.socket() as probe:
         probe.settimeout(1)
@@ -305,7 +367,7 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
             blocked = False
         except OSError:
             blocked = True
-    server = Server(("127.0.0.1", 0), Handler)
+    server = _make_server(scenario, first, release, requests, counts, lock)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
     thread.start()
     environment = {
@@ -363,7 +425,9 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
         )
         if code != 0 or version.decode().strip() != "2.1.296 (Claude Code)":
             raise ValueError("example_native_input_version_mismatch")
-        code, frames, stderr_bytes = _capture(argv, environment, first, release)
+        code, frames, stderr_bytes, open_until_results = _capture(
+            argv, environment, first, release, scenario
+        )
         terminals = [f for f in frames if f.get("type") == "result"]
         echoes = [f for f in frames if f.get("type") == "user" and f.get("uuid") in INPUT_IDS]
         boundary = next((i for i, f in enumerate(frames) if f.get("type") == "result"), len(frames))
@@ -376,6 +440,8 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
             "correction_in_requests": [CORRECTION in m for m in messages],
             "initial_in_requests": [INITIAL in m for m in messages],
             "tool_result_in_requests": ['"tool_result"' in m for m in messages],
+            "successful_read_in_requests": [_successful_read(r) for r in requests],
+            "stdin_open_until_results": open_until_results,
             "results": len(terminals),
             "successes": [
                 r.get("subtype") == "success" and r.get("is_error") is False for r in terminals

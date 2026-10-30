@@ -8,6 +8,12 @@ Telegram acceptance. Owning behavior remains
 
 Supply the standalone native Claude 2.1.296 binary and its exact SHA-256:
 
+The host also needs `/usr/bin/bwrap`, permitted unprivileged user/PID/network
+namespaces and `/usr/bin/python3` at least 3.10 inside the fixture. The ordinary
+source suite requires Python 3.11 or later. Ubuntu AppArmor may deny namespace
+creation; an unavailable prerequisite is a failed required native run, not evidence
+about the CLI or Hub. Developer environments without the explicit opt-in skip it.
+
 ```bash
 HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude \
 HUB_NATIVE_CLAUDE_FIXTURE_SHA256=EXACT_BINARY_SHA256 \
@@ -24,18 +30,23 @@ requests per scenario, with retries disabled; there is no remote inference.
 
 Both cases send the correction after the first model request reaches the server
 and before its scripted response is released. The first case returns a Read
-tool call; the second returns a final text answer.
+tool call; the second returns a final text answer. Stdin remains open until the
+expected one or two terminal records have actually been read; only then does
+the fixture send EOF. Writing the correction does not synchronize native
+consumption: its position is established by the resulting receipt/request trace.
 
 | Native scenario | Required observations |
 | --- | --- |
-| Tool loop | Second request includes original input, correction and tool result; correction echo precedes the only terminal result |
-| Final answer | First result precedes the correction echo; two separate native terminal results follow in the same session |
+| Tool loop | Second request includes original input, correction and successful Read content; correction echo precedes the only terminal result |
+| Final answer | Two native terminal results occur in the same session; the first precedes the correction echo and request two includes the correction |
 
 Both require exact ordered input UUIDs/content, matching session, successful
-process/results, request bounds and independent host-file/loopback exclusion.
+process/results, request bounds (including unsupported methods and parser errors)
+and independent host-file/loopback exclusion.
 An echo, successful pipe write or exit code alone does not prove consumption
 within the original turn. The fixture does not test injection during a running
-Bash command, native interruption, permissions, model comprehension or billing.
+Bash command, corrections sent after the first result, idle behavior with an
+indefinitely open pipe, native interruption, permissions, model comprehension or billing.
 
 ## Consequence for the next source increment
 
