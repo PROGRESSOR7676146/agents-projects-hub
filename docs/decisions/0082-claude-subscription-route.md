@@ -21,7 +21,9 @@ and says that Pro and Max limits assume ordinary individual use. The same
 [authentication documentation](https://code.claude.com/docs/en/authentication)
 documents `claude setup-token`: a one-year subscription token for scripts and
 CI, read from `CLAUDE_CODE_OAUTH_TOKEN` by the unmodified CLI, which can only
-make model requests. The owner chose one account used directly for every project.
+make model requests. The owner first chose one account used directly for every
+project. Upgrading that account to a larger plan then proved impossible, and the
+owner chose two accounts instead, each permanently bound to its own project.
 
 ## Decision
 
@@ -32,10 +34,11 @@ make model requests. The owner chose one account used directly for every project
    every cloud-provider selector before a process starts. In Claude Code's
    precedence a bearer token or API key outranks the subscription token, and
    headless mode uses an API key without asking, so either would silently change
-   the billing route. A settings `apiKeyHelper` also outranks the token:
-   file-tool launches disable settings sources, and installed acceptance must
-   show that the worker's own Claude settings define none for text-only turns.
-   `--bare` is not used, since it ignores the token.
+   the billing route. A settings `apiKeyHelper` or settings `env` block could
+   inject either, so every Hub launch, text-only and file-tool alike, loads no
+   user, project or local settings file. Admin-managed settings still apply;
+   installed acceptance must show that they define neither. `--bare` is not
+   used, since it ignores the token.
 3. The `cpa` route additionally refuses a present subscription token, keeping
    exactly one credential source.
 4. Text-only, `editor` and `workstation` turns may use the route. Without Bash
@@ -46,25 +49,51 @@ make model requests. The owner chose one account used directly for every project
    new exposure. Configuration loading and the launch refuse that combination.
    Claude Code's `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is not adopted: it needs a
    nested bubblewrap that `developer` disables and it changes Bash isolation.
-5. The owner creates the token and writes it to a private 0600 environment file
-   read only by the Claude worker unit. Agents never handle it; it never enters
-   `hub.json`, Git, logs or Telegram.
+5. The owner creates each token and writes it to a private 0600 environment
+   file read only by the Claude worker units. Hub never puts it in `hub.json`,
+   Git, prompts, logs or Telegram. Exposure to a model is limited to what
+   decision 4 accepts. The worker process entry point moves every subscription
+   token out of the process environment before loading configuration, and the
+   Claude adapter adds only the selected one to a Claude launch, so helper
+   subprocesses and other providers receive none. A changed token takes effect
+   after a worker restart.
 6. Before activation the owner confirms that the account's extra usage is off.
    This is the subscription form of the no-paid-fallback rule; configuration
    alone does not prove the billing route.
-7. One account serves every project. Per-project accounts, account pools and
-   limit-driven switching are rejected: they work against the ordinary
-   individual use the plans assume and risk every linked account at once. More
-   capacity comes from a larger plan.
+7. A project may be bound to its own fixed account:
+   `subscription_token_by_project` maps a registered project to an environment
+   variable named `CLAUDE_CODE_OAUTH_TOKEN_<SUFFIX>`, and every other project
+   uses `CLAUDE_CODE_OAUTH_TOKEN`. The launch passes the selected token as
+   `CLAUDE_CODE_OAUTH_TOKEN` and removes every `CLAUDE_CODE_OAUTH_TOKEN_*`
+   variable, valid mapping name or not, so a turn sees exactly one account. When
+   bindings exist, a bound project without its token, or a turn without a
+   project identity, fails instead of falling back to another account. The
+   launch trusts the project identity its caller resolved from the registry. A
+   fixed binding keeps each project's work, sessions and prompt cache on one
+   account. Account pools, rotation and limit-driven switching remain rejected:
+   they work against the ordinary individual use the plans assume. Anthropic's
+   consumer terms do not forbid one person holding several accounts, but they
+   do not grant it either; the owner accepts that Anthropic may treat linked
+   accounts together. A larger plan stays the preferred capacity path once it
+   can be bought.
 8. CPA remains for GPT consultations and cross-provider review. Moving the
    Claude reviewer route and showing Claude limits in `/accounts` from passive
    CLI output are follow-up work.
 
 ## Consequences
 
-Rollback is `auth_route: cpa` and a Claude worker restart; nothing persisted
-depends on the route. The token expires after a year and must be renewed by the
-owner. Installed acceptance must show a text-only and an editor turn on the
-subscription, an injected API key refused before launch, no `apiKeyHelper` in
-the worker's Claude settings and the extra-usage setting off, all tied to the
-exact deployed revision.
+Rollback is coordinated, because the CPA route refuses any subscription token:
+remove `subscription_token_by_project`, set `auth_route: cpa`, take the
+subscription file out of the Claude workers' environment, restore the CPA
+variables, validate the configuration and restart the Claude workers. Under CPA
+a bound project runs on the CPA account; if that is unacceptable, the owner
+pauses the project instead. Nothing persisted depends on the route. A token
+expires after a year and must be renewed by the owner from the same account.
+Installed acceptance must record the CLI version and show a text-only and an
+editor turn on the subscription, an injected API key refused before launch, no
+credential setting in admin-managed settings, no stored login in the worker's
+Claude home, a turn with a deliberately invalid token failing rather than
+authenticating another way, and the extra-usage setting off on every account.
+When projects are bound, it must show one turn per account with the account
+identified, all tied to the exact deployed revision. A successful turn alone
+proves neither the account nor the absence of paid fallback.

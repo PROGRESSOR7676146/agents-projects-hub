@@ -17,6 +17,8 @@ USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
 ACCOUNT_HINT = re.compile(r"^[A-Za-z0-9]{2,8}$")
 TELEGRAM_BOT_TOKEN = re.compile(r"^[0-9]{6,12}:[A-Za-z0-9_-]{5,100}$")
+# A per-project Claude subscription token variable (ADR 0082).
+CLAUDE_PROJECT_TOKEN = re.compile(r"CLAUDE_CODE_OAUTH_TOKEN(?:_[A-Z0-9]{1,16}){1,3}")
 SUPPORTED_RUNTIMES = {"codex", "claude", "hermes", "gemini", "antigravity", "opencode", "api"}
 
 
@@ -47,6 +49,9 @@ class AgentDefinition:
     model_catalog: tuple[ProviderModel, ...] | None = None
     # Claude only: "cpa" (loopback proxy) or "subscription" (native token, ADR 0082).
     auth_route: str = "cpa"
+    # Subscription only: project_id -> environment variable naming that project's
+    # fixed account token; other projects use CLAUDE_CODE_OAUTH_TOKEN.
+    subscription_token_by_project: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,6 +603,23 @@ def _parse_agent(
         raise HubConfigError(f"auth_route is supported only for Claude, not {agent_id}")
     if not isinstance(auth_route, str) or auth_route not in {"cpa", "subscription"}:
         raise HubConfigError(f"auth_route is invalid for {agent_id}")
+    token_map = data.get("subscription_token_by_project", {})
+    if "subscription_token_by_project" in data and auth_route != "subscription":
+        raise HubConfigError(
+            f"subscription_token_by_project requires the subscription route for {agent_id}"
+        )
+    if (
+        not isinstance(token_map, dict)
+        or not all(
+            isinstance(project_id, str)
+            and IDENTIFIER.fullmatch(project_id)
+            and isinstance(name, str)
+            and CLAUDE_PROJECT_TOKEN.fullmatch(name)
+            for project_id, name in token_map.items()
+        )
+        or len(set(token_map.values())) != len(token_map)
+    ):
+        raise HubConfigError(f"subscription_token_by_project is invalid for {agent_id}")
     executable = data.get("executable")
     if executable is not None and (not isinstance(executable, str) or not executable.strip()):
         raise HubConfigError(f"executable is invalid for {agent_id}")
@@ -631,6 +653,7 @@ def _parse_agent(
         service_unit=service_unit,
         model_catalog=model_catalog,
         auth_route=auth_route,
+        subscription_token_by_project=tuple(sorted(token_map.items())),
     )
 
 
@@ -1089,6 +1112,12 @@ def load_hub_config(
         and any(agent.auth_route == "subscription" for agent in agents)
     ):
         raise HubConfigError("Claude subscription auth_route cannot use the developer profile")
+    if any(
+        project_id not in project_ids
+        for agent in agents
+        for project_id, _ in agent.subscription_token_by_project
+    ):
+        raise HubConfigError("subscription_token_by_project names an unregistered project")
     project_provisioning = _parse_project_provisioning(
         root,
         hub_bot=hub_bot,

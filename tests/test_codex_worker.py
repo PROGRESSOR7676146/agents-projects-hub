@@ -984,7 +984,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
         started_slots: list[int] = []
 
         class FakeWorker:
-            def __init__(self, _config: HubConfig, _agent_id: str, *, worker_slot: int = 1) -> None:
+            def __init__(
+                self, _config: HubConfig, _agent_id: str, *, worker_slot: int = 1, **_: object
+            ) -> None:
                 started_slots.append(worker_slot)
 
             def run_forever(self, *, poll_seconds: float) -> None:

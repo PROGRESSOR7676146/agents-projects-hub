@@ -150,8 +150,6 @@ class NativeSelectionEvidenceTests(unittest.TestCase):
                     extras = [
                         "--mcp-config",
                         '{"mcpServers":{}}',
-                        "--setting-sources",
-                        "",
                         "--max-turns",
                         "1",
                         "--system-prompt",

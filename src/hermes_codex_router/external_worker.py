@@ -42,6 +42,7 @@ from .external_runtime import (
     ExternalRuntimeError,
     ProviderLimitError,
     ProviderUnavailableError,
+    take_claude_subscription_tokens,
 )
 from .hub_config import HubConfig
 from .preacceptance_approvals import PreacceptanceApprovalState
@@ -111,6 +112,7 @@ class ExternalQueueWorker:
         adapter: ExternalCliAdapter | None = None,
         worker_id: str | None = None,
         worker_slot: int = 1,
+        claude_subscription_tokens: dict[str, str] | None = None,
     ) -> None:
         if config.dispatch_mode != "queue" or config.queue_runtime != "external":
             raise ExternalQueueWorkerError(
@@ -196,6 +198,16 @@ class ExternalQueueWorker:
                 executable=self.agent.executable,
                 runtime_home=self.agent.runtime_home,
                 claude_auth_route=self.agent.auth_route,
+                claude_token_by_project=dict(self.agent.subscription_token_by_project),
+                # The process entry point normally took the tokens out of the
+                # environment already, so no helper can inherit them (ADR 0082).
+                claude_subscription_tokens=(
+                    claude_subscription_tokens
+                    if claude_subscription_tokens is not None
+                    else take_claude_subscription_tokens(os.environ)
+                )
+                if self.agent.runtime == "claude"
+                else None,
             )
         self._stop = threading.Event()
         self.activity = WorkerActivityBarrier()

@@ -126,6 +126,8 @@ class WorkerControlCliTests(unittest.TestCase):
         events: list[str] = []
         captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
         workers: list[object] = []
+        constructed: list[dict[str, object]] = []
+        config_environments: list[list[str]] = []
 
         @contextlib.contextmanager
         def lock(*_args: object):
@@ -141,9 +143,10 @@ class WorkerControlCliTests(unittest.TestCase):
             events.append("control_close")
 
         class Worker:
-            def __init__(self, *_args: object) -> None:
+            def __init__(self, *_args: object, **kwargs: object) -> None:
                 events.append("construct")
                 workers.append(self)
+                constructed.append(kwargs)
 
             def stop(self) -> None:
                 pass
@@ -158,12 +161,18 @@ class WorkerControlCliTests(unittest.TestCase):
                 return {"event": "worker_shutdown_complete"}
 
         with (
+            patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second"}),
             patch(
                 "hermes_codex_router.cli.load_external_worker_config",
-                return_value=SimpleNamespace(
-                    state_path=Path("/tmp/example.sqlite3"),
-                    worker_count_for_agent=lambda _: 1,
-                ),
+                side_effect=lambda _path: (
+                    config_environments.append(
+                        [key for key in os.environ if key.startswith("CLAUDE_CODE_OAUTH_TOKEN")]
+                    ),
+                    SimpleNamespace(
+                        state_path=Path("/tmp/example.sqlite3"),
+                        worker_count_for_agent=lambda _: 1,
+                    ),
+                )[1],
             ),
             patch("hermes_codex_router.cli.worker_process_lock", lock),
             patch("hermes_codex_router.cli.worker_control_session", control),
@@ -191,6 +200,13 @@ class WorkerControlCliTests(unittest.TestCase):
                 "worker_close",
                 "unlock",
             ],
+        )
+        # Account tokens leave the environment before configuration loads and
+        # reach only the worker (ADR 0082).
+        self.assertEqual(config_environments, [[]])
+        self.assertEqual(
+            constructed[0]["claude_subscription_tokens"],
+            {"CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second"},
         )
         self.assertEqual(captured[0][0], (Path("/tmp/example/control.sock"),))
         self.assertEqual(captured[0][1]["worker_id"], "codex-worker")

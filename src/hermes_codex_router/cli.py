@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Sequence
@@ -21,6 +22,7 @@ from .deployment_manifest import (
 )
 from .diagnostic_log import configure_process_logging, survived
 from .diagnostics import run_doctor
+from .external_runtime import take_claude_subscription_tokens
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
 from .hub_config import (
@@ -558,16 +560,18 @@ def _controller_command(args: argparse.Namespace) -> int:
 
 
 def _worker_command(args: argparse.Namespace) -> int:
+    # Before anything else runs, so no helper ever inherits a Claude account
+    # token; only the Claude adapter receives them (ADR 0082).
+    tokens = take_claude_subscription_tokens(os.environ)
     config = load_external_worker_config(args.config)
     slot_count = config.worker_count_for_agent(args.agent)
     if not 1 <= args.slot <= slot_count:
         raise HubConfigError("worker slot is not configured for this agent")
     worker_id = worker_instance_id(args.agent, args.slot)
     with worker_process_lock(config.state_path, worker_id):
-        if args.slot == 1:
-            worker = ExternalQueueWorker(config, args.agent)
-        else:
-            worker = ExternalQueueWorker(config, args.agent, worker_slot=args.slot)
+        worker = ExternalQueueWorker(
+            config, args.agent, worker_slot=args.slot, claude_subscription_tokens=tokens
+        )
         with stop_on_signals(worker):
             try:
                 with worker_control_session(

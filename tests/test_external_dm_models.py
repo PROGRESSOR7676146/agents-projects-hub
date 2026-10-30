@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -50,6 +51,14 @@ def callbacks(markup: object) -> list[str]:
 
 
 class ExternalDirectModelTests(unittest.TestCase):
+    def test_claude_never_runs_in_the_provider_service(self) -> None:
+        # Claude turns run only in queue workers, the units that load the
+        # subscription token file (ADR 0082).
+        claude = SimpleNamespace(runtime="claude")
+        config = cast(Any, SimpleNamespace(require_agent=lambda _: claude))
+        with self.assertRaisesRegex(RuntimeError, "gemini, antigravity, and opencode only"):
+            ExternalAgentService(config, "claude")
+
     def test_direct_poller_transport_threshold_recovers_and_rearms(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             service = ExternalAgentService.__new__(ExternalAgentService)

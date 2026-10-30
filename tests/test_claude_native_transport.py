@@ -156,8 +156,6 @@ class NativeTransportEvidenceTests(unittest.TestCase):
                 "--no-session-persistence",
                 "--mcp-config",
                 '{"mcpServers":{}}',
-                "--setting-sources",
-                "",
                 "--max-turns",
                 "1",
                 "--system-prompt",

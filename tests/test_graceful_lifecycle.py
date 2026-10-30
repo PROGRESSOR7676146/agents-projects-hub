@@ -130,7 +130,9 @@ class GracefulLifecycleTests(unittest.TestCase):
                 self.assertTrue(instances[0].stopped)
                 self.assertTrue(instances[0].closed)
                 if label == "worker slot":
-                    self.assertEqual(instances[0].kwargs, {"worker_slot": 2})
+                    self.assertEqual(
+                        instances[0].kwargs, {"worker_slot": 2, "claude_subscription_tokens": {}}
+                    )
 
     def test_telegram_services_use_bounded_long_poll_and_stop_before_another_poll(self) -> None:
         class State:

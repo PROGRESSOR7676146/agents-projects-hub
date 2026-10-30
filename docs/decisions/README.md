@@ -104,4 +104,4 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 
 - [0081: Claude workstation host view](0081-claude-workstation-host-view.md) — whole host readonly, Docker shared, preauthorized foreground Bash, no masks; installed acceptance pending.
 
-- [0082: Claude subscription route](0082-claude-subscription-route.md) — explicit `auth_route`, native subscription token without CPA, one account for all projects, `developer` excluded; installed acceptance pending.
+- [0082: Claude subscription route](0082-claude-subscription-route.md) — explicit `auth_route`, native subscription token without CPA, optional fixed account per project without pools or switching, `developer` excluded; installed acceptance pending.

@@ -714,6 +714,37 @@ class HubConfigTests(unittest.TestCase):
                 self.assertEqual(config.claude_file_permissions.profile, profile)
         with self.assertRaisesRegex(HubConfigError, "subscription.*developer"):
             load(subscription, claude_file_permissions=permissions | {"profile": "developer"})
+        mapped = subscription | {
+            "subscription_token_by_project": {"alpha": "CLAUDE_CODE_OAUTH_TOKEN_SECOND"}
+        }
+        self.assertEqual(
+            load(mapped).agents[0].subscription_token_by_project,
+            (("alpha", "CLAUDE_CODE_OAUTH_TOKEN_SECOND"),),
+        )
+        self.assertEqual(load(subscription).agents[0].subscription_token_by_project, ())
+        for agent in (
+            claude | {"subscription_token_by_project": {"alpha": "CLAUDE_CODE_OAUTH_TOKEN_SECOND"}},
+            subscription | {"subscription_token_by_project": {"alpha": "ANTHROPIC_API_KEY"}},
+            subscription | {"subscription_token_by_project": {"alpha": "CLAUDE_CODE_OAUTH_TOKEN"}},
+            subscription | {"subscription_token_by_project": ["alpha"]},
+            subscription
+            | {
+                "subscription_token_by_project": {
+                    "alpha": "CLAUDE_CODE_OAUTH_TOKEN_SECOND",
+                    "beta": "CLAUDE_CODE_OAUTH_TOKEN_SECOND",
+                }
+            },
+        ):
+            with (
+                self.subTest(agent=agent["subscription_token_by_project"]),
+                self.assertRaisesRegex(HubConfigError, "subscription_token_by_project"),
+            ):
+                load(agent)
+        with self.assertRaisesRegex(HubConfigError, "unregistered project"):
+            load(
+                subscription
+                | {"subscription_token_by_project": {"beta": "CLAUDE_CODE_OAUTH_TOKEN_SECOND"}}
+            )
         self.assertIsNotNone(
             load(claude, claude_file_permissions=permissions | {"profile": "developer"})
         )

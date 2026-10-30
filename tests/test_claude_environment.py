@@ -97,6 +97,7 @@ class ClaudeEnvironmentTests(unittest.TestCase):
         )
         with (
             tempfile.TemporaryDirectory() as directory,
+            patch.object(adapter, "_turn_environment", return_value={}),
             patch.object(adapter, "_prepare_claude_input", return_value=None),
             patch.object(
                 adapter,

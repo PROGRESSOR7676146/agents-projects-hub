@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -151,6 +152,27 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertFalse(worker.run_cycle())
         self.assertEqual(len(adapter.calls), 1)
 
+    def test_worker_moves_subscription_tokens_out_of_its_own_environment(self) -> None:
+        tokens = {
+            "CLAUDE_CODE_OAUTH_TOKEN": "first",
+            "CLAUDE_CODE_OAUTH_TOKEN_SECOND": "second",
+        }
+        with patch.dict("os.environ", tokens):
+            worker = ExternalQueueWorker(
+                self.fixture.config,
+                "claude",
+                registry=self.fixture.registry,
+                worker_id="example-claude-worker",
+            )
+            self.addCleanup(worker.close)
+            # Helper subprocesses inherit nothing; only Claude launches get one.
+            self.assertEqual(
+                [key for key in os.environ if key.startswith("CLAUDE_CODE_OAUTH_TOKEN")], []
+            )
+        self.assertEqual(
+            cast(ExternalCliAdapter, worker.adapter).claude_subscription_tokens, tokens
+        )
+
     def test_first_invocation_receives_new_uuid_already_committed_with_root(self) -> None:
         job_id = self.enqueue(1)
         adapter = ObservingClaudeAdapter(self.path)
@@ -162,6 +184,10 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertIsNone(adapter.calls[0]["session_id"])
         native = self.assert_binding_visible_before_invocation(adapter)
         self.assertEqual(adapter.calls[0]["new_session_id"], native)
+        # The project selects its fixed subscription account (ADR 0082).
+        self.assertEqual(
+            adapter.calls[0]["project_id"], self.fixture.registry.projects[0].project_id
+        )
         self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
         self.assertEqual(worker.state.get_provider_result(job_id).provider_session_id, native)
         checkpoint = ExecutionJournal(worker.state).read(job_id)

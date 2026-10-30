@@ -26,6 +26,7 @@ OPTIONS = (
     "--strict-mcp-config",
     "--disable-slash-commands",
     "--settings",
+    "--setting-sources",
     "--permission-mode",
     "--permission-prompts",
     "--tools",

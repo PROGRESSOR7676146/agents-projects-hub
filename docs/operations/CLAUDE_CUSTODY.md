@@ -97,19 +97,39 @@ For `auth_route: subscription` ([ADR 0082](../decisions/0082-claude-subscription
 1. The owner runs `claude setup-token` and writes
    `CLAUDE_CODE_OAUTH_TOKEN=<token>` to
    `~/.config/agents-projects-hub/claude-subscription.env` with mode 0600. Only
-   the Claude worker units read this file. Agents never see or copy the token.
+   the Claude worker units read this file. Hub never puts the token in
+   configuration, prompts, logs or Telegram.
+   To give a project its own account, the owner runs `claude setup-token`
+   while signed in to that account, adds
+   `CLAUDE_CODE_OAUTH_TOKEN_<SUFFIX>=<token>` to the same file and sets
+   `"subscription_token_by_project": {"<project_id>": "CLAUDE_CODE_OAUTH_TOKEN_<SUFFIX>"}`
+   on the Claude agent. Other projects keep the default token.
 2. Remove `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`
-   from the environment of the Claude workers; the preflight refuses them. The
-   worker's own Claude settings must not define `apiKeyHelper`.
-3. The owner confirms that the account's extra usage is off.
+   from the environment of the Claude workers; the preflight refuses them. Hub
+   launches load no user, project or local Claude settings, but admin-managed
+   settings still apply: confirm they define no `env` credential, provider
+   selector or `apiKeyHelper`. Confirm that the worker's Claude home holds no
+   stored login, so nothing can stand in for a rejected token.
+3. The owner confirms that extra usage is off on every account.
 4. Set `"auth_route": "subscription"` on the Claude agent and restart only the
    Claude workers through the service manager. `developer` is refused on this
    route; `editor` and `workstation` are allowed.
-5. Accept one text-only and one editor turn on the exact deployed revision, and
-   check that an injected API key is refused before launch.
+5. On the exact deployed revision, record the CLI version and, for every
+   Claude worker unit, its effective environment files and Claude home. Claude
+   turns run only in these queue workers; the provider service refuses Claude.
+   Accept one text-only, one editor and one workstation turn, a new and a
+   resumed turn in each bound project and in a default project with the account
+   identified, an injected API key refused before launch, and a turn with a
+   deliberately invalid token failing rather than succeeding. A limit on one
+   account must end that turn with a limit notice, not move it to the other.
 
-Rollback is `"auth_route": "cpa"` with the CPA variables restored and a Claude
-worker restart. Renew the token before its one-year expiry.
+Rollback: remove `subscription_token_by_project`, set `"auth_route": "cpa"`,
+take `claude-subscription.env` out of the Claude workers' environment (the CPA
+route refuses any subscription token), restore the CPA variables, validate the
+configuration and restart the Claude workers. A bound project then runs on the
+CPA account; pause it instead if that is unacceptable. Renew each token from its
+own account before its one-year expiry. A worker reads the tokens once at start,
+so a changed token takes effect only after a Claude worker restart.
 
 ## Stop, rollback and closure
 

@@ -85,6 +85,7 @@ class ExternalAgentService:
             executable=self.agent.executable,
             runtime_home=self.agent.runtime_home,
             claude_auth_route=self.agent.auth_route,
+            claude_token_by_project=dict(self.agent.subscription_token_by_project),
         )
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
@@ -378,6 +379,7 @@ class ExternalAgentService:
         validate_execution_root(self.registry, project)
         result = self.adapter.run_turn(
             cwd=project.root,
+            project_id=project.project_id,
             session_id=session.provider_session_id,
             model=session.model if session.model != "provider-selected" else None,
             effort=session.effort,
@@ -642,6 +644,7 @@ class ExternalAgentService:
             ):
                 result = self.adapter.run_turn(
                     cwd=project.root,
+                    project_id=project.project_id,
                     prompt=telegram_turn_prompt(
                         prompt,
                         runtime=self.agent.runtime,
@@ -661,10 +664,7 @@ class ExternalAgentService:
             self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
             if isinstance(exc, ProviderLimitError):
                 self.state.record_runtime_event(
-                    self.agent.agent_id,
-                    "warning",
-                    "provider_limit",
-                    exc.limit.to_json(),
+                    self.agent.agent_id, "warning", "provider_limit", exc.limit.to_json()
                 )
                 visible = (
                     f"{self.agent.display_name}: {exc.limit.window} limit exhausted. "
