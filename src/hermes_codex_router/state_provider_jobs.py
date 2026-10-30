@@ -1175,10 +1175,12 @@ class ProviderJobsStateFacade:
     ) -> ProviderJobRecord:
         if not 1 <= lease_seconds <= 3600:
             raise self._state_error("invalid provider lease duration")
-        current = now or datetime.now(timezone.utc)
-        timestamp = self._timestamp(current)
-        expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
-        with self._write_transaction():
+        with self._transaction():
+            # Acquiring SQLite's writer can wait. Sample the live clock only
+            # after acquisition so that wait cannot revive expired ownership.
+            current = now or datetime.now(timezone.utc)
+            timestamp = self._timestamp(current)
+            expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
             cursor = self._connection.execute(
                 """UPDATE provider_jobs SET lease_expires_at = ?, updated_at = ?
                    WHERE job_id = ? AND status IN ('leased', 'executing')
