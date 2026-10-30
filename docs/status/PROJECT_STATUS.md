@@ -1,7 +1,7 @@
 # Project status
 
 Status: active alpha
-Release: v0.8.1
+Release: v0.9.0
 
 Source checkpoint: [0.8.0](../operations/RELEASE_0_8_0.md); earlier entries
 are historical. The PR/tag own combined source gates; live acceptance is separate.
