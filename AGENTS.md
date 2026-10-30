@@ -134,8 +134,14 @@ revision and highest proven level.
   is required. Required canonical validation, exact-head hosted checks and
   applicable independent review MUST pass first, with findings recorded in the
   PR. Recheck the current head and base, pin the expected head when merging,
-  and satisfy branch protection without administrative bypasses. Tags, branch
-  deletion and deployment still need the owner's explicit authorization each time.
+  and satisfy branch protection without administrative bypasses.
+- The owner permanently delegates publication of changes, pull requests,
+  releases and new immutable tags to agents within their assigned task scope;
+  no per-publication or per-tag confirmation is required. Mandatory canonical
+  validation, privacy checks, applicable independent review, exact-head hosted
+  gates and branch protection remain in force. Never move existing tags or
+  expand the task scope. Deployment, service restarts, credential changes and
+  branch deletion retain their separate authorization requirements.
 - Provider work may proceed while live acceptance is pending (ADR 0045), but
   never present repository evidence as deployment evidence; track open live
   acceptance in `docs/operations/STABILIZATION_PLAN.md`.

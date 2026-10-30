@@ -17,7 +17,7 @@ from unittest.mock import patch
 from hermes_codex_router.claude_file_policy import require_file_tool_event
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from hermes_codex_router.claude_mount_pins import MountPins, SandboxLaunch
-from hermes_codex_router.claude_permission_wait import PermissionWaitClock
+from hermes_codex_router.claude_permission_wait import PermissionWaitClock, ProductiveDeadline
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeTerminalFailure,
@@ -805,7 +805,9 @@ class ExternalRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             child_pid = Path(directory) / "descendant-pid"
             source = (
-                "import os, pathlib, subprocess, sys\n"
+                "import os, pathlib, subprocess, sys, time\n"
+                # Startup must not race the real 0.2-second productive budget.
+                "time.sleep(0.3)\n"
                 "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
                 f"marker = pathlib.Path({str(child_pid)!r})\n"
                 "ready = marker.with_suffix('.ready')\n"
@@ -814,6 +816,12 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
             clock = LeaderExitClock(child_pid)
             with (
+                patch(
+                    "hermes_codex_router.external_runtime.ProductiveDeadline",
+                    side_effect=lambda seconds, wait: ProductiveDeadline(
+                        seconds, wait, clock=clock.monotonic
+                    ),
+                ),
                 patch(
                     "hermes_codex_router.external_runtime.time",
                     # A loaded host can still see the leader alive at
