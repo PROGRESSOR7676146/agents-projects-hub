@@ -56,6 +56,7 @@ live acceptance.
 - [Saved Codex session connection](operations/SESSION_CONNECT.md)
 - [Project/group onboarding](operations/PROJECT_GROUP_ONBOARDING_PLAN.md)
 - [Testing and privacy gate](testing/README.md)
+- [Native Claude streamed-input characterization](testing/CLAUDE_STREAM_INPUT.md)
 
 ## Research proposals
 

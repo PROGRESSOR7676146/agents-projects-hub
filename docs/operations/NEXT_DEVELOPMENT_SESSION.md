@@ -2,6 +2,17 @@
 
 ## Current goal and order
 
+Next owner-selected source increment: Claude streamed input. Its first step is
+the bounded [native protocol characterization](../testing/CLAUDE_STREAM_INPUT.md)
+on integrated source `f50073e`; owner/writer: primary development agent, source
+lane `feat/claude-steer`. This does not enable steering or extensions. Next
+trigger: verify native receipt/result ordering and source gates, then implement
+durable correction ownership and the late-input FIFO boundary before live
+acceptance. Inspect tracked/staged/untracked state before any lane cleanup.
+Closure is limited to characterization; the functional increment remains open.
+Historical developer-toolchain checkpoints below retain their original source
+context; current deployment acceptance evidence is private operational state.
+
 The bounded minimal Claude developer goal is **complete (100/100)**. Verified
 source closure: `2f6fa35309dd76c840d3135c9eb7a84e6baed97b` (reviewed documentation
 publication), on the integrated developer/recovery source. The source follow-up
