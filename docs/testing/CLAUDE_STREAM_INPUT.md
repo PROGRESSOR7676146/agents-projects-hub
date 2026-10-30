@@ -12,7 +12,8 @@ The host also needs `/usr/bin/bwrap`, permitted unprivileged user/PID/network
 namespaces and `/usr/bin/python3` at least 3.10 inside the fixture. The ordinary
 source suite requires Python 3.11 or later. Ubuntu AppArmor may deny namespace
 creation; an unavailable prerequisite is a failed required native run, not evidence
-about the CLI or Hub. Developer environments without the explicit opt-in skip it.
+about the CLI or Hub. Without the executable variable, developer environments
+skip the native run; the require flag turns that absence into a failure.
 
 ```bash
 HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude \
@@ -41,7 +42,8 @@ consumption: its position is established by the resulting receipt/request trace.
 | Final answer | Two native terminal results occur in the same session; the first precedes the correction echo and request two includes the correction |
 
 Both require exact ordered input UUIDs/content, matching session, successful
-process/results, request bounds (including unsupported methods and parser errors)
+process/results, request bounds (including unsupported methods, parser errors
+and unhandled connections at shutdown)
 and independent host-file/loopback exclusion.
 An echo, successful pipe write or exit code alone does not prove consumption
 within the original turn. The fixture does not test injection during a running

@@ -16,6 +16,7 @@ from tests.claude_native_stream_input_fixture import (
     INPUT_IDS,
     SCENARIOS,
     _make_server,
+    _stop_server,
     run_native_input,
     validate_observation,
 )
@@ -89,18 +90,49 @@ class StreamInputObservationTests(unittest.TestCase):
         release.set()
         counts = {"posts": 0, "violations": 0, "heads": 0}
         requests = []
-        server = _make_server(
-            "tool-loop", threading.Event(), release, requests, counts, threading.Lock()
-        )
+        lock = threading.Lock()
+        server = _make_server("tool-loop", threading.Event(), release, requests, counts, lock)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
             yield server, counts, requests
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(3)
-            self.assertFalse(thread.is_alive())
+            _stop_server(server, thread, release, counts, lock)
+
+    def test_shutdown_conserves_unhandled_request_before_snapshot(self):
+        first, release = threading.Event(), threading.Event()
+        counts = {"posts": 0, "violations": 0, "heads": 0}
+        lock = threading.Lock()
+        server = _make_server("tool-loop", first, release, [], counts, lock)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread.start()
+        stopped = False
+        body = json.dumps(
+            {"model": "claude-opus-5-5", "stream": True, "tools": [{"name": "Read"}]}
+        ).encode()
+        try:
+            with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as active:
+                active.sendall(
+                    b"POST /v1/messages HTTP/1.0\r\nContent-Length: "
+                    + str(len(body)).encode()
+                    + b"\r\n\r\n"
+                    + body
+                )
+                self.assertTrue(first.wait(2), "first handler must be active")
+                with socket.create_connection(
+                    ("127.0.0.1", server.server_port), timeout=2
+                ) as pending:
+                    pending.sendall(b"GET /unexpected HTTP/1.0\r\n\r\n")
+                    stopped = True
+                    _stop_server(server, thread, release, counts, lock)
+                    with lock:
+                        report = self.report()
+                        report["violations"] = counts["violations"]
+                    with self.assertRaises(ValueError):
+                        validate_observation(report, "tool-loop")
+        finally:
+            if not stopped:
+                _stop_server(server, thread, release, counts, lock)
 
     def test_scripted_post_bound_is_conserved(self):
         with self.server() as (server, counts, requests):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import selectors
 import socket
 import subprocess
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -215,7 +216,10 @@ def _capture(
                     sent = True
                     release.set()
                 for key, _ in selector.select(0.05):
-                    chunk = os.read(key.fd, 8192)
+                    try:
+                        chunk = os.read(key.fd, 8192)
+                    except (InterruptedError, BlockingIOError):
+                        continue
                     if not chunk:
                         selector.unregister(key.fileobj)
                     elif key.fileobj is process.stdout:
@@ -256,10 +260,10 @@ def _make_server(
     requests: list[dict[str, Any]],
     counts: dict[str, int],
     lock: Any,
-) -> ThreadingHTTPServer:
-    class Server(ThreadingHTTPServer):
-        daemon_threads = True
-
+) -> HTTPServer:
+    # Native model requests are sequential. A single bounded handler also makes
+    # shutdown a barrier for all handler activity before the report snapshot.
+    class Server(HTTPServer):
         def get_request(self):
             connection, address = super().get_request()
             connection.settimeout(3)
@@ -272,6 +276,9 @@ def _make_server(
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
             pass
+
+        def log_error(self, format: str, *args: Any) -> None:
+            self.violation()
 
         def violation(self) -> None:
             with lock:
@@ -304,15 +311,16 @@ def _make_server(
                 counts["posts"] += 1
                 ordinal = counts["posts"]
             size = int(self.headers.get("Content-Length", "0"))
-            if (
-                ordinal > 2
-                or not 0 < size <= 300000
-                or self.path not in ("/v1/messages", "/v1/messages?beta=true")
-            ):
+            if not 0 < size <= 300000:
                 self.violation()
                 self.respond(400)
                 return
-            body = json.loads(self.rfile.read(size))
+            raw = self.rfile.read(size)
+            if ordinal > 2 or self.path not in ("/v1/messages", "/v1/messages?beta=true"):
+                self.violation()
+                self.respond(400)
+                return
+            body = json.loads(raw)
             tools = {"Read"} if scenario == "tool-loop" else set()
             if (
                 body.get("model") != "claude-opus-5-5"
@@ -335,6 +343,28 @@ def _make_server(
             )
 
     return Server(("127.0.0.1", 0), Handler)
+
+
+def _stop_server(
+    server: HTTPServer,
+    thread: threading.Thread,
+    release: threading.Event,
+    counts: dict[str, int],
+    lock: Any,
+) -> None:
+    release.set()
+    try:
+        server.shutdown()
+        # A connection queued before native exit must not disappear uncounted
+        # when the listener closes. Refuse it without accepting or parsing it.
+        if select.select([server.socket], [], [], 0)[0]:
+            with lock:
+                counts["violations"] += 1
+    finally:
+        server.server_close()
+        thread.join(3)
+        if thread.is_alive():
+            raise ValueError("example_native_input_server_cleanup_failed")
 
 
 def _successful_read(request: dict[str, Any]) -> bool:
@@ -428,47 +458,47 @@ def actor(scenario: str, sentinel: str, port: str) -> dict[str, Any]:
         code, frames, stderr_bytes, open_until_results = _capture(
             argv, environment, first, release, scenario
         )
-        terminals = [f for f in frames if f.get("type") == "result"]
-        echoes = [f for f in frames if f.get("type") == "user" and f.get("uuid") in INPUT_IDS]
-        boundary = next((i for i, f in enumerate(frames) if f.get("type") == "result"), len(frames))
-        messages = [json.dumps(r.get("messages")) for r in requests]
-        return {
-            "scenario": scenario,
-            "exit_code": code,
-            "posts": counts["posts"],
-            "violations": counts["violations"],
-            "correction_in_requests": [CORRECTION in m for m in messages],
-            "initial_in_requests": [INITIAL in m for m in messages],
-            "tool_result_in_requests": ['"tool_result"' in m for m in messages],
-            "successful_read_in_requests": [_successful_read(r) for r in requests],
-            "stdin_open_until_results": open_until_results,
-            "results": len(terminals),
-            "successes": [
-                r.get("subtype") == "success" and r.get("is_error") is False for r in terminals
-            ],
-            "echoed_ids": [e["uuid"] for e in echoes],
-            "exact_echoes": len(echoes) == 2
-            and all(
-                e.get("message") == {"role": "user", "content": text}
-                for e, text in zip(echoes, (INITIAL, CORRECTION), strict=True)
-            ),
-            "correction_before_first_result": any(
-                f.get("uuid") == INPUT_IDS[1] for f in frames[:boundary]
-            ),
-            "same_session": all(f.get("session_id") == SESSION for f in terminals + echoes)
-            and all(f["session_id"] == SESSION for f in frames if "session_id" in f),
-            "stderr_bytes": stderr_bytes,
-            "native_version": version.decode().strip(),
-            "host_files_hidden": not Path(sentinel).exists(),
-            "host_loopback_blocked": blocked,
-        }
     finally:
-        release.set()
-        server.shutdown()
-        server.server_close()
-        thread.join(3)
-        if thread.is_alive():
-            raise ValueError("example_native_input_server_cleanup_failed")
+        _stop_server(server, thread, release, counts, lock)
+    # No request handler survives shutdown of the serial server. Copy only
+    # after that barrier, including the explicitly rejected listener backlog.
+    with lock:
+        counts = dict(counts)
+        requests = list(requests)
+    terminals = [f for f in frames if f.get("type") == "result"]
+    echoes = [f for f in frames if f.get("type") == "user" and f.get("uuid") in INPUT_IDS]
+    boundary = next((i for i, f in enumerate(frames) if f.get("type") == "result"), len(frames))
+    messages = [json.dumps(r.get("messages")) for r in requests]
+    return {
+        "scenario": scenario,
+        "exit_code": code,
+        "posts": counts["posts"],
+        "violations": counts["violations"],
+        "correction_in_requests": [CORRECTION in m for m in messages],
+        "initial_in_requests": [INITIAL in m for m in messages],
+        "tool_result_in_requests": ['"tool_result"' in m for m in messages],
+        "successful_read_in_requests": [_successful_read(r) for r in requests],
+        "stdin_open_until_results": open_until_results,
+        "results": len(terminals),
+        "successes": [
+            r.get("subtype") == "success" and r.get("is_error") is False for r in terminals
+        ],
+        "echoed_ids": [e["uuid"] for e in echoes],
+        "exact_echoes": len(echoes) == 2
+        and all(
+            e.get("message") == {"role": "user", "content": text}
+            for e, text in zip(echoes, (INITIAL, CORRECTION), strict=True)
+        ),
+        "correction_before_first_result": any(
+            f.get("uuid") == INPUT_IDS[1] for f in frames[:boundary]
+        ),
+        "same_session": all(f.get("session_id") == SESSION for f in terminals + echoes)
+        and all(f["session_id"] == SESSION for f in frames if "session_id" in f),
+        "stderr_bytes": stderr_bytes,
+        "native_version": version.decode().strip(),
+        "host_files_hidden": not Path(sentinel).exists(),
+        "host_loopback_blocked": blocked,
+    }
 
 
 if __name__ == "__main__":
