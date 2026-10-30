@@ -149,6 +149,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "schema_claude_permissions.py",
                         "schema_claude_activity.py",
                         "schema_claude_material_notice.py",
+                        "schema_claude_corrections.py",
                         "schema_delivery_certainty.py",
                         "schema_delivery_receipts.py",
                         "schema_delivery_holds.py",

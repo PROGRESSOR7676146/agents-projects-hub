@@ -63,6 +63,10 @@ WITH target AS (
         FROM provider_job_absorptions a JOIN target t ON a.child_job_id=t.job_id
     UNION ALL SELECT 'absorbs', a.child_job_id
         FROM provider_job_absorptions a JOIN target t ON a.parent_job_id=t.job_id
+    UNION ALL SELECT 'absorbed_into', c.parent_job_id
+        FROM claude_input_children c JOIN target t ON c.child_job_id=t.job_id
+    UNION ALL SELECT 'absorbs', c.child_job_id
+        FROM claude_input_children c JOIN target t ON c.parent_job_id=t.job_id
     UNION ALL SELECT 'continued_from', c.source_job_id
         FROM provider_job_continuations c JOIN target t ON c.continuation_job_id=t.job_id
     UNION ALL SELECT 'continued_as', c.continuation_job_id

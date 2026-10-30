@@ -27,7 +27,10 @@ class DeliveryReceiptMigrationTests(unittest.TestCase):
             before = db.execute("SELECT * FROM telegram_outbox").fetchall()
             parts = db.execute("SELECT * FROM telegram_outbox_parts").fetchall()
         result = migrations.migrate_database(self.path)
-        self.assertEqual((result.previous_version, result.current_version), (53, 54))
+        self.assertEqual(
+            (result.previous_version, result.current_version),
+            (53, migrations.LATEST_SCHEMA_VERSION),
+        )
         assert result.backup_path
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
         with closing(sqlite3.connect(result.backup_path)) as backup:
