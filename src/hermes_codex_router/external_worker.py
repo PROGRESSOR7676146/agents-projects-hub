@@ -1190,6 +1190,7 @@ class ExternalQueueWorker:
         try:
             from .claude_permission_host import hosted_claude_launch
             from .worker_claude_activity import claude_process_observation_for_turn
+            from .worker_claude_corrections import corrections_for_turn
 
             with (
                 hosted_claude_launch(
@@ -1233,6 +1234,14 @@ class ExternalQueueWorker:
                     claude_images=prepared.claude_images,
                     pending_stop_request=lambda: self.state.pending_emergency_stop_for_job(
                         job.job_id
+                    ),
+                    claude_corrections=corrections_for_turn(
+                        self.config,
+                        self.state,
+                        job,
+                        token,
+                        Path(project.root),
+                        runtime=self.agent.runtime,
                     ),
                 )
             if claude_journal is not None and claude_session_binding is not None:

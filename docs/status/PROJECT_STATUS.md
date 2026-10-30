@@ -15,6 +15,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
+| Claude corrections during execution | Opt-in bounded source candidate (schema55); review/publication pending | Pending | [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0083](../decisions/0083-durable-claude-corrections.md) |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
 | Claude Code CPA worker | Text-only default; opt-in developer and workstation implemented; confined linked worktrees; subscription route: ADR 0082 | Bounded ordinary-root developer acceptance complete; linked-worktree productive acceptance and full parity remain separate | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
 | Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending scoped live checks; global helper/admin isolation not claimed; unsupported local boundaries remain refused | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
@@ -555,10 +556,8 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   when a telemetry cache still reports unused quota; a newly started worker
   remains yellow/unknown until a provider turn proves availability. Stale quota
   values remain labeled as cached and cannot trigger low-quota alerts.
-- Provider replies share one compact Telegram identity line: session and agent
-  are not duplicated, model and effort use one label, and runtime implementation
-  details are hidden. Available context and quota telemetry uses short follow-up
-  lines with mobile-friendly reset timestamps; unavailable fields are omitted.
+- Provider replies use one compact identity/model line and omit unavailable
+  context/quota telemetry; see [interaction](../product/IDENTITY_AND_INTERACTION.md).
 - Provider failure notices use the same durable Telegram outbox without being
   misclassified as successful model results. Antigravity consumes only a
   per-turn private diagnostic log, recognizes the provider's unsupported-network
@@ -569,9 +568,8 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
 - Declarative Telegram command-menu synchronization.
 - Durable bounded Telegram burst collection keeps an unaddressed continuation
   with the first part's provider, including a satellite provider; socket-backed
-  Codex same-turn steering, deterministic queued follow-up for runtimes without
-  steering, and exact-utterance emergency stop with provider/process
-  interruption are also implemented.
+  Codex steering and deterministic FIFO fallback; see [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md).
+  Exact-utterance stop uses provider/process interruption.
 - Schema version 21 bounds diagnostic `runtime_events` to 30 days and the newest
   10,000 rows, pruning atomically with each insertion and independently of
   current health, alert state, and provider work. Version 20 added bounded
@@ -606,10 +604,8 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.
-- Canonical validation and CI audit package version, the newest changelog
-  release, project-status release, and local `vX.Y.Z` tags for contradictions.
-  Missing release tags are reported as non-mutating debt; Git SHA reported by
-  immutable runtime artifacts remains the deployment identity.
+- Canonical validation and CI audit release metadata consistency; missing tags
+  remain non-mutating debt. Exact Git SHA identifies deployed source.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
   One external declaration can authorize only an exact public author-email span

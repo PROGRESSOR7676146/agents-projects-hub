@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
+from .claude_correction_state import ClaudeCorrectionState
 from .codex_control_predicates import (
     control_owner_for_topic,
     control_scope_is_clear,
@@ -653,6 +654,7 @@ class ProviderJobsStateFacade:
         )
         if cursor.rowcount != 1:
             return False
+        ClaudeCorrectionState(self._connection).settle(job_id, "cancelled", timestamp)
         self._sync_visibility(job_id, timestamp)
         if complete_stops:
             self._complete_stops_after(job_id, timestamp)
@@ -965,6 +967,13 @@ class ProviderJobsStateFacade:
         """Requeue an executing child only after proven rejection or no RPC attempt."""
         timestamp = self._now()
         with self._write_transaction():
+            if (
+                ClaudeCorrectionState(self._connection).available()
+                and self._connection.execute(
+                    "SELECT 1 FROM claude_input_children WHERE child_job_id=?", (job_id,)
+                ).fetchone()
+            ):
+                raise self._state_error("submitted Claude input cannot be replayed")
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'queued', attempt_count = MAX(0, attempt_count - 1),
@@ -1185,6 +1194,8 @@ class ProviderJobsStateFacade:
                      AND lease_token = ? AND lease_expires_at > ?""",
                 (expires_at, timestamp, job_id, lease_token, timestamp),
             )
+            if cursor.rowcount == 1:
+                ClaudeCorrectionState(self._connection).heartbeat(job_id, timestamp, expires_at)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing, expired, or invalid")
         return self.get(job_id)
@@ -1254,6 +1265,8 @@ class ProviderJobsStateFacade:
                      AND lease_token = ? AND lease_expires_at > ?""",
                 (failure_class, code, detail, timestamp, job_id, lease_token, timestamp),
             )
+            if cursor.rowcount == 1:
+                ClaudeCorrectionState(self._connection).settle(job_id, "failed", timestamp)
             self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing or invalid")
@@ -1281,6 +1294,8 @@ class ProviderJobsStateFacade:
                      AND lease_expires_at > ?""",
                 (code, detail, timestamp, job_id, lease_token, timestamp),
             )
+            if cursor.rowcount == 1:
+                ClaudeCorrectionState(self._connection).settle(job_id, "indeterminate", timestamp)
             self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing or invalid")

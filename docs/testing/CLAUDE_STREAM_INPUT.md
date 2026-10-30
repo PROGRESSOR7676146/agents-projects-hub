@@ -1,7 +1,8 @@
 # Native Claude streamed-input characterization
 
-This is an offline protocol fixture, not Hub steering implementation or live
-Telegram acceptance. Owning behavior remains
+The original mode is an offline protocol characterization. An additional owned
+runner mode exercises the product pipe and receipt parser against the same
+fictional server. Neither is live Telegram acceptance. Owning behavior remains
 [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md#message-semantics).
 
 ## Reproduce
@@ -50,11 +51,11 @@ within the original turn. The fixture does not test injection during a running
 Bash command, corrections sent after the first result, idle behavior with an
 indefinitely open pipe, native interruption, permissions, model comprehension or billing.
 
-## Consequence for the next source increment
+## Functional source increment
 
 `--input-format stream-json --replay-user-messages` is a usable native input
 channel. It is not an expected-active-turn precondition like Codex `turn/steer`.
-The current Hub runner closes stdin and accepts one terminal result; merely
+The default Hub runner closes stdin and accepts one terminal result; merely
 leaving its pipe open would neither preserve durable child ownership nor support
 the observed second terminal result.
 
@@ -66,6 +67,18 @@ receipt/result persistence. Do not automatically interrupt tools or interpret
 an echoed input as completed work. Late input must retain FIFO semantics;
 unknown submission must not be replayed. Keep existing profiles and extensions
 unchanged. Source review and separately authorized live acceptance remain open.
+
+[ADR 0083](../decisions/0083-durable-claude-corrections.md) adds a default-off
+functional candidate. `tests.test_claude_correction_worker` exercises actual
+owned fictional processes through the worker, SQLite and result/outbox commit,
+including failed receipt persistence, stop and saved-result recovery. The
+state/config/migration fixtures cover admission refusal, reservation rollback,
+capacity, immutable records and schema54-to55 backup/DDL faults.
+The additional opt-in native method runs the actual product pipe reader in the
+empty namespace with the supplied binary, two scripted requests, no credentials
+or inference. It verifies native receipt/result order for both scenarios. Its
+fictional Read policy does not exercise the protected permission host, productive
+Bash, real Telegram, billing, comprehension or installed restart acceptance.
 
 References: [official streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode.md),
 [CLI replay flag](https://code.claude.com/docs/en/cli-reference.md#cli-flags),

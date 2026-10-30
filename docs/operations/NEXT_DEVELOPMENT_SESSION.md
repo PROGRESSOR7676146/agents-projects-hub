@@ -2,7 +2,17 @@
 
 ## Current goal and order
 
-Next owner-selected source increment: Claude streamed input. Its first step is
+Active functional increment: bounded durable Claude corrections under
+[ADR 0083](../decisions/0083-durable-claude-corrections.md), based on reviewed
+characterization `237386f`. Owner/sole writer: primary development agent;
+lane `feat/claude-durable-corrections`, base `feat/claude-steer` source above.
+State: implementation and failure-focused verification; publication and installed
+acceptance pending. Next trigger: exact-source review/canonical/hosted gates,
+then separately scoped deployment and real Telegram correction/stop/recovery
+acceptance. Extensions follow this increment. Inspect tracked/staged/untracked
+state after integration before cleanup. Functional closure remains open.
+
+Previous prerequisite: Claude streamed input. Its first step was
 the bounded [native protocol characterization](../testing/CLAUDE_STREAM_INPUT.md)
 on integrated source `f50073e`; owner/writer: primary development agent, source
 lane `feat/claude-steer`. This does not enable steering or extensions. Next

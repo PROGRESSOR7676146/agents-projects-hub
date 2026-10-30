@@ -13,6 +13,7 @@ from .approval_surface import ApprovalWait
 from .approval_surface_state import pending_approval_waits
 from .artifacts import ValidatedArtifact
 from .assessment_inputs import OutcomeAssessmentInput
+from .claude_correction_state import ClaudeCorrectionState
 from .codex_control_predicates import control_owner_for_topic
 from .codex_ingress_assessments import CodexIngressAssessments
 from .codex_ingress_control import CodexIngressControl
@@ -1644,6 +1645,7 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during failure commit")
+            ClaudeCorrectionState(self._connection).settle(job_id, status, timestamp)
             self.queue_visibility.sync_job_in_transaction(
                 job_id, now=datetime.fromisoformat(timestamp)
             )
@@ -1785,8 +1787,14 @@ class HubState:
                     (job_id,),
                 ).fetchall()
             ]
+            claude_payloads = ClaudeCorrectionState(self._connection).complete(job_id, timestamp)
+            absorbed_payloads.extend(claude_payloads)
             combined_excerpt = "\n\n".join([str(job_row["payload_text"]), *absorbed_payloads])
-            visible_user_excerpt = excerpt or _visible_excerpt(combined_excerpt)
+            visible_user_excerpt = (
+                _visible_excerpt(combined_excerpt)
+                if claude_payloads
+                else excerpt or _visible_excerpt(combined_excerpt)
+            )
             self._connection.execute(
                 """INSERT INTO external_turn_excerpts
                    (topic_id, agent_id, provider_session_id, model, provider,

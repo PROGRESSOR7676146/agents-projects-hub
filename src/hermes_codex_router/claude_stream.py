@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from .claude_corrections import ClaudeCorrectionInput
     from .claude_image_receipt import ClaudeImageReceipt
 
 MAX_CLAUDE_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -135,6 +136,7 @@ class ClaudeStreamReader:
         on_visible_assistant: VisibleAssistantCallback | None = None,
         event_policy: Callable[[dict[str, object]], None] | None = None,
         image_receipt: ClaudeImageReceipt | None = None,
+        correction_input: ClaudeCorrectionInput | None = None,
     ) -> None:
         self.session_id = expected_session_id
         self.on_visible_assistant = on_visible_assistant
@@ -142,6 +144,9 @@ class ClaudeStreamReader:
         if event_policy is not None and image_receipt is not None:
             raise ClaudeStreamError("claude image input cannot use file-tool policy")
         self.image_receipt = image_receipt
+        if image_receipt is not None and correction_input is not None:
+            raise ClaudeStreamError("claude corrections cannot use image input")
+        self.correction_input = correction_input
         self._output = bytearray()
         self._pending = bytearray()
         self._events = 0
@@ -165,7 +170,11 @@ class ClaudeStreamReader:
         )
         if self._received_bytes > byte_limit:
             raise ClaudeStreamError("claude structured output exceeded its limit")
-        if self.event_policy is None and self.image_receipt is None:
+        if (
+            self.event_policy is None
+            and self.image_receipt is None
+            and self.correction_input is None
+        ):
             self._output.extend(chunk)
         self._pending.extend(chunk)
         while (end := self._pending.find(b"\n")) >= 0:
@@ -183,6 +192,8 @@ class ClaudeStreamReader:
             self._pending.clear()
         if self.image_receipt is not None:
             self.image_receipt.finish()
+        if self.correction_input is not None:
+            self.correction_input.finish()
         try:
             return self._output.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -230,15 +241,22 @@ class ClaudeStreamReader:
             if self.session_id is not None and self.session_id != identity:
                 raise ClaudeStreamError("claude stream session identity changed")
             self.session_id = identity
-        retain = self.image_receipt.observe(event) if self.image_receipt else True
+        if event.get("type") == "result":
+            _validate_terminal(event)
+        retain = (
+            self.correction_input.observe(event)
+            if self.correction_input
+            else self.image_receipt.observe(event)
+            if self.image_receipt
+            else True
+        )
         if (
             self._terminal_seen
             and event.get("type") != "prompt_suggestion"
             and not (not retain and event.get("type") == "command_lifecycle")
         ):
             raise ClaudeStreamError("claude returned events after its terminal outcome")
-        if event.get("type") == "result":
-            _validate_terminal(event)
+        if event.get("type") == "result" and retain:
             self._terminal_seen = True
         if not retain:
             return
@@ -248,7 +266,7 @@ class ClaudeStreamReader:
             self._output.extend(raw + b"\n")
         if self.on_visible_assistant is not None:
             self._visible_assistant(event)
-        if self.event_policy is not None:
+        if self.event_policy is not None or self.correction_input is not None:
             retained = _file_result_evidence(event)
             if retained is not None:
                 encoded = (json.dumps(retained, ensure_ascii=False) + "\n").encode("utf-8")
