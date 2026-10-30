@@ -7,7 +7,7 @@
     "local-operator"
   ],
   "runbook": "RUNBOOK.md",
-  "maintained_release": "0.9.0",
+  "maintained_release": "0.9.1",
   "state_schema": 55,
   "max_age_days": 30,
   "required_units": [
