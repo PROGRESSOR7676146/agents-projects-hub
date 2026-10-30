@@ -174,6 +174,7 @@ class GracefulLifecycleTests(unittest.TestCase):
 
         direct = cast(Any, ExternalAgentService.__new__(ExternalAgentService))
         direct._stop = threading.Event()
+        direct.direct_messages_only = False
         direct.agent = Agent()
         direct.state = State()
         direct.telegram = Telegram(direct)

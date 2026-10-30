@@ -80,6 +80,7 @@ SITES = frozenset(
         "controller.ingress_retired",
         "controller.ingress_poll_write",
         "controller.ingress_sample_refused",
+        "external_service.health_publish",
         "external_worker.claude_partial_binding",
         "external_runtime.claude_process_observer",
         "worker_claude_activity.open",
