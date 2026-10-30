@@ -4,6 +4,7 @@ import sqlite3
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from hermes_codex_router.claude_correction_state import ClaudeCorrectionState
 from hermes_codex_router.claude_corrections import ClaudeInputFrame
@@ -56,6 +57,50 @@ class ClaudeCorrectionStateTests(unittest.TestCase):
         self.assertEqual(capacity.busy_agents, {"claude": 1})
         self.assertEqual(capacity.occupied_roots, 1)
 
+    def test_correction_size_is_checked_before_reservation(self) -> None:
+        for size in (20_000, 20_001):
+            with self.subTest(size=size):
+                self.setUp()
+                if size == 20_001:
+                    # The released provider_jobs CHECK already rejects this
+                    # input before admission, including batched payloads.
+                    with self.assertRaises(sqlite3.IntegrityError), self.state._connection:
+                        self.state._connection.execute(
+                            "UPDATE provider_jobs SET payload_text=? WHERE job_id=?",
+                            ("x" * size, self.child_id),
+                        )
+                    self.assertIsNone(self.store.child(self.parent_id))
+                    self.assertEqual(self.state.get_provider_job(self.child_id).status, "queued")
+                    continue
+                with self.state._connection:
+                    self.state._connection.execute(
+                        "UPDATE provider_jobs SET payload_text=? WHERE job_id=?",
+                        ("x" * size, self.child_id),
+                    )
+                frame = self.claim()
+                self.assertEqual(frame is not None, size == 20_000)
+                child = self.state.get_provider_job(self.child_id)
+                self.assertEqual(child.status, "executing" if size == 20_000 else "queued")
+                self.assertEqual(child.attempt_count, 1 if size == 20_000 else 0)
+
+    def test_model_selection_change_seals_admission_but_not_original_receipt_or_result(
+        self,
+    ) -> None:
+        with self.state._connection:
+            self.state._connection.execute("UPDATE agent_sessions SET model='other-model'")
+        self.assertIsNone(self.claim())
+        with self.state._immediate_transaction():
+            self.store.receipt(self.parent_id, self.token, self.initial.uuid, 1)
+            self.store.result(self.parent_id, self.token, 1)
+        self.journal.record_claude_completion(
+            self.parent_id,
+            self.token,
+            self.binding.session_id,
+            "Original answer",
+            cwd=self.fixture.root,
+            material_notice="",
+        )
+
     def test_linkage_cannot_be_replaced_or_deleted(self) -> None:
         self.claim()
         for sql in (
@@ -81,6 +126,55 @@ class ClaudeCorrectionStateTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(self.child_id).status, "queued")
         self.assertEqual(self.state.get_provider_job(self.child_id).attempt_count, 0)
         self.assertIsNone(self.store.child(self.parent_id))
+
+    def test_uuid_collision_and_ignored_child_update_do_not_reserve_input(self) -> None:
+        with patch(
+            "hermes_codex_router.claude_correction_state.uuid.uuid4",
+            return_value=uuid.UUID(self.initial.uuid),
+        ):
+            self.assertIsNone(self.claim())
+        with self.state._connection:
+            self.state._connection.execute(
+                "CREATE TRIGGER example_skip_child BEFORE UPDATE OF status ON provider_jobs "
+                "WHEN NEW.job_id='%s' BEGIN SELECT RAISE(IGNORE); END" % self.child_id
+            )
+        with self.assertRaises(StateError):
+            self.claim()
+        self.assertIsNone(self.store.child(self.parent_id))
+        self.assertEqual(self.state.get_provider_job(self.child_id).status, "queued")
+
+    def test_child_queue_notices_follow_execution_and_terminal_status(self) -> None:
+        self.store = ClaudeCorrectionState(
+            self.state._connection, visibility=self.state.queue_visibility
+        )
+        with self.state._immediate_transaction():
+            self.state.queue_visibility.admitted_in_transaction(
+                self.child_id, now=datetime.now(timezone.utc)
+            )
+        self.claim()
+        notices = self.state._connection.execute(
+            "SELECT kind,status FROM task_lifecycle_notices WHERE job_id=?", (self.child_id,)
+        ).fetchall()
+        self.assertIn(("executing", "pending"), [tuple(row) for row in notices])
+        self.state.cancel_active_provider_job(self.parent_id, self.token, complete_stops=True)
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT COUNT(*) FROM task_lifecycle_notices WHERE job_id=? AND status IN ('pending','leased')",
+                (self.child_id,),
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_bulk_stale_recovery_does_not_orphan_submitted_child(self) -> None:
+        self.claim()
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET lease_expires_at=? WHERE status='executing'",
+                ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),),
+            )
+        self.state.recover_stale_provider_jobs(agent_id="claude")
+        self.assertEqual(self.state.get_provider_job(self.parent_id).status, "indeterminate")
+        self.assertEqual(self.state.get_provider_job(self.child_id).status, "indeterminate")
 
     def test_stop_hold_material_context_and_changed_selection_leave_fifo(self) -> None:
         for reason in ("stop", "hold", "context", "model", "generation", "ingress"):

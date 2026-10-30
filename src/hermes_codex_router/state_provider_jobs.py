@@ -654,7 +654,9 @@ class ProviderJobsStateFacade:
         )
         if cursor.rowcount != 1:
             return False
-        ClaudeCorrectionState(self._connection).settle(job_id, "cancelled", timestamp)
+        ClaudeCorrectionState(self._connection, visibility=self._queue_visibility).settle(
+            job_id, "cancelled", timestamp
+        )
         self._sync_visibility(job_id, timestamp)
         if complete_stops:
             self._complete_stops_after(job_id, timestamp)
@@ -1266,7 +1268,9 @@ class ProviderJobsStateFacade:
                 (failure_class, code, detail, timestamp, job_id, lease_token, timestamp),
             )
             if cursor.rowcount == 1:
-                ClaudeCorrectionState(self._connection).settle(job_id, "failed", timestamp)
+                ClaudeCorrectionState(self._connection, visibility=self._queue_visibility).settle(
+                    job_id, "failed", timestamp
+                )
             self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing or invalid")
@@ -1295,7 +1299,9 @@ class ProviderJobsStateFacade:
                 (code, detail, timestamp, job_id, lease_token, timestamp),
             )
             if cursor.rowcount == 1:
-                ClaudeCorrectionState(self._connection).settle(job_id, "indeterminate", timestamp)
+                ClaudeCorrectionState(self._connection, visibility=self._queue_visibility).settle(
+                    job_id, "indeterminate", timestamp
+                )
             self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing or invalid")

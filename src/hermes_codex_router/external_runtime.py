@@ -677,7 +677,12 @@ class ExternalCliAdapter:
                 "claude_stream_input_unverified",
                 "Claude streamed text requires the owned runner without images.",
             )
-        return ClaudeCorrectionInput(prompt, session_id, callbacks)
+        try:
+            return ClaudeCorrectionInput(prompt, session_id, callbacks)
+        except ClaudeStreamError as exc:
+            raise ProviderUnavailableError(
+                "claude_stream_input_unverified", "Claude text input could not be prepared."
+            ) from exc
 
     def _prepare_claude_input(
         self,

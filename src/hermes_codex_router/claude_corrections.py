@@ -12,7 +12,13 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
-from .claude_stream import ClaudeStreamError
+from .claude_stream import MAX_CLAUDE_VISIBLE_CHARACTERS, ClaudeStreamError
+
+MAX_CORRECTION_CHARACTERS = 20_000
+
+
+class ClaudeAdmissionClosed(Exception):
+    """No input was reserved; preserve the parent and use ordinary FIFO."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,19 +78,25 @@ class ClaudeCorrectionInput:
     def _persist(operation: Callable[[], object]) -> object:
         try:
             return operation()
+        except ClaudeAdmissionClosed:
+            raise
         except Exception as exc:
             raise ClaudeStreamError("claude text input persistence failed") from exc
 
     def poll(self) -> bytes | None:
         if self.sealed or len(self.frames) == 2:
             return None
-        frame = self._persist(self.callbacks.claim)
+        try:
+            frame = self._persist(self.callbacks.claim)
+        except ClaudeAdmissionClosed:
+            self.sealed = True
+            return None
         if frame is None:
             return None
         if not isinstance(frame, ClaudeInputFrame) or frame.session_id != self.initial.session_id:
             raise ClaudeStreamError("claude correction binding changed")
         data = frame.encode()
-        if len(frame.text) > 20_000 or frame.uuid == self.initial.uuid:
+        if len(frame.text) > MAX_CORRECTION_CHARACTERS or frame.uuid == self.initial.uuid:
             raise ClaudeStreamError("claude correction exceeded its input contract")
         self.frames.append(frame)
         return data
@@ -161,7 +173,10 @@ class ClaudeCorrectionInput:
         if len(self.results) == 2:
             if any(item.get("is_error") is not False for item in self.results):
                 raise ClaudeStreamError("claude correction has an incomplete terminal outcome")
-            event["result"] = "\n\n".join(str(item["result"]) for item in self.results)
+            aggregate = "\n\n".join(str(item["result"]) for item in self.results)
+            if len(aggregate) > MAX_CLAUDE_VISIBLE_CHARACTERS:
+                raise ClaudeStreamError("claude aggregate result exceeded its limit")
+            event["result"] = aggregate
         return True
 
     def finish(self) -> None:

@@ -6,13 +6,17 @@ import hashlib
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from .claude_corrections import ClaudeInputFrame
+from .claude_corrections import MAX_CORRECTION_CHARACTERS, ClaudeInputFrame
 from .codex_control_predicates import control_owner_for_topic
 from .delivery_hold_predicates import job_blocks_topic_fifo
 from .state_errors import StateError
 from .stop_coverage import pending_stop_for_job
 from .telegram_turn_provenance import TelegramTurnProvenance
+
+if TYPE_CHECKING:
+    from .queue_visibility import QueueVisibilityState
 
 
 def _digest(text: str) -> str:
@@ -20,8 +24,20 @@ def _digest(text: str) -> str:
 
 
 class ClaudeCorrectionState:
-    def __init__(self, connection: sqlite3.Connection):
+    def __init__(
+        self, connection: sqlite3.Connection, *, visibility: QueueVisibilityState | None = None
+    ):
         self.db = connection
+        self.visibility = visibility
+
+    def _sync(self, child: str, timestamp: str, *, executing: bool = False) -> None:
+        if self.visibility is not None:
+            sync = (
+                self.visibility.executing_in_transaction
+                if executing
+                else self.visibility.sync_job_in_transaction
+            )
+            sync(child, now=datetime.fromisoformat(timestamp))
 
     def available(self) -> bool:
         return (
@@ -60,8 +76,6 @@ class ClaudeCorrectionState:
             or row["session_generation"] != row["current_generation"]
             or row["writer_mode"] != "telegram"
             or row["session_status"] == "archived"
-            or row["model"] != row["current_model"]
-            or row["effort"] != row["current_effort"]
             or row["current_chat"] != row["chat_id"]
             or row["execution_scope"] not in (f"root:{row['root']}", f"project:{row['project_id']}")
             or row["completed_text"] is not None
@@ -89,6 +103,8 @@ class ClaudeCorrectionState:
         ).fetchone()
         if (
             run is None
+            or row["model"] != row["current_model"]
+            or row["effort"] != row["current_effort"]
             or run["terminal_count"] != 0
             or self.child(parent) is not None
             or pending_stop_for_job(self.db, parent) is not None
@@ -102,6 +118,7 @@ class ClaudeCorrectionState:
         ).fetchone()
         if candidate is None or (
             candidate["status"] != "queued"
+            or not 0 < len(candidate["payload_text"]) <= MAX_CORRECTION_CHARACTERS
             or candidate["attempt_count"] >= candidate["max_attempts"]
             or any(
                 candidate[field] != row[field]
@@ -142,12 +159,14 @@ class ClaudeCorrectionState:
             str(uuid.uuid4()), str(row["native"]), str(candidate["payload_text"])
         )
         frame.encode()
+        if frame.uuid == run["initial_input_uuid"]:
+            return None
         timestamp = datetime.now(timezone.utc).isoformat()
         self.db.execute(
             "INSERT INTO claude_input_children(parent_job_id,child_job_id,child_lease_token,input_uuid,input_digest) VALUES(?,?,?,?,?)",
             (parent, candidate["job_id"], child_token, frame.uuid, _digest(frame.text)),
         )
-        self.db.execute(
+        changed = self.db.execute(
             """UPDATE provider_jobs SET status='executing',attempt_count=attempt_count+1,
                provider_started_at=?,updated_at=?,lease_owner=?,lease_token=?,lease_expires_at=?,next_attempt_at=NULL
                WHERE job_id=? AND status='queued'""",
@@ -160,6 +179,9 @@ class ClaudeCorrectionState:
                 candidate["job_id"],
             ),
         )
+        if changed.rowcount != 1:
+            raise StateError("Claude correction reservation changed")
+        self._sync(str(candidate["job_id"]), timestamp, executing=True)
         return frame
 
     def receipt(self, parent: str, token: str, identifier: str, boundary: int) -> None:
@@ -275,6 +297,7 @@ class ClaudeCorrectionState:
         )
         if changed.rowcount != 1:
             raise StateError("Claude correction lease changed before settlement")
+        self._sync(str(child["child_job_id"]), timestamp)
 
     def complete(self, parent: str, timestamp: str) -> list[str]:
         self.settle(parent, "completed", timestamp)

@@ -104,6 +104,21 @@ class ClaudeCorrectionTests(unittest.TestCase):
         with self.assertRaises(ClaudeStreamError):
             self.reader.finish()
 
+    def test_two_results_share_one_aggregate_character_bound(self) -> None:
+        for size, accepted in ((99_998, True), (100_000, False)):
+            with self.subTest(size=size):
+                self.setUp()
+                self.feed(self.echo(self.channel.initial))
+                self.channel.poll()
+                self.feed(self.result("a" * 100_000))
+                self.feed(self.echo(self.child))
+                if accepted:
+                    self.feed(self.result("b" * size))
+                    self.assertEqual(len(parse_claude_stream(self.reader.finish()).text), 200_000)
+                else:
+                    with self.assertRaisesRegex(ClaudeStreamError, "aggregate result"):
+                        self.feed(self.result("b" * size))
+
     def test_persistence_failure_aborts_without_a_second_claim(self) -> None:
         self.channel.callbacks.claim = lambda: (_ for _ in ()).throw(RuntimeError("example fault"))
         with self.assertRaises(ClaudeStreamError):

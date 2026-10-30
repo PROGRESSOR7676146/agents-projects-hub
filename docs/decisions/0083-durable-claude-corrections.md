@@ -46,12 +46,21 @@ nonblocking pipes, deadlines, process-group termination and cleanup. The existin
 permission launch keeps its exact original job/lease/profile binding throughout.
 No second monitor writes the input and no callback runs inference.
 
+Optional admission failure seals further admission and preserves ordinary FIFO
+only while no durable child binding exists. An ambiguous reservation commit
+retains uncertainty. Model/effort selection checks govern new admission; they do
+not invalidate receipts/results of the original owned invocation. Child queue
+notices follow reservation and settlement in those same transactions.
+
 The runtime, worker, migration runner and HubState hotspots receive forwarding
 and transaction-local composition only. The new cohesive lifecycle lives in the
 three modules above; extracting another facade would duplicate ownership. The
 bounded entries in `hotspots.json` must be independently reviewed before source
 publication. Reopen on multiple corrections, extensions, changed permission
 ownership or invocation/recovery behavior; next review: 2026-11-13.
+Any new parent terminal path also reopens the settlement audit. Existing bulk
+stale recovery is covered with a synchronized submitted pair; it retains both
+inputs as uncertain. Cross-table terminal enforcement is not added by this ADR.
 
 ## Verification and activation
 
@@ -61,6 +70,10 @@ FIFO/stop/selection/provenance refusal, saved-result settlement, capacity, stale
 leases, immutable linkage and additive migration/DDL rollback. Real subprocess
 fixtures use fictional output, no account or inference. Native characterization
 and product integration evidence remain distinct from installed Telegram E2E.
+The owned file-tool branch also runs with the real stream policy for editor,
+developer and workstation profiles, maximal initial replay, command lifecycle
+and child receipt. Its fictional wrapper does not prove namespace isolation or
+productive Bash/permission-host acceptance.
 
 Activation needs an explicit deployment task, schema55-compatible candidate and
 rollback, exact-source gates and bounded native/Telegram tests for a correction

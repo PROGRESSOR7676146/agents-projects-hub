@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -34,7 +36,13 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
         )
 
     def adapter(
-        self, *, late: bool = False, missing: bool = False, extra: str = "", blocked: bool = False
+        self,
+        *,
+        late: bool = False,
+        missing: bool = False,
+        extra: str = "",
+        blocked: bool = False,
+        accept_child: bool = True,
     ) -> ExternalCliAdapter:
         executable = self.fixture.root / "fictional-provider"
         source = fictional_claude_source(
@@ -44,7 +52,12 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
             "def result(text): emit(dict(type='result',subtype='success',is_error=False,session_id=native,result=text))\n"
             "if '--input-format' not in sys.argv:\n    result('Ordinary answer');sys.exit(0)\n"
             "first=json.loads(sys.stdin.readline());emit(dict(first,isReplay=True))\n"
-            "child=json.loads(sys.stdin.readline())\n"
+            + (
+                "result('Ordinary answer');assert sys.stdin.read()=='';sys.exit(0)\n"
+                if not accept_child
+                else ""
+            )
+            + "child=json.loads(sys.stdin.readline())\n"
             + ("result('First answer')\n" if late else "")
             + ("" if missing else "emit(dict(child,isReplay=True))\n")
             + ("import time;time.sleep(30)\n" if blocked else "")
@@ -166,6 +179,64 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
         parent, child = [self.fixture.enqueue(i) for i in (1, 2)]
         worker = self.worker(self.adapter(extra="sys.exit(7)\n"))
         worker.run_cycle()
+        self.assertEqual(worker.state.get_provider_job(parent).status, "indeterminate")
+        self.assertEqual(worker.state.get_provider_job(child).status, "indeterminate")
+
+    def test_unreserved_admission_fault_preserves_parent_and_fifo(self) -> None:
+        for failure in ("root", "database"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                parent, child = [self.fixture.enqueue(i) for i in (1, 2)]
+                worker = self.worker(self.adapter(accept_child=False))
+                target = (
+                    "hermes_codex_router.worker_claude_corrections.revalidate_worker_execution_root"
+                    if failure == "root"
+                    else "hermes_codex_router.claude_correction_state.ClaudeCorrectionState.claim"
+                )
+                with patch(
+                    target, side_effect=sqlite3.OperationalError("Example admission failure")
+                ) as failed:
+                    worker.run_cycle()
+                self.assertEqual(failed.call_count, 1)
+                self.assertEqual(worker.state.get_provider_job(parent).status, "result_ready")
+                saved = worker.state.get_provider_job(child)
+                self.assertEqual((saved.status, saved.attempt_count), ("queued", 0))
+
+    def test_mid_turn_model_selection_does_not_invalidate_original_result(self) -> None:
+        parent = self.fixture.enqueue(1)
+        worker = self.worker(self.adapter(accept_child=False))
+        original = ClaudeCorrectionInput.observe
+
+        def change(channel, event):
+            retain = original(channel, event)
+            if event.get("isReplay") is True:
+                with worker.state._connection:
+                    worker.state._connection.execute(
+                        "UPDATE agent_sessions SET model='other-model',effort='low'"
+                    )
+            return retain
+
+        with patch.object(ClaudeCorrectionInput, "observe", new=change):
+            worker.run_cycle()
+        self.assertEqual(worker.state.get_provider_job(parent).status, "result_ready")
+
+    def test_admission_commit_ambiguity_cannot_fall_back_to_fifo(self) -> None:
+        parent, child = [self.fixture.enqueue(i) for i in (1, 2)]
+        worker = self.worker(self.adapter())
+        transaction = worker.state._immediate_transaction
+        injected = []
+
+        @contextmanager
+        def ambiguous_commit():
+            with transaction():
+                yield
+            if not injected and ClaudeCorrectionState(worker.state._connection).child(parent):
+                injected.append(True)
+                raise RuntimeError("Example error after reservation committed")
+
+        with patch.object(worker.state, "_immediate_transaction", new=ambiguous_commit):
+            worker.run_cycle()
+        self.assertEqual(injected, [True])
         self.assertEqual(worker.state.get_provider_job(parent).status, "indeterminate")
         self.assertEqual(worker.state.get_provider_job(child).status, "indeterminate")
 

@@ -1645,7 +1645,9 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during failure commit")
-            ClaudeCorrectionState(self._connection).settle(job_id, status, timestamp)
+            ClaudeCorrectionState(self._connection, visibility=self.queue_visibility).settle(
+                job_id, status, timestamp
+            )
             self.queue_visibility.sync_job_in_transaction(
                 job_id, now=datetime.fromisoformat(timestamp)
             )
@@ -1787,7 +1789,9 @@ class HubState:
                     (job_id,),
                 ).fetchall()
             ]
-            claude_payloads = ClaudeCorrectionState(self._connection).complete(job_id, timestamp)
+            claude_payloads = ClaudeCorrectionState(
+                self._connection, visibility=self.queue_visibility
+            ).complete(job_id, timestamp)
             absorbed_payloads.extend(claude_payloads)
             combined_excerpt = "\n\n".join([str(job_row["payload_text"]), *absorbed_payloads])
             visible_user_excerpt = (
