@@ -183,6 +183,17 @@ fallback remain outside socket-only maintenance proof.
 
 ## Provider-job recovery
 
+Both queue consumers renew an existing invocation lease independently of provider
+work. SQLite `BUSY`/`LOCKED` during opening or renewal causes a one-second,
+stop-aware retry against the same token, using the existing schema without
+migration. Renewal samples live time after acquiring the write transaction,
+so waiting for a writer cannot revive an expired lease. The ordinary renewal
+guard still rejects expired or replaced leases;
+another database error stops maintenance. This tolerates temporary writer
+contention without invoking the provider again. Contention lasting beyond the
+lease window still requires exact-turn recovery below; never clear uncertainty
+by reviving ownership or replaying a task.
+
 ### Codex preparation notification overflow
 
 An older client may report `Codex notification buffer exceeded its bound` while

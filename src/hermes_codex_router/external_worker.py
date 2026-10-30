@@ -51,6 +51,7 @@ from .project_resolution import (
     resolve_project_context,
     resolve_project_group,
 )
+from .provider_lease_heartbeat import maintain_provider_lease
 from .registry import ExecutionRootError, ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
@@ -331,9 +332,10 @@ class ExternalQueueWorker:
 
     def _record_event(self, level: str, code: str, detail: str) -> None:
         try:
-            event_state = HubState.open(
+            event_state = HubState.open_existing(
                 self.config.state_path,
                 codex_permission_profile=self.config.codex_permission_profile,
+                contention_timeout_seconds=1,
             )
             try:
                 event_state.record_runtime_event(self.agent.agent_id, level, code, detail)
@@ -595,6 +597,22 @@ class ExternalQueueWorker:
                 client.close()
         return True
 
+    def _maintain_provider_lease(
+        self, job: ProviderJobRecord, token: str, stop: threading.Event
+    ) -> None:
+        maintain_provider_lease(
+            self.config,
+            job.job_id,
+            token,
+            stop,
+            on_renewed=lambda state, refreshed: self._publish_health(
+                state=state, activity_state="executing", active_job=refreshed
+            ),
+            on_failure=lambda error: self._record_event(
+                "warning", "worker_heartbeat_error", type(error).__name__
+            ),
+        )
+
     def _execute(self, job: ProviderJobRecord) -> None:
         lease_token = require_provider_job_lease(job, error_factory=ExternalQueueWorkerError)
         try:
@@ -628,32 +646,8 @@ class ExternalQueueWorker:
         assert token is not None
         heartbeat_stop = threading.Event()
 
-        def maintain_lease() -> None:
-            heartbeat_state = HubState.open(
-                self.config.state_path,
-                codex_permission_profile=self.config.codex_permission_profile,
-            )
-            try:
-                while not heartbeat_stop.is_set():
-                    try:
-                        heartbeat_state.heartbeat_provider_job(
-                            executing.job_id, token, lease_seconds=120
-                        )
-                        refreshed = heartbeat_state.get_provider_job(executing.job_id)
-                        self._publish_health(
-                            state=heartbeat_state,
-                            activity_state="executing",
-                            active_job=refreshed,
-                        )
-                    except Exception as exc:
-                        self._record_event("warning", "worker_heartbeat_error", type(exc).__name__)
-                        return
-                    heartbeat_stop.wait(30)
-            finally:
-                heartbeat_state.close()
-
         heartbeat = self.activity.thread(
-            target=maintain_lease,
+            target=lambda: self._maintain_provider_lease(executing, token, heartbeat_stop),
             name=f"{self.agent.agent_id}-worker-heartbeat",
             daemon=True,
         )

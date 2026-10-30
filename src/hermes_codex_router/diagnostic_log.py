@@ -109,6 +109,8 @@ SITES = frozenset(
         "project_provisioner.claim_contention",
         "project_provisioner.disconnect_after_unknown",
         "project_provisioner.health_publish",
+        "provider_lease_heartbeat.contention",
+        "provider_lease_heartbeat.failed",
         "service.client_close",
         "service.failure_notice_record",
         "service.health_publish",

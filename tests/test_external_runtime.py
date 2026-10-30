@@ -17,7 +17,7 @@ from unittest.mock import patch
 from hermes_codex_router.claude_file_policy import require_file_tool_event
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from hermes_codex_router.claude_mount_pins import MountPins, SandboxLaunch
-from hermes_codex_router.claude_permission_wait import PermissionWaitClock
+from hermes_codex_router.claude_permission_wait import PermissionWaitClock, ProductiveDeadline
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeTerminalFailure,
@@ -814,6 +814,12 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
             clock = LeaderExitClock(child_pid)
             with (
+                patch(
+                    "hermes_codex_router.external_runtime.ProductiveDeadline",
+                    side_effect=lambda seconds, wait: ProductiveDeadline(
+                        seconds, wait, clock=clock.monotonic
+                    ),
+                ),
                 patch(
                     "hermes_codex_router.external_runtime.time",
                     # A loaded host can still see the leader alive at

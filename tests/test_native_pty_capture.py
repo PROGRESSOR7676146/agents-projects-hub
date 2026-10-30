@@ -11,6 +11,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
@@ -126,10 +127,27 @@ class NativePtyCaptureTests(unittest.TestCase):
         code = (
             "import os,json,time; from pathlib import Path; child=os.fork(); "
             "\nif child == 0: time.sleep(30)"
-            f"\nPath({str(proof)!r}).write_text(json.dumps([os.getpid(),child])); time.sleep(30)"
+            f"\nmarker=Path({str(proof)!r}); ready=marker.with_suffix('.ready'); "
+            "ready.write_text(json.dumps([os.getpid(),child])); ready.replace(marker); time.sleep(30)"
         )
-        with self.assertRaisesRegex(NativePtyError, "native_pty_timeout"):
+        started = time.monotonic()
+        initialized = False
+
+        def clock() -> float:
+            nonlocal initialized
+            if not initialized:
+                initialized = True
+                return 0
+            # Expiry must exercise descendant cleanup after real PID
+            # publication. Keep an independent real startup watchdog.
+            return 1 if proof.exists() or time.monotonic() - started >= 10 else 0
+
+        with (
+            patch("tests.native_pty_capture.time", SimpleNamespace(monotonic=clock)),
+            self.assertRaisesRegex(NativePtyError, "native_pty_timeout"),
+        ):
             self.capture(code, timeout=0.5)
+        self.assertTrue(proof.exists(), "owned fixture did not publish its descendants")
         for pid in json.loads(proof.read_text()):
             self.assert_gone(pid)
 
