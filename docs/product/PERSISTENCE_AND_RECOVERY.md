@@ -51,6 +51,11 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
 - **REQ-OPS-009 (Implemented):** Every required component/worker slot MUST report bounded
   clean-build identity with exact revision; passive status MUST detect and alert on mixed/unknown
   revisions without private content, paths, commands, environment or account identities.
+  - A refusal of one request before execution (its session, materials or launch binding) MUST stay
+    visible as the worker's last error but MUST NOT make a live worker degraded or its provider
+    unavailable; only fresh evidence, such as a later success, may claim restored readiness. A
+    component failure, or a third refusal in a row without a success, still degrades the worker
+    (ADR 0084).
 - **REQ-OPS-010 (Implemented):** Activation and rollback MUST verify exact clean immutable
   artifacts, configuration, consistent backup and target schema; both executables MUST support
   retained state and use the candidate's hash-locked dependencies. Manifest preparation/checking

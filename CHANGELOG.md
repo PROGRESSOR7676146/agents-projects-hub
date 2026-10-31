@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- A Claude request refused before it starts (for example a changed session
+  mode or an unverifiable launch boundary) no longer leaves its worker shown
+  as degraded and its provider unavailable until that slot's next success; the
+  refusal stays visible as the last error. A third refusal in a row without a
+  success still marks the provider unavailable (ADR 0084, stage 1).
 - Every operational alert now carries an impact class: blocking, awaiting the
   owner, degraded or diagnostic. A failed worker counts as blocking only when
   its agent has no healthy worker left. The incident journal keeps actionable

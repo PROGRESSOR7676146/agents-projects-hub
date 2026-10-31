@@ -10,6 +10,26 @@ from typing import Callable
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
 
+# ADR 0084: refusals of one request before execution describe that request
+# (its session, materials or launch binding), not the worker. They stay visible
+# as the worker's last error code but do not make a live worker degraded.
+REQUEST_REFUSAL_CODES = frozenset(
+    {
+        "claude_effort_unsupported",
+        "claude_identity_ambiguous",
+        "claude_image_input_unverified",
+        "claude_material_notice_unverified",
+        "claude_permission_host_unverified",
+        "claude_resume_invalid",
+        "claude_session_mode_changed",
+        "claude_stream_input_unverified",
+        "external_session_identity_unsupported",
+    }
+)
+# The same worker refusing this many requests in a row without a success is
+# treated as a component failure (for example a host-wide launch boundary).
+REPEATED_REFUSAL_LIMIT = 3
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeHealthRecord:
@@ -395,7 +415,7 @@ class RuntimeHealthStateFacade:
         elif age > degraded_after:
             status = "degraded"
         elif (
-            record.error_code is not None
+            (record.error_code is not None and record.error_code not in REQUEST_REFUSAL_CODES)
             or record.transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD
             or record.provider_state in {"limited", "exhausted", "unavailable"}
         ):
@@ -406,6 +426,8 @@ class RuntimeHealthStateFacade:
 
 
 __all__ = [
+    "REPEATED_REFUSAL_LIMIT",
+    "REQUEST_REFUSAL_CODES",
     "RuntimeHealthRecord",
     "RuntimeHealthStateFacade",
     "RuntimeHealthStatus",
