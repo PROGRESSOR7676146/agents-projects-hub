@@ -1,529 +1,242 @@
 # Accounts, control, and security requirements
 
-This normative module is part of the
-[product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-security).
 
 ## 10. Codex accounts and transports
 
-- **REQ-AUTH-001 (Implemented):** Only account profiles explicitly allowlisted
-  by the operator are in scope. Discovered but unapproved accounts MUST NOT be
-  selected for project work, and account identifiers MUST remain outside Git.
-- **REQ-AUTH-002 (Implemented; ADR 0047):** Codex runs only under the
-  operator's official Codex login, through the configured shared app-server
-  socket or the official stdio app-server. Project Hub has no Codex
-  multi-account integration. The retired configuration keys
-  `codex_multi_auth_dir`, `codex_multi_auth_executable`, and
-  `codex_account_hints` MUST fail configuration loading, naming the keys, before
-  any filesystem or helper access.
-- **REQ-AUTH-003 (Retired by ADR 0047):** Hub MUST NOT read, execute, display, or
-  alert on a Codex account pool. State written by an earlier release, such as a
-  pool snapshot or a latched pool alert, MUST be ignored or released rather than
-  presented as current.
-- **REQ-AUTH-004 (Implemented):** When the shared Codex app-server is
-  unavailable, Hub MUST be able to use the official Codex stdio app-server
-  rather than fail the entire Project Hub. Socket presence alone is insufficient
-  health evidence: a socket that refuses connection MUST select a configured
-  official stdio transport before starting a turn. Because a shared app-server
-  may retain the old thread's writer lease, fallback starts a new official
-  thread and prepends only bounded persisted visible context. Explicitly adopted
-  CLI threads are an exception: stdio MUST resume their exact identity or fail
-  visibly, never substitute a new thread or a summary.
-- **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST remain
-  visible to the owner; switching MUST NOT be silent.
-- **REQ-AUTH-006 (Accepted):** Hermes MAY guide a mode-aware manual device-login
-  recovery, but MUST NOT copy or display tokens, change the wrong credential
-  store, or replace deterministic locking and health checks.
-- **REQ-AUTH-007 (Retired by ADR 0047):** Hub no longer switches Codex
-  accounts, so no account-transition acceptance applies.
-- **REQ-AUTH-008 (Retired by ADR 0047):** The repository no longer ships unit
-  ordering for a rotating app-server. tlive and any shared app-server remain
-  independent; neither is a hard requirement of the other.
-- **REQ-AUTH-009 (Claude repository scaffold; live acceptance pending):** A
-  Hub-owned Claude Code CLI turn MUST use the Claude agent's explicit
-  `auth_route`, `cpa` by default. A turn routed through CPA MUST require an explicit
-  loopback `ANTHROPIC_BASE_URL` and exactly one CPA client credential source
-  before invocation. Cloud-provider selectors, a subscription token and an
-  ambiguous mix of bearer token and API key MUST fail before a provider process
-  starts. The private CPA
-  configuration MUST exclude paid/API and extra-usage fallback before deployment;
-  a local URL check alone does not prove its upstream account or billing route.
-  The `subscription` route (source implemented; installed acceptance pending)
-  MUST require a non-empty `CLAUDE_CODE_OAUTH_TOKEN` and MUST refuse any CPA URL,
-  bearer token, API key or cloud-provider selector before a process starts. It
-  MUST NOT be combined with the `developer` profile. The token MUST come from a
-  private owner-created file, never configuration, logs or Telegram. The account's
-  extra usage MUST be off before activation; configuration alone does not prove
-  the billing route. A project MAY be bound in configuration to its own fixed
-  account token; other projects use the default token. A bound project MUST
-  fail rather than fall back to another account, and Hub MUST NOT pool, rotate
-  or switch accounts by limits. A Claude launch MUST load no user, project or
-  local settings file, MUST receive at most the one selected subscription token,
-  and a non-Claude launch MUST receive none. See
-  [ADR 0082](../decisions/0082-claude-subscription-route.md).
-  The default worker MUST expose no Claude built-in tools, customizations,
-  skills, or MCP servers and MUST deny permission prompts. An explicit local
-  file-tool opt-in MAY use the protected human boundary of REQ-SEC-008;
-  deployment and native/Telegram acceptance remain separate gates. It MUST NOT
-  claim complete provider parity or authority-data custody on the strength of
-  prompt instructions or this limited tool slice alone.
-  The bounded editor of [ADR 0067](../decisions/0067-claude-editor-first.md)
-  retains its existing gates. The explicit personal developer increment is
-  accepted under [ADR 0075](../decisions/0075-claude-personal-developer-profile.md),
-  with the minimal ordinary-root developer implementation and scoped acceptance
-  complete. Later increments retain their separate gates. Its file, command and
-  local Git authority MUST follow REQ-SEC-008. Text-only remains the default;
-  file tools require explicit local opt-in. Passing acceptance MUST NOT change
-  that default. Steer/extensions, native transfer/images and personal project
-  chat are later increments, not developer acceptance prerequisites.
+- **REQ-AUTH-001 (Implemented):** Work MUST use only owner-allowlisted accounts; discovered accounts
+  grant no authority and identifiers MUST stay outside Git.
+- **REQ-AUTH-002 (Implemented; ADR 0047):** Codex MUST use the official login through its configured
+  shared socket or official stdio server. Retired multi-auth keys MUST fail loading by name before
+  filesystem/helper access.
+- **REQ-AUTH-003 (Retired by ADR 0047):** Hub MUST NOT access, execute, display or alert on Codex
+  account pools; old pool state MUST be ignored or released.
+- **REQ-AUTH-004 (Implemented):** Shared-server failure MUST allow official stdio fallback or
+  visible Codex-only degradation. Fallback uses a new thread with bounded saved visible context,
+  except adopted threads MUST resume exactly or refuse.
+- **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST be visible; switching MUST
+  NOT be silent.
+- **REQ-AUTH-006 (Accepted):** Hermes MAY guide manual, mode-aware login recovery without exposing
+  tokens, changing the wrong store or bypassing deterministic locks and checks.
+- **REQ-AUTH-007 (Retired by ADR 0047):** Codex account switching and its transition acceptance are
+  withdrawn.
+- **REQ-AUTH-008 (Retired by ADR 0047):** Rotating-server unit ordering is withdrawn; tlive and the
+  shared server MUST remain independent.
+- **REQ-AUTH-009 (Claude repository scaffold; live acceptance pending):** Claude MUST use one
+  explicit authentication route, defaulting to CPA; ambiguous or mixed credentials/selectors MUST
+  refuse before launch.
+  - CPA MUST use explicit loopback routing and one client credential; deployment MUST establish no
+    paid/API or extra-usage fallback, not merely a local URL.
+  - Subscription MUST use one nonempty token from a private owner-created file, no CPA/API/cloud
+    credentials and no developer profile; extra usage MUST be disabled before activation.
+  - A project-bound account MUST fail rather than fall back, pool, rotate or switch on limits; other
+    projects use the default account.
+  - Claude MUST load no user/project/local settings and receive at most its selected token; other
+    providers MUST receive none.
+  - Text-only and denied permissions MUST remain the default; file tools require explicit opt-in and
+    REQ-SEC-008 acceptance, without implicit customizations, skills or MCP.
+  - Source, native and Telegram acceptance MUST remain distinct; the bounded developer milestone
+    grants neither full parity nor authority-data custody.
 
 ### Compact control surface
 
-- **REQ-CMD-001 (Implemented):** `/status` shows the active provider, model,
-  effort, context remainder when observable, masked active account when the
-  provider reports one, and compact
-  provider-supplied limit/reset windows. Codex context remainder MUST use the
-  latest current-context usage snapshot, not cumulative lifetime token usage;
-  a missing current snapshot is unknown and MUST clear an older displayed
-  value. A quota-window label MUST derive from the provider-reported duration.
-  `primary` and `secondary` identify positions only: an unknown duration remains
-  `Primary window` or `Secondary window` rather than being guessed as five-hour
-  or weekly. A Codex window missing from the account snapshot MAY come from the
-  rolling rate-limit update the provider sent during the same turn; it serves
-  only that turn's response and MUST NOT be shown later as current.
-  A final Codex response MAY include an observed `/goal` status only from
-  payload-free observations of native events bound to the exact accepted turn
-  and thread.
-  Active, paused, blocked, usage-limited, budget-limited and complete MUST remain
-  distinguishable. The label MUST say `observed`: it describes the latest exact
-  event consumed during submission/wait, not the state at native completion or
-  when Telegram receives it. Foreign or unbound events, clear, malformed state,
-  exhausted optional bounds and a new submission MUST NOT become stale or
-  inferred mode claims. Unknown modes MUST be omitted rather than shown as off.
-  Observation MUST add no RPC, inference, mode change or execution authority and
-  MUST NOT interrupt mandatory result, approval or telemetry consumption.
-  Delivery retries MUST retain the saved footer; completion-only recovery MUST
-  NOT borrow today's thread state. Prompt text and preparatory/subsequent-turn
-  service-tier settings MUST NOT establish current-turn `/fast` evidence.
-- **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
-  provider, model, and effort. It marks current values and validates callbacks
-  against the exact cached catalog snapshot displayed to the user. The final
-  click changes local session state deterministically and MUST NOT depend on a
-  new provider RPC or an AI-generated handoff.
-  Claude MAY expose an explicit local `model_catalog`: 1–32 unique ASCII model
-  IDs of at most 128 characters, printable labels of 1–96 characters, and
-  unique nonempty effort subsets of `low`, `medium`, `high`, `xhigh`, and `max`.
-  Every entry contains only `model_id`, `label`, and `efforts`; the configured
-  default model/effort pair MUST be included. Omission retains the single
-  configured default. This field MUST be rejected for other runtimes. Claude
-  menus MUST label these as configured choices with availability unverified;
-  neither entitlement, effective effort nor billing route is established.
-- **REQ-CMD-002A (Implemented):** Successful provider discovery updates a
-  private atomic last-known-good catalog with source version and timestamp.
-  Telegram callbacks use bounded opaque keys rather than provider model IDs;
-  long catalogs are paginated. Failed discovery uses the cache and becomes an
-  Operations warning only after the cached success is older than 24 hours.
-  The monitor reads native Codex `model/list` metadata through the configured
-  socket, without starting threads or inference, and MUST NOT execute an account
-  helper; a Codex catalog cached from any other source is replaced on the next
-  refresh. Discovery failures preserve the last good catalog. The isolated Controller
-  never discovers models itself: Refresh requests monitor refresh while keeping
-  cached choices usable. Only an empty cache uses the configured default.
-  Claude catalog display, callback validation and monitor refresh MUST project
-  the same current local configuration without subprocess, network, provider
-  or account-helper invocation. A configuration change MUST invalidate removed
-  model/effort choices even when the cache is fresh. An already selected choice
-  outside the updated catalog MUST remain visibly selected without an automatic
-  reset, session replacement or false availability claim.
-- **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
-  and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
-  only after a real provider `429`; plan caps are labelled separately. The
-  Controller MUST build `/accounts` from private configuration and durable local
-  state only and MUST NOT invoke a provider, model, or account helper. Codex has
-  no account list (REQ-AUTH-003): a Codex agent in `provider_account_hints` MUST
-  fail configuration loading. Other providers MAY declare short masked account
-  prefixes in private configuration; unknown limits remain explicitly unknown,
-  while a provider-reported exhaustion is shown for the current unknown account.
-  A configured private Antigravity status cache MAY supply structured current
-  account, per-model quota, reset time, current model/effort, and matching-session
-  context without ANSI parsing or a provider/model invocation. Stale, mismatched,
-  oversized, or non-private cache files MUST degrade to unknown.
-- **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
-  and resets only the active provider session; mass reset behavior is removed.
-  `/local` transfers writer ownership. Codex `/return` changes only the lease,
-  with no provider call, summary, or session-ID change. Codex local commands
-  attach the native TUI to the configured owning app-server through `--remote`
-  and a Unix socket; standalone resume MUST NOT create a competing persistence
-  writer. Remote attach retains the session's permissions without overrides.
-  Other providers retain
-  bounded summaries pending separate native-resume acceptance.
-- **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
-  `/status`, `/model`, `/accounts`, `/new`, `/local`, `/return`, and `/stop`. Legacy
-  maintenance commands may remain locally callable for compatibility but are
-  not part of the normal mobile interface. In registered project groups only
-  the central router bot publishes `/menu`, `/connect`, and `/stop`; provider bots publish
-  empty chat-scoped menus so Telegram does not duplicate commands with bot
-  username suffixes. Direct provider chats expose only commands implemented by
-  that provider endpoint. The Hub private chat publishes `/start`, `/projects`,
-  `/connect`, and `/cancel`. A deterministic local command checks and
-  synchronizes every scope.
-- **REQ-CMD-006 (Implemented):** Provider, model, and effort buttons mark the
-  active choice and use Telegram's success style where supported. Account and
-  quota summaries use portable green/yellow/red status symbols because message
-  text itself has no reliable cross-client color API.
-- **REQ-CMD-007 (Implemented for queued project-group providers):** `/stop` and
-  an exact case-insensitive emergency utterance (`stop`, `halt`, `стоп`, `стой`,
-  `остановись`, or `прекрати`) MUST bypass model analysis. Hub cancels every
-  not-yet-started FIFO job in the numeric topic, whatever its provider, and
-  interrupts the topic's running turn, which topic FIFO limits to one, through
-  that provider's native control or its owned process, even when the provider
-  was invoked by mention rather than being the active agent. Held work awaiting
-  an owner decision is left for that decision. Matching applies
-  to the complete normalized message only, never to a word embedded in prose.
-  An owned external CLI process group MUST be force-stoppable even when the
-  provider ignores graceful termination.
-  Legacy inline OpenCode/Antigravity direct-message endpoints do not advertise
-  this command until they move behind an interruptible worker boundary.
-- **REQ-CMD-008 (Implemented; live Telegram acceptance pending):** `/connect` in
-  a registered project topic, `/connect` in the owner-only Hub private control
-  plane, and local `session connect [CONFIG]` MUST use one durable deterministic
-  workflow. Telegram selects only opaque project/session/destination options;
-  it never supplies a filesystem path. Discovery is limited to exact canonical
-  registered roots and supported persisted interactive sources (`cli` and
-  `vscode`), exposes no transcript or prompt text, and invokes no model, thread
-  creation, or resume. Metadata discovery MUST progress while the Codex worker
-  waits on an unrelated productive turn, using a separate SQLite connection and
-  app-server client. If a pending discovery or activation recheck expires, Hub
-  MUST durably notify the owner once; expiry MUST NOT silently leave a workflow
-  with no result. Hub private free text MUST NOT become productive
-  provider input. Local configuration MUST be explicit rather than discovered
-  from hidden user files.
+- **REQ-CMD-001 (Implemented):** Status MUST show provider/model/effort and only observed context,
+  masked account and limit/reset data; stale or missing values MUST remain unknown.
+  - Context remainder MUST use current context, not lifetime usage; quota labels MUST use reported
+    durations, never guessed windows.
+  - A goal footer MAY report exact accepted-turn events as “observed,” preserving distinct states;
+    it MUST NOT infer current completion, delivery-time state or fast mode.
+  - Observation MUST add no calls or authority and MUST NOT disrupt mandatory processing; retries
+    retain the saved footer and recovery cannot borrow later state.
+- **REQ-CMD-002 (Implemented):** One cascaded model selector MUST show current choices and validate
+  the displayed catalog snapshot; final selection MUST be local and model-free. Claude choices MUST
+  come from bounded valid local configuration including the default, be labelled
+  availability-unverified, and confer no entitlement, effort or billing proof.
+- **REQ-CMD-002A (Implemented):** Discovery MUST preserve a private last-good catalog, bounded
+  opaque paginated choices and cache-only Controller operation; failed refresh MUST retain choices
+  and warn only after 24 hours without success. Claude refresh MUST be local-only, invalidate
+  removed choices and retain a visibly selected obsolete choice without automatic reset; Codex
+  discovery MUST use native metadata without threads, inference or account helpers.
+- **REQ-CMD-003 (Implemented):** Accounts MUST use only private configuration and saved/passive
+  telemetry, with masked identities and honest unknowns. Codex account lists MUST be refused,
+  OpenCode exact exhaustion/reset requires observed rejection, and unsafe, stale or mismatched
+  Antigravity caches MUST yield unknown.
+- **REQ-CMD-004 (Implemented):** Confirmed `/new` MUST reset only the active session; `/local`
+  transfers its writer and Codex `/return` changes only the lease. Codex local attachment MUST use
+  the owning server with retained permissions and no competing writer; other providers keep bounded
+  summaries pending acceptance.
+- **REQ-CMD-005 (Implemented):** Menus MUST expose only supported controls: provider defaults are
+  status/model/accounts/new/local/return/stop, project Hub menus are menu/connect/stop, and private
+  Hub menus are start/projects/connect/cancel. Provider group menus stay empty; local
+  synchronization checks every scope.
+- **REQ-CMD-006 (Implemented):** Buttons MUST mark the active choice; account/quota summaries MUST
+  use portable status symbols.
+- **REQ-CMD-007 (Implemented for queued project-group providers):** Stop controls MUST bypass
+  models, cancel not-started jobs and interrupt the running provider within the numeric topic,
+  including satellites; held work and other topics remain untouched. Only complete recognized
+  emergency utterances count, and owned CLI groups MUST remain force-stoppable; unsupported legacy
+  endpoints MUST NOT advertise stop.
+- **REQ-CMD-008 (Implemented; live Telegram acceptance pending):** Topic, owner-private and local
+  session-connect entries MUST share one durable model-free workflow with opaque choices, explicit
+  local configuration and exact registered-root discovery. Discovery MUST expose no transcript,
+  remain responsive during unrelated work, and durably report expiry once; private control text MUST
+  NOT become productive input.
 
 ## 11. Frontends, writer lease, and local transfer
 
 ### Current behavior
 
-- **REQ-WRITER-001 (Implemented):** One provider topic session MUST have only one
-  active writer, and Hub-owned productive execution across all topic sessions
-  MUST have at most one writer for the same canonical project root.
-- **REQ-WRITER-002 (Implemented for Codex tmux takeover):** `/terminal` transfers
-  writer ownership from Telegram to a named tmux-backed Codex CLI; `/release`
-  returns it to Telegram without changing the thread.
-- **REQ-WRITER-003 (Implemented):** Telegram MUST refuse productive turns while
-  the terminal lease owns that session.
-- **REQ-WRITER-004 (Accepted):** tmux is a persistence/reattachment fallback, not
-  the preferred rich local user interface.
-- **REQ-WRITER-005 (Accepted):** Agent Session Remote/tlive is first-class only
-  for providers it semantically supports (currently Codex and Claude Code). A
-  generic PTY wrapper MUST NOT be described as semantic OpenCode or Antigravity
-  integration. Hub-managed Codex turns on a shared app-server MUST be marked as
-  approval-only for a compatible tlive companion: remote approvals remain
-  available, while prompt/completion mirroring and reply-to-continue MUST stay
-  disabled so tlive cannot become a second conversation writer outside the Hub
-  queue and writer lease.
+- **REQ-WRITER-001 (Implemented):** Each session MUST have one writer, and each canonical root at
+  most one Hub-owned productive writer across topics.
+- **REQ-WRITER-002 (Implemented for Codex tmux takeover):** Terminal takeover/release MUST transfer
+  the writer between Telegram and named tmux without changing the thread.
+- **REQ-WRITER-003 (Implemented):** Telegram MUST refuse productive input while the terminal owns
+  the session.
+- **REQ-WRITER-004 (Accepted):** tmux is a persistence/reattachment fallback, not the preferred rich
+  interface.
+- **REQ-WRITER-005 (Accepted):** tlive MUST claim semantic integration only for supported providers;
+  Hub-managed shared-server Codex sessions MUST allow approvals without mirroring or reply
+  continuation that creates a second writer.
 
 ### Implemented minimal native transfer
 
-- **REQ-WRITER-006 (Implemented):** `/local` validates that no Hub dispatch,
-  unpaused queued/in-flight work, active or unconfirmed provider turn, or other
-  local writer owns the same canonical root and that a provider session exists.
-  For an accepted uncertain Codex turn, it MAY first read the exact saved turn
-  without invocation; only confirmed terminality can permit write-capable
-  transfer. Earlier queued work MUST remain paused for owner review. `/local`
-  changes `writer_mode`
-  from `telegram` to `local`, and returns a reviewed
-  provider-specific resume command for the canonical root and session ID.
-  Antigravity MUST use the configured executable and the same model/effort
-  argument builder as productive turns. An explicit effort replaces a known
-  existing effort suffix; default effort preserves the selected model ID.
-  Named managed Codex profiles remain excluded from local/tmux transfer until
-  its execution boundary is independently verified; refusal MUST precede
-  provider preparation, process launch and lease mutation (REQ-SEC-001).
-- **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
-  after the owner closes the CLI and Hub work is terminal, `/return` changes
-  only the lease; it invokes no model and copies no summary or transcript. The
-  next Telegram turn resumes the same session. V1 does not infer OS process
-  state. An explicit local reconciliation MAY adopt an already opened exact
-  Codex session without launching a CLI or a model, only after matching active
-  Hub session, provider thread, generation, origin and canonical root, proving
-  the old turn terminal through read-only protocol, excluding other Hub writers
-  and leases, and receiving an owner assertion that the standalone CLI has
-  closed at an idle boundary or a remote CLI is idle. It MUST leave the old
-  uncertain job and its checkpoint, error and notice intact. Process absence
-  alone cannot establish this boundary. Other providers retain prior behavior
-  pending separate acceptance.
-- **REQ-WRITER-008 (Implemented):** Messages arriving while `local` owns the
-  writer do not call a provider and explain how to return safely. A productive
-  request from another numeric topic on the same canonical root MUST receive a
-  durable input-bound refusal instead of entering the queue; the owner-topic
-  link MUST use numeric identity and a neutral label unless a trustworthy title
-  is available. It MUST say that the provider did not receive the request and
-  that it will not run later. `/status` in owner context MUST explain the
-  blocker and route to `/return` or `/release`; anonymous monitor aggregates
-  MUST NOT expose topic or session identity. A local writer lease MUST NOT
-  expire merely because it is old or has no visible PID. `/return` remains a
-  model-free same-session lease change after the owner closes the CLI.
-- **REQ-WRITER-009 (Implemented; live acceptance pending):** An explicit local
-  `session attach-codex` preview/apply MAY connect a saved Codex thread to a
-  registered topic. It MUST verify exact persisted metadata and the canonical
-  allowlisted Git root without productive inference, transcript import,
-  bot-token reads or implicit migration. Apply requires an explicit CLI-closed
-  assertion and external Codex workers/external outbox. It atomically creates a
-  fresh Hub identity and immutable origin with writer `local`. Replacement
-  requires the exact previous active Codex session ID; busy or unresolved work,
-  unfinished deliveries and known local writers on the canonical root, including
-  known prior project registrations, block it. Only the old Hub
-  binding is archived; idle satellites and history remain.
-- **REQ-WRITER-010 (Implemented):** First `/return` on an adopted session MUST
-  atomically persist the activation message ID, forwarded-context floor, writer
-  change and receipt. Productive ingress at or before that boundary MUST be
-  refused inside admission and batching transactions. Old quotes MUST NOT cross
-  the boundary through delayed delivery. Explicit `/context` remains available.
-  Stale controls MUST NOT mutate a replacement generation; old Reply routing
-  addresses the current provider binding. Exact apply retries MUST NOT create
-  another generation or reset ownership after return.
-- **REQ-WRITER-011 (Implemented):** Adopted execution MUST validate origin/root
-  before resume overrides and continue the exact provider thread, including on
-  stdio fallback. Read/resume failure MUST NOT create a substitute conversation.
-  Model/effort changes and provider switching preserve origin; explicit `/new`
-  starts a normal new conversation while retaining the old origin reservation.
-  Unsupported Codex execution modes MUST refuse retained origins, including
-  archived bindings. CLI environment/plugin parity is not guaranteed.
-- **REQ-WRITER-012 (Implemented; live Telegram acceptance pending):** A
-  confirmed session-connect workflow MUST recheck the exact source metadata,
-  destination binding, busy work and expected prior session before activation.
-  The standalone sender MUST publish one neutral marker in the destination and
-  use its positive Telegram message ID as the input/context boundary. One
-  SQLite transaction then performs the existing immutable-origin attachment,
-  replacement archive, activation, writer transfer to Telegram, one-time-code
-  consumption, workflow completion, marker receipt, and preparation of the
-  success result. Success MUST NOT be published before this commit. An unknown
-  marker outcome MUST retain the old binding and MUST NOT be retried blindly.
-  The next later ordinary message continues the exact chosen thread without a
-  separate `/return`; stale callbacks, cancellation and expiry create no new
-  generation.
-- **REQ-WRITER-013 (Retired by ADR 0065):** Hub-managed lead/advisor permissions
-  and role handover are withdrawn. Existing writer leases, canonical-root
-  exclusion, sandbox and human approval authority remain mandatory. Project
-  review instructions MUST NOT be treated as access isolation or approval
-  grants. The ID remains reserved; see
-  [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
+- **REQ-WRITER-006 (Implemented):** Local transfer MUST require an existing exact session and a root
+  free of competing writers, dispatches, unpaused work and uncertain execution; read-only exact
+  terminal proof MAY resolve Codex uncertainty while queued work stays held. The resume command MUST
+  preserve validated root, provider and model/effort; unsupported managed-profile transfer MUST
+  refuse before preparation, launch or lease change.
+- **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):** Codex return MUST
+  preserve the session without inference or transcript copying after terminal work and the owner's
+  assertion that the CLI is closed. Exact local reconciliation additionally permits an idle remote
+  CLI, but MUST verify all bindings and terminal proof, exclude competing writers and preserve
+  uncertain history; process absence alone is insufficient.
+- **REQ-WRITER-008 (Implemented):** Local ownership MUST durably refuse same-root input, explain
+  that it was not sent and will not run later, and offer safe return controls. Leases MUST NOT
+  expire through age or missing PID; private owner links use numeric identity and anonymous
+  monitoring exposes no topic/session.
+- **REQ-WRITER-009 (Implemented; live acceptance pending):** Local adoption MUST preview and verify
+  the exact saved thread/root without inference, transcript import, tokens or migration; apply
+  requires CLI-closed assertion and external workers/outbox. Replacement MUST atomically create a
+  fresh Hub identity with immutable origin and local ownership, match the prior session and refuse
+  busy, uncertain, delivery or known-writer conflicts while preserving history and idle satellites.
+- **REQ-WRITER-010 (Implemented):** First return MUST atomically activate adopted ownership with an
+  input/context boundary; earlier input, delayed quotes and stale controls MUST NOT affect the new
+  generation. Repeated apply MUST NOT create generations or reset ownership; explicit context
+  remains available and old Replies route to the current binding.
+- **REQ-WRITER-011 (Implemented):** Adopted work MUST validate origin before overrides and resume
+  the exact thread, including fallback; failures MUST NOT substitute conversations. Model/provider
+  changes preserve origin, new sessions retain old reservations, and unsupported modes MUST refuse
+  retained origins.
+- **REQ-WRITER-012 (Implemented; live Telegram acceptance pending):** Connect MUST recheck source,
+  destination, prior session and blockers, then atomically activate once behind a positively
+  receipted destination marker before reporting success. Unknown marker delivery MUST preserve the
+  old binding without blind retry; stale, cancelled or expired controls create no generation, and
+  the next later message resumes the chosen thread directly.
+- **REQ-WRITER-013 (Retired by ADR 0065):** Retired roles grant no permissions; writer/root
+  exclusion, sandbox and human approval remain mandatory, and project review instructions MUST NOT
+  imply isolation or approval.
 
-Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
-with explicit provider/model `-c` overrides when local `codex_model_provider`
-is configured,
-`opencode ROOT --session SESSION_ID`, and
-`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits --model MODEL_EFFORT`. They are version-sensitive
-adapter capabilities, not permanent user-input templates. Hermes requires a
-separate native capability check.
-
-An explicit local Codex route MUST preserve the source provider as immutable
-provenance while pinning the configured provider for execution and `/local`.
-Discovery MUST accept only OpenAI and that exact configured provider. A route
-mismatch MUST fail before productive inference; exact-session failure MUST NOT
-be repaired by creating a replacement thread. Existing root, activation and
-single-writer checks remain mandatory. See
-[ADR 0028](../decisions/0028-explicit-codex-provider-routing.md).
+Explicit Codex routes MUST preserve original provider provenance, pin execution/local
+routing, and discover only OpenAI or the exact configured provider. Mismatch MUST
+refuse before inference; exact-session failure MUST NOT create a replacement.
 
 ## 12. Approval, sandbox, and secret requirements
 
-- **REQ-SEC-001 (Implemented):** Codex MUST remain `workspace-write`.
-  Companion-capable shared sockets use `on-request`; an isolated headless stdio
-  fallback uses `never` so sandboxed work may proceed but escalation cannot be
-  requested. Any unexpected server approval request on that fallback MUST be
-  explicitly declined. `danger-full-access`, dangerous provider bypass flags,
-  and automatic approval MUST be rejected.
-  An explicit local `codex_permission_profile` MAY select a bounded named
-  managed profile through external Codex queue workers. Hub MUST verify, through
-  bounded passive metadata on the preparing connection, that the configured
-  selection is the managed default and the sole allowed profile. Start/resume
-  and turn submission MUST select that exact profile without legacy sandbox
-  overrides, retaining the transport's approval policy and human reviewer.
-  The session generation, accepted job, confirmed execution checkpoint and
-  connect authorization MUST retain immutable selection snapshots. Missing
-  configuration context MUST refuse Codex creation/admission/activation;
-  explicit legacy `null` remains distinct. Existing legacy rows MUST stay
-  legacy after migration. A configuration change MUST NOT retarget old work;
-  an explicit `/new` MAY create a generation with the current selection.
-  Confirmation MUST match the profile, canonical root, provider, approval
-  policy and reviewer and reject visible network access, writable roots outside
-  the project and implicit temporary writable roots. Managed parent metadata
-  MAY explicitly be `null`; it is not proof of inheritance. Matching settings
-  changes during preparation MUST be checked before turn submission. A later
-  policy change MUST trigger a bounded interrupt and retain uncertain execution
-  status until exact native terminality is separately proven.
-  Managed exact resume MUST NOT substitute another thread. Managed steering,
-  inline/pilot execution and local/tmux transfer MUST refuse before their effects
-  until separately supported. Metadata proves selection continuity only; it
-  does not expose the full managed definition or establish read isolation,
-  authority-data custody or helper isolation. Host-wide exclusion of trusted
-  administrative/helper processes is not claimed under the personal-installation
-  scope in REQ-SEC-008; this is not an additional pending release gate.
-- **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
-  Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
-- **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and
-  channel failure MUST resolve to deny/no action, never approval.
-  Neither provider MAY approve the other's actions. The human-only protocol and
-  scoped launch checks remain mandatory; they MUST NOT be represented as
-  tamper-proof against a trusted same-UID/admin assistant (REQ-SEC-008).
-- **REQ-SEC-004 (Implemented):** Tokens MUST live in private local files, not
-  command arguments, JSON examples, logs, Git, documents, or Telegram content.
-- **REQ-SEC-005 (Implemented):** State and secret files MUST use restrictive
-  permissions; diagnostics MUST report unsafe permissions without printing
-  secret values.
-- **REQ-SEC-006 (Implemented):** Telegram owner, private-group, project-root,
-  topic, and agent allowlists MUST be enforced before provider invocation.
-- **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
-  and isolated. Recovery MUST NOT weaken security policy to regain availability.
-- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent and workstation live acceptance pending):** An explicitly
-  configured Claude editor turn MAY expose only Read, Glob, Grep, Write and
-  Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
-  bot/web credentials and permission signing keys MUST be absent from its
-  mounts; trusted runtime and hook code MUST remain immutable to the provider.
-  First-editor acceptance MUST establish that every native Write/Edit requires
-  a fresh exact human permission through this boundary; manual-mode settings
-  alone MUST NOT establish that behavior. Read/search MAY run without a human
-  prompt while confined to the project. This acceptance requirement is not a
-  claim that the current offline candidate has proved native enforcement.
-  Only a fresh allowlisted human callback in the protected tlive namespace MAY
-  authorize a prompted operation or the explicit temporary Bash grant below.
-  The receipt MUST authenticate the exact
-  payload, daemon epoch, nonce and original Telegram actor. Hub MUST recheck
-  the live job, lease, writer, native session, generation, project/root and stop
-  state, then atomically consume the receipt once before native Allow. Individual human decisions
-  requiring masking or an incomplete preview MUST be denied. Native permission
-  suggestions MUST NOT become persistent grants or input changes. Restart,
-  timeout, unavailable isolation/host and ambiguity MUST deny without replay.
-  A protected human decision MUST use a seven-day expiry, bounded by
-  the current live launch and channel; stop, disconnect or restart MUST invalidate
-  it without replay. The native hook and protected transport MUST cover that
-  window. Host waiting after exact request validation and journal preparation MAY
-  extend the productive process deadline by at most seven days TOTAL per launch;
-  repeated requests MUST NOT replenish that credit. Native output MUST NOT
-  suspend it. Socket binding checks do not authenticate official hook origin:
-  correctly bound requests from confined code can consume this capped credit.
-  Already authorized background descendants MAY continue during waiting; process
-  suspension is not claimed. This bounded execution extension is accepted for the
-  personal trusted installation. The remaining launch budget MAY end a later
-  request before its own expiry. Productive timeouts and bounded stop/cleanup MUST
-  remain effective before and after waiting. This window is not a grant and MUST
-  NOT survive process or channel loss.
-  The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
-  continuation, mirroring or second conversation writer. The default `editor`
-  profile retains per-write human permission and read-only ordinary Git metadata.
-  An explicitly configured `developer` profile (implemented)
-  MAY preauthorize project file edits and expose native Bash plus writable
-  ordinary Git metadata. Bash MUST default to a new exact human receipt for
-  every invocation, including read-only commands. A separate owner-only
-  `Bash until restart` button MAY explicitly authorize all subsequent Bash
-  commands in the same canonical root, native session and generation on that
-  worker. The card MUST disclose that scope and its inclusion of later turns.
-  This grant MUST exist only in bounded worker memory, bound to the state and
-  protected transport identity; worker restart MUST erase it. Every reuse MUST
-  first authenticate tlive's current daemon epoch. A changed epoch MUST discard
-  the grant and require a new human decision; an unavailable host MUST deny.
-  Other worker slots, roots, sessions and generations MUST NOT inherit it.
-  The grant MUST be created only after exact callback authentication, current
-  binding/stop checks and successful receipt consumption. Each reused invocation
-  MUST retain a fresh single-use journal entry, current input validation and
-  job/lease/writer/session/root/stop checks before native Allow. Cached consent
-  MUST NOT produce a false human-wait notice. Allow once, Deny, native permission
-  suggestions, saved settings and historical receipts MUST NOT create a grant.
-  The grant MUST NOT change mounts, other tools, command fields or input.
-  Validated callback settlement MUST immediately initiate a cosmetic card edit
-  removing buttons and naming the recorded decision, without waiting for native
-  execution. Late send receipts after timeout/disconnect MUST also retire the
-  card. Cosmetic failure MUST NOT change, delay or replay the decision; successful
-  local dispatch is not confirmed Telegram display. The decision covers the
-  command/program and its descendants inside
-  the namespace, including tests and Git hooks; it MUST NOT be presented as
-  per-system-call review or hostile-project protection. Background or native
-  sandbox-bypass options, unknown command fields and incomplete or masked previews
-  MUST be denied. Profile and session-home identity MUST remain pinned on exact
-  resume and rollback; a profile change MUST require a fresh `/new` session.
-  MCP, skills, external plugins and agent children remain unavailable in every
-  profile. An explicit developer toolchain MAY provide bounded readonly
-  root/worker-owned development tools, PATH and visible Git hook/Python/identity
-  settings. Tools MUST NOT be writable by others or overlap private authority,
-  control runtime, project or session HOME. Pinning, native-filesystem and bounded
-  tree checks remain; hardlinks/special files MUST refuse. Trusted control/hook
-  code MUST retain immutable root-owned validation. Launch-local Git settings
-  MUST disable implicit upstream setup and automatic gc/maintenance for linked
-  worktrees without changing shared/sibling config. The same authorized Bash
-  scope MAY invoke a separate text-only consultation CLI: one bounded explicit
-  question to a locally pinned CPA route/model/effort and response model, no
-  tools/session/writer, proxy/redirect, automatic retry or paid fallback.
-  It MUST return only complete visible text and retain uncertainty on timeout,
-  model mismatch or incomplete output. Stop MUST terminate the owned caller;
-  it MUST NOT claim remote cancellation. Configuration MUST require prior
-  verification of an inference-only credential and no-paid-fallback route;
-  declaration alone MUST NOT establish billing proof or credential quota isolation.
-  No management/signing credential may become visible. This is not passive
-  monitoring, an approval authority or Hub-managed review orchestration. See
-  [ADR 0078](../decisions/0078-claude-developer-tools-and-consultations.md).
-  Standard linked Git worktrees MAY expose this worktree's metadata
-  plus shared objects/refs and existing reference logs, with Git access following
-  the selected profile. Pointer files and shared configuration MUST be read-only;
-  the primary checkout/index/HEAD and sibling worktree metadata MUST remain absent.
-  The common Git directory MUST NOT be mounted wholesale. Exposed sources MUST
-  retain pinning, private-authority and bounded tree checks. Unsupported layouts
-  or repository administration requiring common-directory writes MUST fail
-  without an unconfined fallback. Project-contained `.hub/work` MUST be hidden
-  behind an empty read-only mount; incoming materials and artifact staging remain
-  available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
-  An explicitly configured `workstation` profile (source implemented; installed
-  acceptance pending) has the developer tools, Git access and toolchain and
-  shows the whole host filesystem read-only, as Codex workspace-write does. Host
-  credentials and Hub/tlive authority are therefore readable; this is the
-  accepted trust model of ADR 0072, not a defect. Persistent writes MUST reach
-  only the project, its admitted Git metadata and the session HOME, which is
-  mounted at its own host path; the project `.hub/work` is created when absent
-  and mounted read-only instead of hidden. Private paths MUST NOT overlap a
-  writable or trusted runtime mount. Namespace-owned `/dev`, `/proc` and `/tmp`
-  remain; host `/run` stays visible read-only, so resolver links and host
-  sockets, Docker included, work with the kept supplementary groups as for other
-  agents, and the permission socket is at `/tmp/hub-permission.sock`. Only host
-  `/tmp` sockets are absent. Nested user namespaces are admitted so the commit
-  gate runs, with a writable namespace-owned `/proc` for their user maps;
-  inherited mounts MUST stay locked read-only. This
-  profile preauthorizes native Bash: the permission
-  host MUST still validate each request, its fields and the current job, lease,
-  writer, session, root and stop state, and journal a single-use Allow without a
-  human receipt or wait notice. Push, deployment and service changes belong to
-  the owner by policy, not by a technical barrier. Damage from mistakes is
-  limited by backups, budgets and provenance, not isolation. See
-  [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
-  Developer acceptance MUST prove
-  the production host/native edit-test-local-Git cycle, repeated fresh Bash
-  Allow/Deny, explicit Bash-grant reuse/reset/refusal, denied effects absent, exact resume, stop/cleanup and uncertainty
-  preservation, separately from scoped installed/human Telegram acceptance.
-  This slice does not establish
-  subscription routing or local-transfer parity.
-  The trusted worker and tlive host remain the receipt trust base; this slice
-  MUST NOT claim isolation from an unconfined hostile process sharing their UID.
-  The supported scope is a personal single-owner trusted installation.
-  Administrative, helper and recovery assistants MAY perform explicitly assigned
-  work with their granted rights; global exclusion of every unconfined same-UID
-  or privileged process from signing keys, state and transport endpoints is not
-  claimed and MUST NOT be an editor release prerequisite. Such a process can
-  technically read authority data, forge symmetric receipts or interfere with
-  execution. Mode 0600, review instructions and metadata MUST NOT be presented
-  as protection against it. Trust here is operational, not prompt-injection
-  resistance: any model turn outside the confined Claude namespace, including
-  Codex workspace-write, OpenCode, Antigravity and native Hermes tools, is within
-  this accepted risk. Their sandbox/tool flags MUST NOT establish exclusion from
-  Hub/tlive authority. Shared networking does not establish exfiltration isolation.
-  Scoped installed acceptance MUST identify authority-bearing listeners reachable
-  from the confined launch and verify that private files/FDs, signing, management
-  and host control require a secret unavailable to it; the CPA client credential
-  MUST grant no management or host-control capability. Unknown authority-bearing
-  exposure MUST refuse activation. This is a scoped point-in-time check, not a
-  host-wide guarantee against future trusted launches. Existing namespace, immutable runtime/hook, separate session HOME,
-  private-path exclusions and profile-specific human checks MUST remain enforced
-  for the confined Claude launch; a failed boundary MUST NOT fall back to an
-  unconfined launch. Other providers retain their supported tools and policies.
-  Backups recover only their captured scope, not disclosures, external effects
-  or forged authority. Stronger hostile-agent isolation requires a separate
-  scope decision; it is not pending acceptance of this trusted installation.
+- **REQ-SEC-001 (Implemented):** Codex MUST retain workspace-write, human approval on companion
+  sockets, and denied escalation on isolated stdio; bypass flags and automatic approval MUST be
+  rejected.
+  - An explicit managed profile MUST be passively verified as the sole allowed default and selected
+    unchanged for start/resume/turns, without legacy overrides.
+  - Session, job, checkpoint and connect authorization MUST pin the selection; missing context
+    refuses work, legacy stays legacy, and configuration changes require a new generation.
+  - Confirmation MUST match root/provider/profile/policy/reviewer and reject visible network,
+    outside-project or implicit temporary writes; preparation changes require rechecking.
+  - Later policy drift MUST trigger bounded interruption while retaining uncertainty until exact
+    terminal proof; exact resume MUST NOT replace threads.
+  - Unsupported managed steering, inline/pilot and local/tmux execution MUST refuse before effects;
+    selection metadata MUST NOT claim read, authority-data or helper isolation.
+- **REQ-SEC-002 (Implemented):** Hub and Hermes MUST NOT approve; Codex/tlive retains human approval
+  and first-valid-answer-wins.
+- **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state or channel loss MUST
+  deny/no-op; providers MUST NOT approve one another. Human-only checks remain mandatory without
+  claiming same-UID/admin tamper resistance.
+- **REQ-SEC-004 (Implemented):** Tokens MUST stay in private local files, never arguments, examples,
+  logs, Git, documents or Telegram.
+- **REQ-SEC-005 (Implemented):** State/secrets MUST have restrictive permissions; diagnostics MUST
+  report unsafe permissions without values.
+- **REQ-SEC-006 (Implemented):** Owner, private-group, root, topic and agent allowlists MUST pass
+  before invocation.
+- **REQ-SEC-007 (Accepted):** Provider failure MUST be visible, reversible and isolated; recovery
+  MUST NOT weaken security.
+- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent and workstation live acceptance
+  pending):** Claude tool access MUST follow an explicitly selected profile and verified launch
+  boundary; failed confinement MUST refuse, never launch unconfined.
+  - The editor profile permits project read/search and requires fresh human permission for each
+    Write/Edit, with read-only ordinary Git metadata; editor acceptance MUST prove native
+    enforcement, not merely manual settings.
+  - Confined profiles MUST exclude private state, credentials and signing keys, retain immutable
+    runtime/hooks and separate session HOME, and expose no MCP, skills, plugins or agent children.
+  - Only fresh allowlisted human callbacks MAY authorize prompted actions; exact authenticated,
+    single-use receipts MUST bind payload, actor, epoch and live
+    job/lease/writer/session/generation/root/stop state.
+  - Masked or incomplete previews, ambiguity, timeout, host/isolation loss or restart MUST deny
+    without replay; suggestions/settings MUST NOT create grants or change inputs.
+  - Human decisions MUST have a seven-day expiry bounded by the remaining live launch/channel;
+    stop/disconnect/restart invalidates them, and total added launch time MUST NOT exceed seven days
+    or replenish with requests/output.
+  - The per-turn hook MUST have no keys, Hub state, Stop, continuation, mirroring or second-writer
+    authority.
+  - Timeouts and bounded cleanup MUST remain effective; waiting neither grants permission nor
+    guarantees process suspension or official-hook origin.
+  - Developer MAY preauthorize project edits and ordinary Git writes, but every Bash defaults to a
+    fresh exact human decision.
+  - Explicit owner-only “Bash until restart” MAY cover later turns only on the same
+    worker/root/session/generation; the card MUST disclose that scope.
+  - Temporary consent MUST stay in bounded memory, vanish on worker or daemon-epoch change, and deny
+    if the host is unavailable; every reuse still requires current validation and a single-use
+    journal entry.
+  - Consent MUST NOT spread to other slots/tools/inputs or arise from Allow once, Deny, suggestions,
+    settings or old receipts; cached consent MUST NOT claim human waiting.
+  - Settled or late-expired cards MUST retire promptly; cosmetic failures MUST NOT delay, change or
+    replay decisions, and local dispatch MUST NOT claim Telegram display.
+  - Bash permission covers the command and descendants, not system-call review or hostile-project
+    protection; background/bypass options, unknown fields and incomplete previews MUST refuse.
+  - Profile and session HOME MUST stay pinned across exact resume/rollback; changes require a new
+    session.
+  - Toolchains MUST be bounded, trusted, read-only and separate from private
+    authority/runtime/project/HOME; mutable tools, hardlinks and special files MUST refuse.
+  - Trusted hook/control code MUST retain root-owned validation; launch-local Git settings MUST
+    avoid automatic upstream/gc/maintenance without altering shared or sibling configuration.
+  - An authorized text-only consultation MAY use one pinned route/model/effort with verified
+    inference-only credentials and no paid fallback; no tools, sessions, writer, proxy, redirect or
+    automatic retry.
+  - Consultation MUST return complete visible text, retain uncertainty on
+    timeout/mismatch/incompleteness and stop its owned caller without claiming remote cancellation;
+    no management/signing credential may be exposed.
+  - Linked worktrees MAY expose only their metadata plus admitted shared objects/refs/logs;
+    pointers/config stay read-only and primary/sibling worktrees remain absent.
+  - Whole common-directory mounts and unconfined administration fallback MUST refuse; confined
+    project work storage stays hidden/read-only, with incoming/staging available.
+  - Workstation explicitly exposes the host read-only, including credentials/authority, sockets and
+    supplementary-group access; this accepts trusted-host risk, not isolation.
+  - Its persistent writes MUST stay within project, admitted Git metadata and session HOME; private
+    paths MUST NOT overlap writable/trusted mounts and inherited read-only mounts MUST stay locked.
+  - Workstation preauthorizes validated Bash with current binding/stop checks and single-use journal
+    entries, without fabricated human receipts or wait notices; push/deploy/service changes remain
+    owner decisions by policy.
+  - Developer acceptance MUST prove native edit/test/local-Git, fresh Bash Allow/Deny, consent
+    reuse/reset/refusal, absent denied effects, exact resume and stop/cleanup/uncertainty,
+    separately from installed Telegram acceptance.
+  - The installation trusts one owner and assigned administrative/recovery helpers; MUST NOT claim
+    hostile same-UID/admin isolation, prompt-injection resistance, or exfiltration isolation from
+    permissions, metadata or shared networking.
+  - Scoped confined-launch acceptance MUST identify reachable authority endpoints and prove private
+    files/FDs, signing, management and host control require unavailable secrets; CPA credentials
+    MUST grant no management/host control and unknown exposure MUST refuse activation.
+  - Those checks are point-in-time, not host-wide guarantees; stronger isolation and full provider
+    parity MUST NOT become extra gates for this bounded trusted installation.
+  - Backups recover captured data only, never disclosures, external effects or forged authority.
 
-The detailed threat model in `docs/SECURITY.ru.md` remains normative where it is
-more specific and consistent with this baseline.
+The [security threat model](../SECURITY.ru.md) remains normative where more specific
+and consistent with this baseline.

@@ -85,15 +85,11 @@ examples (`example.com`, `/home/example`, and documented placeholder IDs).
 
 Run `python -m hermes_codex_router.privacy_scan . --history` before every commit. The same
 privacy gate is mandatory in `scripts/validate.py` and CI. Do not bypass it or
-add an allowlist entry for real deployment data; fix the fixture or prose. The
-only permitted disclosure declaration is one public author email supplied from
-a private file outside the checkout. It applies solely to the exact author-email
-byte span of a structurally recognized, pinned-signature GitHub merge as defined
-in ADR 0026. The same verified context may suppress only a private-deployment
-fingerprint on the complete author-name or hosted source-owner span when its
-bytes exactly equal the valid owner in the local GitHub `origin` URL. Never
-record a real value or its digest in this repository, and never extend these
-rules to another identity, field, finding type, or deployment datum.
+add an allowlist entry for real deployment data; fix the fixture or prose.
+Commit authorship is public by design (ADR 0085): names and emails in the
+author, committer and tagger fields, co-author or sign-off trailers, and the
+source owner of a hosted merge pass the scan. Everything else in a commit
+message, and every file, is still scanned.
 
 Follow the document ownership/change rules in `docs/product/MAINTENANCE.md`;
 do not repeat an observable contract in every guide. Use the focused development
@@ -101,11 +97,13 @@ profile described in `docs/testing/README.md` during iteration. Full canonical
 validation remains mandatory for publication and CI; distinguish automated
 coverage from owner-driven live E2E.
 
-Never commit on a red test suite. The installed pre-commit hook runs the history
-scan and the full parallel suite (`scripts/validate.py --profile commit`); do
-not bypass it with `--no-verify`. Without the hook, run that profile yourself
-before committing. Commit messages must not contain email addresses: the
-history scan rejects them permanently, including co-author trailers.
+Never commit on a red test suite. The installed pre-commit hook
+(`scripts/validate.py --profile commit`) runs the cheap contracts, the history
+scan and the tests that the change can affect. A documentation-only commit runs
+no tests. Changes to dependencies, fixtures, hooks or workflows run the full
+suite. The pre-push hook and CI always run the full suite (ADR 0086). Do not
+bypass the hooks with `--no-verify`. Without the hook, run that profile
+yourself before committing.
 
 Never call a deployment current or accepted without naming the exact clean Git
 revision and confirming that every required long-running component reports that
@@ -123,7 +121,9 @@ revision and highest proven level.
   other non-Claude authors get Claude Opus 5.5/high; Claude authors get GPT-6.1
   Sol/high, or GPT Astra/high for exceptionally important changes. Argon is not
   a reviewer. Follow `docs/operations/CLAUDE_SOURCE_REVIEW.md` and record the
-  findings in the pull request.
+  findings in the pull request. Review is bounded: one round, then a second
+  only for blockers. After that the owner decides on what is still open
+  (ADR 0086).
 - A Claude-led session consults GPT Astra on architectural and other important
   decisions before committing to them; the owner still decides.
 - Invoke independent source review directly through CPA HTTP, without a

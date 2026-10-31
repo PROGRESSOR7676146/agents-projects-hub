@@ -1,249 +1,143 @@
 # Onboarding and acceptance requirements
 
-This normative module is part of the
-[product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Supporting detail: [reference](REQUIREMENT_DETAILS.md#onboarding-and-acceptance).
 
 ## 14. Project onboarding and Telegram acceptance
 
-- **REQ-ONBOARD-001 (Implemented):** Project root authority remains local. The
-  private Hub onboarding wizard MAY accept a safe project ID and an opaque
-  choice among configured `allowed_roots`; it MUST derive a single direct-child
-  root locally and MUST NOT accept a path, separator, dot component, callback
-  path or forwarded text as root authority. A project is identified by stable
-  ID, display name, canonical Git root, and allowlisted root boundary.
-- **REQ-ONBOARD-002 (Implemented):** A Telegram group may be discovered only as
-  bounded numeric/title metadata. A newly created group is bound only through
-  the exact durable workflow receipt for its numeric identity and canonical
-  root; titles and invite links never authorize a binding. Controller ingress,
-  provider execution, recovery, saved-session connection and command audit MUST
-  resolve static and dynamic bindings through the same current-registry,
-  allowlisted-root and real-Git-toplevel checks. Direct-message work additionally
-  requires the exact configured direct project and a configured owner chat ID.
-  Resolving one project MUST NOT fail because an unrelated project is disabled;
-  listing/audit MUST retain healthy groups and report bounded per-group errors.
-- **REQ-ONBOARD-003 (Implemented offline; live acceptance required):** The group
-  MUST be a private forum supergroup,
-  contain the Hub and every locally managed provider bot identity, contain every
-  owner captured when the action was confirmed, and provide topic IDs. A
-  provider declared `managed_externally` retains its native admission boundary;
-  its group membership is optional and the provisioner MUST NOT preflight,
-  invite, promote or verify it. The creating technical owner remains
-  creator; every other captured owner MUST be invited, granted the documented
-  administrative rights, and verified before any bot invitation begins, so a
-  later bot-specific rejection leaves a human recovery authority in the group.
-  Before inviting a bot, the worker MUST read its exact active group membership
-  and skip the invitation when the expected identity is an active participant. It MUST invite only
-  after Telegram proves `UserNotParticipant`; other lookup failures MUST NOT be
-  treated as absence. Left, banned, unknown and mismatched participant results
-  MUST block configuration and final readiness.
-  Bot permissions MUST be the
-  minimum needed; lack of Manage Topics does not block General.
-- **REQ-ONBOARD-004 (Accepted):** Privacy Mode and bot re-add requirements are
-  deployment steps, not runtime routing actions.
-- **REQ-ONBOARD-005 (Planned acceptance):** Every new project must pass a canary
-  for root isolation, ordinary routing, satellite invocation, Reply routing,
-  restart persistence, and correct response identity before routine use.
-- **REQ-ONBOARD-006 (Implemented offline; deployment opt-in required):** Because
-  Telegram group creation and participant invitation are user-only MTProto
-  operations, full automation MAY use a separate explicitly enabled local user
-  session. Its API hash and session remain private files, its numeric identity
-  MUST be pinned to an owner, and the long-running provisioner MUST refuse an
-  unpinned or different identity. The user session and its sidecars MUST remain
-  private and one nonblocking process lock MUST cover login and the whole worker
-  lifetime. Mutation RPCs MUST use bounded deadlines with client retry and
-  reconnect disabled. The acceptance actor is not reused.
-- **REQ-ONBOARD-007 (Implemented):** Project onboarding MUST persist external
-  operation boundaries. Root preparation is idempotent; an unknown group create
-  or bot-configuration outcome MUST pause without blind retry or deletion.
-  A preflight or proven configuration rejection MUST remain explicitly resumable
-  without inventing a group identity. Recovery requires an exact local
-  workflow/group confirmation, a fresh owner snapshot, and MUST reject
-  conflicting project, group or root identities. Completion notices and new
-  group command scopes MUST retain durable retry deadlines. A recoverable block
-  MUST continue reserving its project ID and root. Command convergence MUST use
-  one bot/group API operation per leased step, persist per-bot cooldowns that
-  apply to bindings created during the cooldown, fail exhausted work safely,
-  and permit only explicit local reset. Command audit MUST open existing state
-  read-only without initialization or migration. An ambiguous completion send
-  without a positive Telegram message ID MUST remain unknown.
+- **REQ-ONBOARD-001 (Implemented):** Root authority MUST remain local: onboarding MAY accept a safe
+  project ID and opaque allowed-root choice, but MUST derive one canonical direct child without
+  accepting path text or forwarded/callback content as authority.
+- **REQ-ONBOARD-002 (Implemented):** Group binding MUST require exact numeric workflow/root
+  evidence, never titles or invite links; all execution/recovery/connect/audit paths MUST share
+  current registry and canonical Git-root checks. Direct chats additionally require their configured
+  project/owner, and unrelated invalid projects MUST NOT hide healthy ones.
+- **REQ-ONBOARD-003 (Implemented offline; live acceptance required):** Ready groups MUST be private
+  forums containing Hub, local provider bots and every confirmed owner, with verified human
+  administrative recovery authority before bots are invited.
+  - External providers MUST retain native membership/admission without provisioner intervention; bot
+    rights MUST be minimal and General usable without Manage Topics.
+  - Existing exact active membership MUST skip invitation; only proven absence permits it, and
+    unknown, banned, left or mismatched membership MUST block readiness.
+- **REQ-ONBOARD-004 (Accepted):** Privacy Mode and bot re-addition MUST remain deployment steps,
+  never agent-switch actions.
+- **REQ-ONBOARD-005 (Planned acceptance):** Each new project MUST pass isolation, routing,
+  satellite, Reply, restart and response-identity canaries before routine use.
+- **REQ-ONBOARD-006 (Implemented offline; deployment opt-in required):** Automated provisioning MAY
+  use only an explicitly enabled private user session pinned to an owner, distinct from the
+  acceptance actor. Credentials/sidecars MUST stay private, one process MUST own login/provisioning,
+  and mutations MUST have bounded waits without automatic retry/reconnect.
+- **REQ-ONBOARD-007 (Implemented):** Onboarding MUST persist external-operation boundaries, retain
+  blocked project/root reservations, and pause unknown creation/configuration outcomes without blind
+  retry or deletion.
+  - Proven rejection MAY resume only with exact local confirmation, fresh owners and consistent
+    identities; unknown completion delivery MUST remain unknown.
+  - Notices/command convergence MUST retain bounded retries and shared bot cooldowns, fail
+    exhaustion safely and require explicit local reset; audit MUST remain read-only without
+    initialization/migration.
 
 ### Existing-project editing
 
-- **REQ-PROJECT-EDIT-001 (Implemented):** The owner-only Hub project workflow
-  MUST select an existing registered project before offering a local display-name
-  change or Git-root relocation. Display-name editing changes only Hub registry
-  metadata; changing the Telegram group title is a separate, explicitly named
-  and confirmed operation and MUST NOT occur implicitly.
-- **REQ-PROJECT-EDIT-002 (Implemented):** A relocation target MUST be selected
-  through an opaque callback from bounded locally discovered or derived options.
-  Telegram MUST NOT accept path text. The target MUST be a canonical direct child
-  of a configured `allowed_root`, MUST reject symlinks, escapes, duplicate roots
-  and non-empty non-Git directories, and MAY initialize only the safe derived
-  `<allowed_root>/<immutable project_id>` directory.
-- **REQ-PROJECT-EDIT-003 (Implemented):** Root relocation MUST preserve
-  `project_id`, numeric Telegram group binding and topic identity, and MUST NOT
-  move, copy or delete either root, project files, Git history or the Telegram
-  group. It MUST refuse any non-archived attached provider session, non-Telegram
-  writer, queued/running work, pending delivery or unresolved outcome. Archived
-  provider-native identity and history remain bound to their original root and
-  MUST NOT be rewritten or resumed under the new root.
-- **REQ-PROJECT-EDIT-004 (Implemented):** Editing MUST use a durable preview and
-  explicit confirmation workflow. Registry projection, topic execution scope and dynamic root binding
-  MUST commit under one locally serialized fail-closed boundary, roll back on a
-  handled fault, and recover a crash after registry replacement before accepting
-  new Telegram work. Repeated callbacks MUST return the same result without
-  creating another root or changing the numeric group binding.
+- **REQ-PROJECT-EDIT-001 (Implemented):** Owner editing MUST first select a registered project;
+  local display-name changes MUST NOT rename its Telegram group without separate explicit
+  confirmation.
+- **REQ-PROJECT-EDIT-002 (Implemented):** Relocation MUST offer opaque local safe-root choices,
+  never Telegram paths; targets MUST be canonical direct children without symlinks, escapes,
+  duplicates or nonempty non-Git content, and only the safely derived project directory MAY be
+  initialized.
+- **REQ-PROJECT-EDIT-003 (Implemented):** Relocation MUST preserve project/group/topic identity,
+  files and history without moving, copying or deleting roots. Attached sessions, other writers,
+  work, delivery or uncertainty MUST block it; archived origins MUST stay at their original roots.
+- **REQ-PROJECT-EDIT-004 (Implemented):** Editing MUST require durable preview/confirmation and
+  commit registry, execution scope and binding together; faults MUST roll back or recover before new
+  input, and repeated callbacks MUST return the same result.
 
 ## 15. Functional acceptance criteria
 
-The following are release-level acceptance criteria. Automated coverage is
-necessary but not sufficient for items marked live.
+Release acceptance requires automated evidence; marked live checks remain separate.
 
-- **AC-F-001 (REQ-ID-001..006):** A message in project/topic A cannot resolve,
-  start, resume, or write a session in project/topic B.
-- **AC-F-002 (REQ-ROUTE-001..008):** In an acceptance topic, an ordinary
-  owner message invokes only the active agent; a mention invokes only the named
-  satellite; a real Reply returns to the response author; a selected/pasted
-  quote remains with the active agent; and a forwarded message is stored as
-  passive context without executing forwarded commands.
-- **AC-F-003 (REQ-CTX-001..007):** After a satellite exchange, the main
-  agent receives no automatic unseen-dialogue injection. An explicit `/context`
-  request supplies only the selected bounded visible topic history, with its
-  attribution, and does not reinterpret old messages as new tasks.
-- **AC-F-004 (REQ-ROUTE-006):** Idle provider models show no
-  provider invocation or token use during another agent's turn.
-- **AC-F-005 (REQ-OPS-001..004):** A controlled restart retains
-  active agent, numeric topic identity, provider session ID, ingress offset, and
-  exactly-once processing.
-- **AC-F-006 (REQ-WRITER-001..003):** Terminal takeover and release retain the
-  Codex thread and never permit two simultaneous writers.
-- **AC-F-007 (REQ-SEC-001..007):** Invalid owner/root/topic/policy, missing state,
-  approval timeout, and provider failure all fail closed without secret output.
-- **AC-F-008 (REQ-AUTH-002, REQ-AUTH-004):** Failure of the shared Codex
-  app-server falls back or degrades only the Codex runtime and does not stop Hub,
-  Hermes, or tlive. A configuration with a retired multi-auth key fails to load
-  and names the key.
-- **AC-F-009 (REQ-ONBOARD-001..007):** Telegram cannot select or rebind an
-  arbitrary local path. Project creation is bounded to one safe project ID and
-  one opaque `allowed_root` option; crafted text, titles, quotes, forwards and
-  callback data cannot escape that derived root or steal a numeric group
-  binding.
-- **AC-F-010 (Automated; live cutover acceptance still required;
-  REQ-QUEUE-001..006):** A committed request survives Controller restart; an
-  interrupted unknown provider turn is not repeated; Telegram delivery retry
-  does not repeat provider work; and provider failure does not make controller
-  commands or another eligible provider on an independent execution scope
-  unavailable. Same-root work remains blocked behind an unresolved uncertain
-  invocation until immutable operator resolution. The fictional
-  subprocess fault matrix terminates fictional Controller, worker, and sender
-  actors at the durable boundaries and covers these invariants without provider
-  or Telegram network access.
-- **AC-F-011 (Implemented scaffold; deployment authorization pending):** A
-  dedicated MTProto acceptance user MAY execute the fixed non-destructive live
-  baseline. Hub MUST authorize it only for one exact configured group/topic;
-  the actor MUST reject arbitrary configured commands and prompts, keep all
-  credentials/session/evidence outside Git, and never be treated as a global
-  owner. Traffic from any sender outside the pinned actor, Hub, and configured
-  provider identities MUST invalidate the affected canary check rather than be
-  mistaken for test output. The runner MUST stop after the first failed check so
-  it cannot enqueue unrelated later scenarios behind unhealthy provider work.
-  A separately enabled Codex-only P0/P1 scenario MAY inspect one private live
-  state database and restart only the fixed Controller and Codex-worker units.
-  It MUST require explicit restart opt-in, both units initially active, an
-  aligned Codex response identity, and a private state file. It MUST emit seven
-  distinct results covering caption-only content, album unity, FIFO admission
-  during active work, exactly-once restart recovery, the explicit over-20-MB
-  material notice, response context/quota labels, and read-only status/account
-  commands. It MUST restore units that were active before the scenario and MUST
-  NOT accept service names or productive prompts from configuration.
-  Bot identities MUST NOT be used to impersonate the operator because
-  Telegram does not deliver bot-authored messages to other bots.
-- **AC-F-012 (Automated offline; REQ-OPS-010..011):** Distinct clean candidate
-  and rollback wheels pass the digest/identity/schema manifest gate; a
-  temporary schema-20 production-shaped database migrates to the candidate target; the
-  temporary activation pointer switches to the candidate and back; and both
-  compatible artifacts open the retained target state without changing queued,
-  outbox, or indeterminate work. This is not a live rollout or Telegram E2E.
-- **AC-F-013 (Automated offline; live Telegram acceptance pending;
-  REQ-CMD-008, REQ-WRITER-009..012):** Topic, Hub-private, and local-code entry
-  paths select one exact saved Codex thread without model inference. Empty,
-  occupied and newly created destinations preserve project/root/owner checks.
-  Expired, repeated and concurrent codes, stale callbacks, changed targets,
-  delayed input, restart boundaries, metadata failure, and unknown Telegram
-  send/create outcomes neither substitute a thread nor partially archive the
-  existing binding. A committed marker activates one generation; the next
-  later message resumes the selected thread without `/return`.
-- **AC-F-014 (Automated offline; REQ-PROJECT-EDIT-001..004):** Owner project
-  selection, impact preview and confirmation preserve immutable project/group
-  identity. Rename performs no Telegram group mutation. Existing and derived new
-  roots pass the canonical safety gate; busy/session/delivery/uncertain states
-  block relocation; crash recovery and callback replay converge once; new
-  Controller/worker resolution uses the new root while archived provider origins
-  retain the old root.
-- **AC-F-015 (Retired by ADR 0065):** Lead/advisor role and review-workflow
-  acceptance is removed, not passed. The ID remains reserved. Independent
-  subscription/CPA routing, human approvals, Telegram behavior, scoped installation and
-  exact-session local return still require their existing separate acceptance
-  before Claude parity is claimed; REQ-EVAL-010 remains an independent milestone.
-  Its acceptance is owned by the
-  [evaluation module](EVALUATION_AND_ALLOCATION.md#acceptance-boundaries).
-  The bounded Claude editor milestone follows
-  [ADR 0067](../decisions/0067-claude-editor-first.md); deferred Claude transfer,
-  saved-session discovery and image enablement are not its acceptance gates.
+- **AC-F-001 (REQ-ID-001..006):** Project/topic A cannot access or write B's sessions.
+- **AC-F-002 (REQ-ROUTE-001..008):** Ordinary, mention and real Reply input reach only their
+  intended agents; quotes stay context and forwards execute nothing.
+- **AC-F-003 (REQ-CTX-001..007):** No automatic cross-agent history appears; explicit context
+  supplies only bounded attributed topic dialogue as data.
+- **AC-F-004 (REQ-ROUTE-006):** Idle providers spend no tokens or invocations during another agent's
+  turn.
+- **AC-F-005 (REQ-OPS-001..004):** Restart preserves identities, sessions, active agent, ingress
+  offset and idempotency.
+- **AC-F-006 (REQ-WRITER-001..003):** Takeover/release preserves the Codex thread and one writer.
+- **AC-F-007 (REQ-SEC-001..007):** Invalid authority/policy, missing state, timeout and failure
+  refuse safely without secrets.
+- **AC-F-008 (REQ-AUTH-002, REQ-AUTH-004):** Shared-server failure remains Codex-local; retired
+  multi-auth configuration fails by key name.
+- **AC-F-009 (REQ-ONBOARD-001..007):** Onboarding cannot escape its locally derived root or steal a
+  group binding through crafted Telegram input.
+- **AC-F-010 (Automated; live cutover acceptance still required; REQ-QUEUE-001..006):** Offline
+  fault acceptance MUST prove committed input survives, uncertainty never replays, delivery never
+  repeats execution, and independent commands/providers remain usable. Unresolved same-root work
+  stays blocked until immutable owner resolution.
+- **AC-F-011 (Implemented scaffold; deployment authorization pending):** A dedicated acceptance user
+  MAY run only the fixed nondestructive baseline in one authorized group/topic, with private
+  credentials/evidence and no global-owner authority.
+  - Unexpected senders invalidate checks, the first failure stops the run, and bots MUST NOT
+    impersonate the owner.
+  - Optional Codex P0/P1 checks MUST require explicit restart opt-in, private state, aligned
+    identity and initially active fixed units, then restore those units.
+  - Configuration MUST NOT supply arbitrary prompts, commands or services; the seven fixed
+    material/FIFO/restart/telemetry/status results remain distinct.
+- **AC-F-012 (Automated offline; REQ-OPS-010..011):** Exact clean candidate and distinct compatible
+  rollback artifacts MUST pass identity/digest/schema checks and temporary migration/rollback
+  without changing queued, delivery or uncertain work; this proves no live rollout.
+- **AC-F-013 (Automated offline; live Telegram acceptance pending; REQ-CMD-008,
+  REQ-WRITER-009..012):** All connect entries MUST select the exact saved thread without inference,
+  preserve root/owner/binding safety through stale, duplicate, concurrent or unknown outcomes, and
+  activate once behind the marker.
+- **AC-F-014 (Automated offline; REQ-PROJECT-EDIT-001..004):** Editing MUST preserve
+  identity/history, refuse unsafe or busy relocation, recover crashes once and resolve new work to
+  the new root while archived origins retain the old one.
+- **AC-F-015 (Retired by ADR 0065):** Role-workflow acceptance is removed, not passed; its ID stays
+  reserved. Claude routing, approvals, installation, Telegram and exact-session parity retain
+  separate gates; the [journal](EVALUATION_AND_ALLOCATION.md#acceptance-boundaries) remains
+  independent and deferred transfer/discovery/images do not gate the bounded editor.
 
 ## 16. Non-functional acceptance criteria
 
-- **AC-NF-001 — Security:** Secrets, hidden reasoning, raw environment/terminal
-  output, and private invite links do not appear in Git, logs, status responses,
-  shared context, handoffs, or Telegram publications.
-- **AC-NF-002 — Reliability:** Duplicate updates are idempotent; crashes do not
-  transform pending work or approval into success; migrations are recoverable.
-- **AC-NF-003 — Isolation:** One adapter or recovery-channel failure does not
-  cascade into unrelated providers or projects.
-- **AC-NF-004 — Observability:** Status distinguishes healthy, degraded,
-  exhausted, misconfigured, and blocked components and names the bounded
-  recovery action without exposing secrets.
-- **AC-NF-005 — Cost control:** Passive observation and routing use deterministic
-  local code; only explicitly targeted productive turns spend provider tokens.
-- **AC-NF-006 — Maintainability:** Provider integration uses small versioned
-  adapters and capability probes; unsupported protocol changes stop visibly
-  rather than falling back to screen scraping.
-- **AC-NF-007 — Upgrade compatibility:** External component versions are upgraded
-  through backup, contract tests, smoke tests, health gates, and rollback. Local
-  carried patches are documented before an upstream upgrade.
-- **AC-NF-008 — Portability:** Publishable configuration and tests do not assume
-  the owner's home path; deployment-specific paths remain local state.
+- **AC-NF-001 — Security:** Secrets, reasoning, raw environment/screens and private invite links
+  never enter Git, logs, status, shared context, handoffs or Telegram.
+- **AC-NF-002 — Reliability:** Duplicates are idempotent; crashes never turn pending work/approval
+  into success; migrations recover.
+- **AC-NF-003 — Isolation:** Failures stay within their provider/channel/project.
+- **AC-NF-004 — Observability:** Status distinguishes health, degradation, exhaustion,
+  misconfiguration and blocking, with safe recovery actions.
+- **AC-NF-005 — Cost control:** Passive routing/observation is deterministic; only explicitly
+  targeted work spends tokens.
+- **AC-NF-006 — Maintainability:** Small versioned adapters/probes refuse unsupported changes
+  visibly, without screen scraping.
+- **AC-NF-007 — Upgrade compatibility:** Upgrades require backup, contract/smoke checks, health
+  gates and rollback; carried patches are documented first.
+- **AC-NF-008 — Portability:** Published configuration/tests use no owner-specific paths.
 
 ## 17. Capability status matrix
 
-| Capability | Status | Notes |
+| Capability | Status | Boundary |
 | --- | --- | --- |
-| Numeric project/topic isolation | Implemented | Automated multi-project isolation tests. |
-| Central Telegram group ingress | Implemented | External provider group pollers disabled by design. |
-| Reply/mention/quote/ordinary semantics | Implemented | Automated routing coverage; live acceptance is deployment-local. |
-| Inbound Telegram materials | Implemented for Hub-owned durable queue ingress; live acceptance pending | Schema-33 durable text/image snapshots, caption and file-only parsing, one-turn albums, passive forwards, FIFO late input, Codex `localImage`, provider-input regressions, explicit unsupported/20 MiB notices, and digest/path revalidation. Legacy inline input rejects attachments visibly. |
-| Explicit bounded visible context | Implemented | No automatic handoff; `/context [agent_id] [1..20]` reads only the current topic on explicit user request. |
-| Artifact staging and attachment delivery | Implemented for Hub-owned transports | Exact per-job staging, private immutable spool, path/size/digest validation, bounded rejection notice, durable ordered queue delivery, immediate legacy/DM delivery, and post-acceptance cleanup. Hermes retains its independent native transport. |
-| Codex persistent sessions and metadata | Implemented | App-server integration and restart persistence covered. |
-| Hermes project integration | Implemented | Native Gateway plus fail-closed plugin/hook boundary. |
-| OpenCode and Antigravity adapters | Implemented | Contract tests; live provider acceptance is deployment-local. |
-| Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
-| Codex official login and stdio fallback | Implemented | Multi-auth account pool retired by ADR 0047; retired keys are rejected at load. |
-| Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
-| `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
-| Project/group onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only Hub wizard, schema-28 owner/lease/command receipts, bounded Git-root preparation and a separately authorized owner user-session provisioner; unknown Telegram outcomes stop without blind retry. |
-| Registered-project editing | Implemented offline; live Telegram acceptance pending | Owner-only schema-29 workflow changes local display name or relocates to an opaque safe Git-root option; immutable project/group identity and old provider origins remain unchanged. |
-| Compact command surface | Implemented | Provider defaults remain bounded; project Hub scope exposes `/menu`, `/connect`, `/stop`, and Hub private scope exposes `/start`, `/projects`, `/connect`, `/cancel`. |
-| Saved Codex session connect | Implemented; live Telegram acceptance pending | One durable workflow serves topic selection, Hub-private selection/new-topic creation, and owner-scoped local one-time codes. |
-| Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |
-| Codex account rotation events | Retired | Removed with the multi-auth integration (ADR 0047). |
-| Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
-| Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, explicit `external_worker_agent_ids`, and opt-in `outbox_runtime: "external"`; controller delivery remains the default rollback path. |
-| Bounded independent-root concurrency | Implemented behind feature gate | `max_parallel_roots` defaults to one; values up to 16 require external workers, durable fairness, canonical-root exclusion, and explicitly bound/revalidated Git worktree lanes. Deployment/live acceptance remains separate. |
-| Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
-| Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
-| Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |
-| Message-by-message CLI transcript mirroring | Rejected | Provider sessions plus explicit bounded history retrieval are sufficient. |
-| Automatic approval or security relaxation | Rejected | Violates the trust model. |
-| Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route or an explicit direct subscription route (ADR 0082) with independent slots; human approvals, scoped installation and subscription acceptance remain open; global same-UID/admin isolation is not claimed; parity is deferred (REQ-AUTH-009/SEC-008, ADR 0067/0072). |
-| Out-of-band update and incident plane | Planned | Hub keeps a passive incident journal and stack drift check; Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool switches the stack only from an owner-confirmed plan (REQ-OPS-013..015, ADR 0048). |
+| Numeric isolation, central ingress, routing, explicit context | Implemented | Live acceptance stays deployment-local. |
+| Inbound materials | Implemented for Hub-owned durable queue ingress; live acceptance pending | Verified content or visible refusal. |
+| Artifact delivery | Implemented for Hub-owned transports | Private verified snapshots; Hermes remains independent. |
+| Codex sessions/metadata, Hermes integration, OpenCode/Antigravity adapters | Implemented | Provider-specific live acceptance remains. |
+| Codex tmux takeover/release | Implemented | Fallback frontend. |
+| Codex login/stdio | Implemented | Multi-auth retired. |
+| Telegram E2E baseline | Bounded actor implemented; live authorization pending | Private evidence. |
+| Local/return | Implemented | Codex same-session/model-free; other providers need acceptance. |
+| Onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only provisioning. |
+| Project editing | Implemented offline; live Telegram acceptance pending | Safe local changes only. |
+| Compact controls | Implemented | Scoped supported menus. |
+| Saved Codex connect | Implemented; live Telegram acceptance pending | One exact-thread workflow. |
+| Summary-free Codex return | Implemented | Lease only. |
+| Codex rotation events | Retired | No pool integration. |
+| Embedded queue | Implemented | Inline remains default. |
+| External workers/root concurrency | Implemented behind feature gate | Explicit capacity and validated worktrees. |
+| Antigravity rotation; universal Session Bridge | Deferred | Requires stable capability or demonstrated need. |
+| OS terminal/PID management; full CLI mirroring; automatic approval/security relaxation | Rejected | Outside scope. |
+| Claude worker | Repository scaffold; live acceptance pending | Explicit routes/tools; parity deferred, no same-UID isolation claim. |
+| Incident/update plane | Planned | Passive notices; owner-authorized analysis and updates. |

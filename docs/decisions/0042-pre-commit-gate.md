@@ -1,6 +1,6 @@
 # ADR 0042: Pre-commit gate with the full test suite
 
-Status: accepted
+Status: accepted; the full-suite part is superseded by [ADR 0086](0086-lighter-local-gates-and-bounded-review.md)
 Date: 2026-09-27
 
 ## Context

@@ -1,185 +1,107 @@
 # Evaluation and resource-aware task allocation requirements
 
-This normative module is part of the
-[product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Supporting detail: [reference](REQUIREMENT_DETAILS.md#evaluation-and-allocation).
 
-Status: accepted product direction; implementation and live acceptance pending.
-The requirement is foundational: future task orchestration must preserve the
-evidence needed to evaluate participants and allocate work. No scoring service,
-automatic provider switch, evaluation run, new provider, or deployment is enabled
-by this document. Algorithms and evaluator vendors remain implementation choices.
-Rationale: [ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
-
-Delivery priority: the minimal outcome/usage journal is independent of the
-retired [Hub role workflow](../decisions/0065-retire-hub-lead-advisor.md). Automatic
-profiles, ranking, allocation, model judges and comparative experiments remain
-deferred until observed need and suitable evidence justify them. The accepted
-long-term requirements below do not make those mechanisms a prerequisite for
-the current provider-parity release.
+Status: accepted direction; implementation and live acceptance pending.
+The minimal private journal is independent of retired Hub roles. Automatic scoring,
+ranking, allocation, model judges and trials remain deferred until need and evidence
+justify them; this baseline enables no calls, providers or deployment and adds no
+current provider-parity gate.
 
 ## 21. Evaluation and resource-aware task allocation
 
-- **REQ-EVAL-001 (Accepted):** Hub MUST support automatic evidence-based
-  evaluation of task outcomes and participant profiles, and use those profiles
-  for recommendations and explicitly enabled task allocation. Profiles MUST
-  distinguish task class and role, runtime, provider, model/version, effort,
-  material tool/instruction configuration and context conditions. General
-  suitability and present resource availability MUST remain separate. One
-  global model score MUST NOT be the sole basis for allocation.
-- **REQ-EVAL-002 (Accepted):** Evaluation MUST distinguish verified task
-  completion, first-pass acceptance, attributable defects and severity, rework,
-  decision quality, execution time, queue/approval/wait time, and observable
-  resource consumption. Full task cost MUST include delegation, evaluation,
-  retries and integration without counting child consumption twice. Provider,
-  transport, environment and integration failures MUST be distinguished from
-  participant mistakes; unknown attribution, cancelled work and immature
-  delayed outcomes MUST NOT become fabricated success or failure labels.
-  A provider's terminal success alone MUST NOT establish product acceptance.
-- **REQ-EVAL-003 (Accepted):** Every displayed or consumed profile estimate
-  MUST retain its evidence source, task stratum, sample support, uncertainty,
-  freshness and relevant model/evaluator/rubric versions. Missing evidence
-  MUST remain unknown. Comparisons MUST account for task difficulty, selection
-  effects and differing execution conditions. Model confidence MUST NOT be
-  presented as empirically established success probability without calibration
-  against outcomes. Material version or workflow changes MUST trigger review
-  of profile applicability rather than silently pooling incompatible evidence.
-- **REQ-EVAL-004 (Accepted):** Objective checks and model assessments MUST be
-  recorded separately. An optional model evaluator MAY supply bounded
-  classifications, rubric assessments or recommendations, but MUST NOT be the
-  sole correctness oracle, approval authority or resource accountant. Its
-  calibration, bias, failure behavior and full cost MUST be evaluated on
-  representative held-out tasks. The system MUST retain a useful deterministic
-  fallback when the evaluator is absent, unavailable or insufficiently proven.
-  No particular evaluator, including Jev, is a required dependency.
-- **REQ-EVAL-005 (Accepted):** Resource-aware allocation MUST use only
-  allowlisted accounts and provider-supported passive telemetry, cached data
-  or observations from already authorized work. Each limit MUST retain its
-  scope, units, reported window/reset semantics, observation time and source.
-  Reported, estimated, stale, exhausted and unknown states MUST remain
-  distinguishable. Context occupancy, token usage, subscription quota, rate
-  limits and money MUST NOT be treated as interchangeable. Shared quota pools
-  MUST NOT be counted once per model or participant. Reservations and unknown
-  consumption MUST be handled conservatively; exact remaining capacity MUST
-  NOT be claimed when it is not observable. Monitoring and quota discovery
-  MUST NOT invoke inference or synthesize an exhaustion probe.
-- **REQ-EVAL-006 (Accepted):** Allocation MUST first enforce owner intent,
-  recipient/model pins, project/data access, capabilities, sandbox, approvals,
-  writer exclusion, capacity and budget. Within the eligible set, a versioned
-  policy MAY rank estimated quality, time, total cost and resource scarcity.
-  Hub MUST record why a candidate was selected, rejected or deferred, and
-  allow owner override within the same safety boundaries. Learned scores and
-  model recommendations MUST NOT override deterministic admission. Existing
-  Reply/mention routing, provider-session identity and immutable enqueued
-  target snapshots MUST remain intact; a changed allocation creates a new
-  explicit task decision and MUST NOT replay uncertain work or silently
-  migrate an in-flight turn. Automatic allocation applies only to work whose
-  executor selection the owner has delegated, not to all ordinary chat input.
-- **REQ-EVAL-007 (Accepted):** Productive evaluation, model judging and
-  exploratory duplication MUST require an explicit task/workflow authorization
-  and bounded budget. They MAY execute automatically within that authorized
-  workflow, but MUST NOT originate from health checks, monitoring, recovery
-  probes or scheduled timers. Accounting MUST include all evaluator and
-  descendant calls; passive statistics and policy scoring MAY run without
-  inference. Unknown usage MUST remain bounded by conservative reservations
-  or call/time limits. Evaluation-budget exhaustion MUST stop admission of
-  new discretionary evaluation work; paid fallback, purchases or account
-  rotation MUST NOT bypass that budget. Existing explicitly authorized account
-  rotation remains subject to the same workflow budget and account policy.
-- **REQ-EVAL-008 (Accepted):** Comparative trials MUST use recorded, comparable
-  task inputs, base artifacts, criteria and execution conditions, isolate
-  candidates, and prevent duplicate external side effects. Trial selection and
-  assignment MUST be recorded so that exploratory, observational and paired
-  evidence cannot be mistaken for one another. Small-task results MUST NOT
-  establish superiority for unrelated complex work. Judgments SHOULD blind
-  candidate identity where practical and control order effects. Trial budgets
-  MUST include judging and discarded candidates, and cancellation MUST NOT be
-  assumed to refund consumption. Exploration policy MUST be justified by
-  measured decision benefit rather than unbounded ranking activity.
-- **REQ-EVAL-009 (Accepted):** Task, attempt, assessment, resource and allocation
-  evidence MUST be durable, versioned and idempotent, with explicit ownership
-  of corrections and delayed outcomes. Evidence-derived aggregates MUST be
-  reproducible from retained eligible records; retention/deletion MUST mark
-  reduced provenance rather than invent it. These records and participant
-  profiles are private local state with bounded retention and restrictive
-  permissions. Hidden reasoning, credentials, raw terminal/environment dumps
-  and deployment identities MUST NOT enter shared evaluations or the repository.
-  Cross-project aggregation and transfer to an external evaluator require
-  explicit data scope; ordinary context isolation remains in force. Models
-  MUST NOT edit their own authoritative grades, usage or allocation receipts.
-  This product rule and scoped access checks do not claim tamper-proof evidence
-  against a trusted same-UID/admin assistant (REQ-SEC-008).
-- **REQ-EVAL-010 (Bounded projection and owner assessments implemented offline; live acceptance pending):**
-  Hub MUST provide a minimal
-  private outcome journal: task, participant/model/effort, result or artifact,
-  accepted/rework/unknown decision with a short reason, and observable elapsed
-  time and usage. Unknown usage MUST remain unknown. It MUST NOT require an
-  automatic score, model judge, comparative trial, or learned dispatcher.
-  The bounded owner-decision slice MUST reserve non-forwarded `/assess
-  accepted|rework|unknown REASON` at authorized central Hub ingress before
-  Reply/mention routing, session preparation, material handling or productive
-  invocation. Only configured owners MAY record it in a registered project
-  topic with external queue and outbox ownership. Captions, selected quotes,
-  materials, malformed commands and unavailable targets MUST receive a durable
-  refusal without productive fallback. Forwarded commands remain passive context.
-  A first assessment MUST Reply to any positively receipted part of exactly one
-  saved final in that same numeric destination; every final part, including
-  documents, MUST have strict version-1 receipt provenance. Progress, controls,
-  resultless notices, incomplete/unknown delivery and legacy receipts MUST NOT
-  establish a result target. Historical completed session generations MAY be
-  assessed without retargeting their execution.
-  Applied and refused dispositions MUST be append-only, deduplicated by full
-  assessment-input fingerprint before bounded parsing, including a canonical
-  digest of the original Telegram message before quote/material normalization
-  and excluding `update_id`. Semantically irrelevant source differences MAY
-  conservatively conflict; they MUST NOT reparse or replace a disposition.
-  A correction MUST Reply to the
-  latest applied human command, rather than a bot acknowledgement; competing
-  first decisions or corrections MUST have at most one applied successor.
-  Fingerprint conflicts MUST preserve the prior disposition without productive
-  fallback or endless input retry. HubState MUST atomically commit disposition,
-  input consumption, independent Hub acknowledgement and the existing command
-  boundary that advances queued future deadlines in that topic. This boundary
-  MUST preserve holds, job status, routing, root exclusion and capacity; exact
-  duplicates MUST NOT close a later batch. Failed commits MUST leave all four
-  effects retryable through control-only ingress.
-  Acknowledgement delivery MUST retain the independent control-notice fence,
-  strict receipt and unknown-send/no-blind-resend rules. Unsupported owning
-  endpoints and scoped acceptance actors MAY receive one best-effort refusal;
-  noncentral group pollers MUST NOT consume the shared input receipt. Private
-  controls MUST NOT enter onboarding/edit/connect free-text workflows.
-  Assessments are journal evidence only: `rework` MUST NOT enqueue execution,
-  `accepted` MUST NOT grant tools or release uncertainty, and `unknown` MUST NOT
-  overwrite usage, model or timing evidence. Source publication MUST NOT claim
-  deployed authority-data custody from Telegram authentication or SQL triggers.
-  The confined Claude launch MUST exclude the journal's private state. Global
-  same-UID/admin exclusion is not claimed under REQ-SEC-008 and MUST NOT become
-  an additional journal gate. Provenance and human-only assessment checks remain
-  mandatory; trusted administrative access is not acceptance evidence.
+- **REQ-EVAL-001 (Accepted):** Hub MUST support evidence-based outcome/profile evaluation for
+  recommendations and explicitly enabled allocation. Profiles MUST distinguish
+  task/role/runtime/model/effort/configuration/context, separate suitability from resources, and
+  never allocate from one global score alone.
+- **REQ-EVAL-002 (Accepted):** Evaluation MUST distinguish completion, first-pass acceptance,
+  defects, rework, decision quality, execution/wait time and observable total cost, including
+  descendants without double counting. Provider success MUST NOT imply product acceptance; unknown
+  attribution, cancellation and immature outcomes MUST NOT become invented grades.
+  - Provider, transport, environment and integration failures MUST remain separate from participant
+    mistakes, with attributable defect severity retained.
+- **REQ-EVAL-003 (Accepted):** Estimates MUST retain source, task stratum, sample support,
+  uncertainty, freshness and relevant versions; missing evidence stays unknown. Comparisons MUST
+  account for difficulty, selection and conditions, calibrate probability claims, and review
+  applicability after material changes.
+- **REQ-EVAL-004 (Accepted):** Objective checks and model judgments MUST stay separate; evaluators
+  MUST NOT be sole correctness, approval or accounting authorities. Their calibration, bias,
+  failures and cost require held-out validation, and a useful deterministic fallback MUST remain
+  without a required vendor.
+- **REQ-EVAL-005 (Accepted):** Allocation MUST use allowlisted accounts and passive or
+  already-authorized observations, never inference/exhaustion probes.
+  - Limits MUST retain scope, units, window/reset, time and source, distinguishing
+    reported/estimated/stale/exhausted/unknown values.
+  - Context, usage, quota, rate limits and money MUST remain distinct; shared pools MUST NOT be
+    counted twice and unobservable capacity MUST stay conservatively reserved/unknown.
+- **REQ-EVAL-006 (Accepted):** Allocation MUST first enforce owner pins, access, capability,
+  sandbox, approvals, writer exclusion, capacity and budget; only delegated executor selection MAY
+  be automatic.
+  - Versioned ranking MUST explain decisions and allow safe owner override without overriding
+    admission.
+  - Reply/mention/session/enqueue targets MUST remain intact; reallocation requires a new explicit
+    decision, never silent in-flight migration or uncertain replay.
+- **REQ-EVAL-007 (Accepted):** Productive evaluation/judging/duplication MUST require explicit
+  workflow authority and bounded budget, never originate from monitors, timers or recovery probes.
+  All descendant cost and unknown usage MUST be conservatively bounded; exhaustion stops
+  discretionary admission and MUST NOT be bypassed through paid fallback, purchases or rotation.
+- **REQ-EVAL-008 (Accepted):** Trials MUST retain comparable inputs/artifacts/criteria/conditions
+  and recorded assignment, isolate candidates and prevent duplicate external effects. Costs MUST
+  include judging/discarded work without presumed cancellation refunds; limited trials cannot prove
+  unrelated superiority, blinding SHOULD control bias, and exploration MUST justify its decision
+  benefit.
+  - Exploratory, observational and paired evidence MUST remain distinguishable; judgments SHOULD
+    control candidate order as well as identity bias.
+- **REQ-EVAL-009 (Accepted):** Evidence MUST be durable, versioned, idempotent and reproducible,
+  with correction ownership and honest provenance loss after deletion.
+  - Private bounded records MUST use restrictive permissions; shared evaluation/Git MUST exclude
+    reasoning, credentials, raw environment/screens and deployment identities.
+  - Cross-project/external evaluation MUST require explicit data scope; models MUST NOT edit their
+    own authoritative grades, usage or allocation receipts, without claiming same-UID/admin tamper
+    resistance.
+- **REQ-EVAL-010 (Bounded projection and owner assessments implemented offline; live acceptance
+  pending):** Hub MUST provide a private task/result/participant journal with owner
+  accepted/rework/unknown decisions, reasons and observable time/usage; unknowns stay unknown and no
+  scorer/judge/dispatcher is required.
+  - Only configured owners at central registered-topic ingress with external queue/outbox MAY
+    assess; reserved commands MUST be handled before routing or productive preparation.
+  - Invalid, quoted/material-bearing or unavailable targets MUST receive durable refusal without
+    productive fallback; forwards remain passive.
+  - First assessment MUST Reply to one exact same-destination saved final with strict positive
+    provenance for every part, never progress, controls, incomplete/unknown delivery or legacy
+    receipts.
+  - Historical completed generations MAY be assessed without retargeting; corrections MUST Reply to
+    the latest applied human command, with at most one successor.
+  - Applied/refused decisions MUST be append-only and deduplicated before parsing; conflicts
+    preserve the prior disposition without invocation or endless retry.
+  - Disposition, consumed input, independent acknowledgement and topic command boundary MUST commit
+    together; failures stay control-only retryable and duplicates MUST NOT close later batches.
+  - Assessment MUST preserve holds, routing, status, root exclusion and capacity; acknowledgement
+    retains strict receipt/no-blind-resend rules.
+  - Unsupported/scoped-actor endpoints MAY refuse once; noncentral pollers MUST NOT consume shared
+    receipts and private controls MUST NOT enter other workflows.
+  - Rework MUST NOT enqueue work, acceptance MUST NOT grant tools/release uncertainty, and unknown
+    MUST NOT overwrite usage/model/time evidence.
+  - Confined Claude MUST lack journal access; authentication/SQL MUST NOT claim deployed custody,
+    global same-UID exclusion or acceptance from trusted administrative access.
 
 ### Acceptance boundaries
 
-For the independent REQ-EVAL-010 journal, offline acceptance MUST cover duplicate
-and conflicting dispositions, corrections, strict Reply/result provenance,
-atomic rollback and absence of productive fallback. Unknown usage/time/model
-evidence MUST remain unknown; an assessment MUST NOT invoke a provider, replay
-work, grant tools or release execution uncertainty. These journal checks remain
-required after AC-F-015 retirement, independent of scoring and model evaluation.
+Journal acceptance MUST prove duplicate/conflict/correction handling, exact Reply
+provenance, atomic rollback and no productive fallback. Unknowns MUST stay unknown;
+assessment MUST NOT invoke, replay, grant tools or release execution uncertainty.
 
-Implementation acceptance requires offline evidence for duplicate outcome
-delivery, delayed corrections, attribution uncertainty, shared quota pools,
-stale/missing telemetry, budget reservations, pinned recipients, cold-start
-profiles, evaluator outage, manipulated candidate content and replay refusal.
-The test suite must demonstrate zero inference from passive scoring/monitoring
-and no unapproved exploratory work. Paired trials must not publish or integrate
-both candidates as if both were productive user outcomes.
+Broader acceptance MUST prove conservative evidence, resources, budgets and pins
+under missing/stale data, corrections, outages and manipulated content, with zero
+passive inference or unapproved exploration. Trials MUST NOT publish/integrate both
+candidates as productive results.
 
-Quality or savings claims additionally require representative repeated
-comparisons against a fixed routing baseline, including evaluation overhead,
-quality constraints, uncertainty and failed/discarded work. Historical data
-without suitable assignment coverage cannot prove counterfactual superiority.
-Deployment/provider acceptance remains separately authorized and tied to the
-exact clean revision under the existing engineering evidence rules.
+Quality/savings claims MUST use representative repeated comparisons against fixed
+routing, including overhead, uncertainty and failed/discarded work; inadequate
+historical assignment cannot prove superiority. Deployment/provider acceptance
+remains separately authorized for the exact clean revision.
 
-The [research report](../research/AGENT_SCORING_AND_ALLOCATION.ru.md) explains
-candidate metrics, statistical methods and Jev suitability. It is non-normative;
-specific formulas, thresholds and experiments are not accepted implementations.
+The [research report](../research/AGENT_SCORING_AND_ALLOCATION.ru.md) and
+[ADR 0037](../decisions/0037-evidence-based-task-allocation.md) retain methods and rationale;
+specific formulas/vendors remain implementation choices.

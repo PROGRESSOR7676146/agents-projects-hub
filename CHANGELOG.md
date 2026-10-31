@@ -5,6 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Commit authorship is public: author, committer, tagger and `Co-Authored-By`
+  style emails pass the privacy gate, which no longer needs a private policy
+  file, a GitHub signature check or a repository variable (ADR 0085).
+- Commits run only the tests their change can affect; push and CI keep the
+  full suite. Independent review stops after one round plus one round for
+  blockers, then the owner decides (ADR 0086).
+
 ## [0.10.0] - 2026-10-31
 
 - Add opt-in text clarification during an owned Claude invocation: one compatible

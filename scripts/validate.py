@@ -240,7 +240,7 @@ def composition_mismatch(discovered: Sequence[str], started: Sequence[str]) -> s
     return f"ran {len(started)} of {len(discovered)} discovered tests; " + "; ".join(details)
 
 
-def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
+def run_test_modules(*, jobs: int, root: Path = ROOT, only: frozenset[str] | None = None) -> None:
     """Run every discovered test module in its own process, several at a time.
 
     Discovery supplies the dotted module names, including nested test
@@ -263,7 +263,13 @@ def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
         for name in set(discoverable_test_files(root)) - set(expected)
         if not any(name.startswith(package + ".") for package in skipped_packages)
     )
+    if only is not None:
+        expected = {name: tests for name, tests in expected.items() if name in only}
+        empty = [name for name in empty if name in only]
     modules = sorted(expected)
+    if only is not None and not modules and not empty:
+        print("No test modules are affected by this change")
+        return
     if not modules and not empty:
         raise RuntimeError("no test modules discovered under tests/")
     environment = sibling_import_environment(root)
@@ -314,6 +320,53 @@ def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
         raise RuntimeError(f"{len(failed)} of {total_modules} test modules failed: {names}")
     total = sum(count for _, _, count, _ in results)
     print(f"Ran {total} tests in {len(modules)} test modules with {jobs} parallel jobs")
+
+
+# Changes outside these places (dependencies, fixtures, hooks, workflows,
+# Markdown that tests may read) may affect any test, so they keep the full suite.
+_LOCAL_CHANGE = re.compile(
+    r"(?:[^/]+\.md|docs/.*|src/hermes_codex_router/[^/]+\.py|scripts/[^/]+\.py"
+    r"|tests/(?:[^/]+/)*test[^/]*\.py)"
+)
+
+
+def affected_test_modules(root: Path = ROOT) -> frozenset[str] | None:
+    """Test modules a commit touches, or ``None`` when only the full suite is safe.
+
+    The commit hook guarantees the working tree equals the commit, so the diff
+    against ``HEAD`` is the change. A discoverable test module is affected when
+    it changed or names a changed source module or script.
+    """
+    completed = subprocess.run(
+        ("git", "diff", "--name-only", "--no-renames", "HEAD", "--"),
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    changed = completed.stdout.splitlines()
+    if any(
+        _LOCAL_CHANGE.fullmatch(path) is None or Path(path).name == "__init__.py"
+        for path in changed
+    ):
+        return None
+    modules = {
+        name: root / "tests" / Path(*name.split(".")).with_suffix(".py")
+        for name in discoverable_test_files(root)
+    }
+    changed_paths = {root / path for path in changed}
+    affected = {name for name, path in modules.items() if path in changed_paths}
+    names = [Path(path).stem for path in changed if path.startswith(("src/", "scripts/"))]
+    if names:
+        pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, names)) + r")\b")
+        affected.update(
+            name
+            for name, path in modules.items()
+            if path.is_file() and pattern.search(path.read_text(encoding="utf-8"))
+        )
+    return frozenset(affected)
 
 
 def check_release_lock() -> None:
@@ -424,7 +477,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         # canonical run and CI; every other canonical guarantee applies.
         if args.profile == "canonical":
             stages.append(("types", lambda: run(tool("pyright"))))
-        stages.append(("full tests", lambda: run_test_modules(jobs=jobs)))
+        if args.profile == "canonical":
+            stages.append(("full tests", lambda: run_test_modules(jobs=jobs)))
+        else:
+            # A commit runs only the tests its change can affect; the pre-push
+            # canonical run and CI keep the full suite (ADR 0086).
+            def affected_tests() -> None:
+                only = affected_test_modules()
+                run_test_modules(jobs=jobs, only=only)
+
+            stages.append(("affected tests", affected_tests))
     else:
         stages.append(
             (
@@ -452,7 +514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     label = {
         "canonical": "Canonical validation",
-        "commit": "Commit gate (not canonical acceptance; types run at push)",
+        "commit": "Commit gate (not canonical acceptance; full tests and types run at push)",
         "focused": "Focused development checks (not canonical acceptance)",
     }[args.profile]
     print(label, flush=True)

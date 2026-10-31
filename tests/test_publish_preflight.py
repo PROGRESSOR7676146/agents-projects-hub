@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 import subprocess
 import sys
@@ -61,110 +60,6 @@ class PublishPreflightTests(unittest.TestCase):
                 f"(unknown) {head} refs/tags/v1.0.0 {'0' * 40}\n",
                 head,
             )
-
-    def test_remote_policy_comparison_is_exact_and_does_not_disclose_value(self) -> None:
-        declared = b"owner@example.com"
-        completed = subprocess.CompletedProcess(
-            ["gh"], 0, stdout=b'{"value":"owner@example.com"}', stderr=b""
-        )
-        with patch(
-            "hermes_codex_router.publish_preflight.subprocess.run", return_value=completed
-        ) as run:
-            publish_preflight._require_matching_repository_variable(
-                declared, Path("/repo"), "example-org/example-repository"
-            )
-        self.assertEqual(run.call_args.args[0][:4], ["gh", "api", "--method", "GET"])
-
-        mismatch = subprocess.CompletedProcess(
-            ["gh"], 0, stdout=b'{"value":"different@example.com"}', stderr=b""
-        )
-        stderr = io.StringIO()
-        with (
-            patch("hermes_codex_router.publish_preflight.subprocess.run", return_value=mismatch),
-            redirect_stderr(stderr),
-            self.assertRaises(publish_preflight.PreflightError),
-        ):
-            publish_preflight._require_matching_repository_variable(
-                declared, Path("/repo"), "example-org/example-repository"
-            )
-        self.assertNotIn("owner@example.com", stderr.getvalue())
-        self.assertNotIn("different@example.com", stderr.getvalue())
-
-    def test_remote_lookup_failure_does_not_echo_cli_output(self) -> None:
-        completed = subprocess.CompletedProcess(
-            ["gh"], 1, stdout=b"private-value", stderr=b"private-diagnostic"
-        )
-        with (
-            patch("hermes_codex_router.publish_preflight.subprocess.run", return_value=completed),
-            self.assertRaisesRegex(publish_preflight.PreflightError, "repository variable"),
-        ):
-            publish_preflight._require_matching_repository_variable(
-                b"owner@example.com", Path("/repo"), "example-org/example-repository"
-            )
-
-    def test_remote_policy_rejects_noncanonical_bytes(self) -> None:
-        for value in (
-            "owner@example.com\r",
-            "owner@example.com\r\n",
-            "owner@example.com\n\n",
-            " owner@example.com",
-            "owner@example.com ",
-        ):
-            with self.subTest(value=repr(value)):
-                completed = subprocess.CompletedProcess(
-                    ["gh"],
-                    0,
-                    stdout=json.dumps({"value": value}).encode("utf-8"),
-                    stderr=b"",
-                )
-                with (
-                    patch(
-                        "hermes_codex_router.publish_preflight.subprocess.run",
-                        return_value=completed,
-                    ),
-                    self.assertRaises(publish_preflight.PreflightError),
-                ):
-                    publish_preflight._require_matching_repository_variable(
-                        b"owner@example.com",
-                        Path("/repo"),
-                        "example-org/example-repository",
-                    )
-
-    def test_github_remote_parser_supports_checkout_url_forms(self) -> None:
-        self.assertEqual(
-            publish_preflight._github_repository(
-                "https://github.com/example-org/example-repository.git"
-            ),
-            "example-org/example-repository",
-        )
-        self.assertEqual(
-            publish_preflight._github_repository(
-                "git@" + "github.com:example-org/example-repository.git"
-            ),
-            "example-org/example-repository",
-        )
-        self.assertEqual(
-            publish_preflight._github_repository(
-                "ssh://git@" + "github.com/example-org/example-repository.git"
-            ),
-            "example-org/example-repository",
-        )
-        with self.assertRaisesRegex(publish_preflight.PreflightError, "supported GitHub"):
-            publish_preflight._github_repository("https://example.com/org/repository.git")
-
-    def test_resolve_policy_uses_env_then_local_git_config(self) -> None:
-        root = Path("/repo")
-        with patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": "/policy"}):
-            self.assertEqual(publish_preflight._policy_path(root), Path("/policy"))
-
-        completed = subprocess.CompletedProcess(
-            ["git"], 0, stdout="/configured-policy\n", stderr=""
-        )
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("hermes_codex_router.publish_preflight.subprocess.run", return_value=completed),
-        ):
-            self.assertEqual(publish_preflight._policy_path(root), Path("/configured-policy"))
 
     def test_install_places_hook_in_shared_git_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -246,14 +141,6 @@ class PublishPreflightTests(unittest.TestCase):
                 check=True,
             ).stdout.strip()
             self.assertEqual(linked_hook_directory, str(hook_directory))
-            configured_policy = subprocess.run(
-                ["git", "config", "--local", "--get", "hub.publicAuthorEmailFile"],
-                cwd=root,
-                text=True,
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-            self.assertEqual(configured_policy, str(policy))
             configured_python = subprocess.run(
                 ["git", "config", "--local", "--get", "hub.publishPython"],
                 cwd=root,
@@ -285,9 +172,6 @@ class PublishPreflightTests(unittest.TestCase):
             (root / "src" / "hermes_codex_router").mkdir(parents=True)
             (root / "scripts").mkdir()
             (root / "scripts" / "validate.py").write_text("", encoding="utf-8")
-            policy = root.parent / "fictional-public-author-policy"
-            policy.write_text("owner@example.com\n", encoding="ascii")
-            policy.chmod(0o600)
             calls: list[tuple[list[str], dict[str, str] | None]] = []
 
             def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
@@ -297,17 +181,8 @@ class PublishPreflightTests(unittest.TestCase):
                     return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
                 if argv[:2] == ["git", "rev-parse"]:
                     return subprocess.CompletedProcess(argv, 0, stdout=f"{'a' * 40}\n", stderr="")
-                if argv[:4] == ["gh", "repo", "view", "--json"]:
-                    return subprocess.CompletedProcess(
-                        argv,
-                        0,
-                        stdout=b'{"nameWithOwner":"example-org/example-repository"}',
-                        stderr=b"",
-                    )
-                if argv[:4] == ["gh", "api", "--method", "GET"]:
-                    return subprocess.CompletedProcess(
-                        argv, 0, stdout=b'{"value":"owner@example.com"}', stderr=b""
-                    )
+                if argv[0] == "gh":
+                    raise AssertionError("the preflight must not query GitHub")
                 if Path(argv[-1]).name == "validate.py":
                     return subprocess.CompletedProcess(
                         argv, 0, stdout="PASS documentation (0.10s)\n", stderr=""
@@ -317,17 +192,8 @@ class PublishPreflightTests(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 patch.object(publish_preflight, "ROOT", root),
-                patch.object(
-                    publish_preflight,
-                    "_read_declared_email",
-                    return_value=b"owner@example.com",
-                ),
                 patch.object(publish_preflight, "_require_checkout_import"),
-                patch.dict(
-                    os.environ,
-                    {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)},
-                    clear=True,
-                ),
+                patch.dict(os.environ, {}, clear=True),
                 patch("hermes_codex_router.publish_preflight.subprocess.run", fake_run),
                 patch("sys.stdin", io.StringIO("")),
                 redirect_stdout(stdout),
@@ -340,7 +206,6 @@ class PublishPreflightTests(unittest.TestCase):
             self.assertIsNotNone(environment)
             assert environment is not None
             self.assertEqual(environment["PYTHONPATH"].split(os.pathsep)[0], str(root / "src"))
-            self.assertEqual(environment["HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"], str(policy))
             self.assertIn("passed", stdout.getvalue())
             self.assertIn("PASS documentation (0.10s)", stdout.getvalue())
             status_calls = [
@@ -364,54 +229,12 @@ class PublishPreflightTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             patch.object(publish_preflight, "_require_checkout_import"),
-            patch.object(publish_preflight, "_policy_path", return_value=Path("/policy")),
-            patch.object(
-                publish_preflight, "_read_declared_email", return_value=b"owner@example.com"
-            ),
-            patch.object(publish_preflight, "_require_matching_repository_variable"),
             patch("hermes_codex_router.publish_preflight.subprocess.run", fake_run),
             patch("sys.stdin", io.StringIO("")),
             redirect_stderr(stderr),
         ):
             self.assertEqual(publish_preflight.main([]), 1)
         self.assertIn("changed during validation", stderr.getvalue())
-
-    def test_main_rejects_a_policy_file_changed_during_validation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            root = base / "checkout"
-            (root / "scripts").mkdir(parents=True)
-            (root / "scripts" / "validate.py").write_text("", encoding="utf-8")
-            policy = base / "public-author-policy"
-            policy.write_text("owner@example.com\n", encoding="ascii")
-            policy.chmod(0o600)
-
-            def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-                if argv[:3] == ["git", "status", "--porcelain"]:
-                    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-                if argv[:2] == ["git", "rev-parse"]:
-                    return subprocess.CompletedProcess(argv, 0, stdout=f"{'a' * 40}\n", stderr="")
-                if Path(argv[-1]).name == "validate.py":
-                    policy.write_text("changed@example.com\n", encoding="ascii")
-                    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-
-            stderr = io.StringIO()
-            with (
-                patch.object(publish_preflight, "ROOT", root),
-                patch.object(publish_preflight, "_require_checkout_import"),
-                patch.object(publish_preflight, "_require_matching_repository_variable"),
-                patch.dict(
-                    os.environ,
-                    {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)},
-                    clear=True,
-                ),
-                patch("hermes_codex_router.publish_preflight.subprocess.run", fake_run),
-                patch("sys.stdin", io.StringIO("")),
-                redirect_stderr(stderr),
-            ):
-                self.assertEqual(publish_preflight.main([]), 1)
-            self.assertIn("policy file changed", stderr.getvalue())
 
     def test_dangling_annotated_tag_cannot_be_published_as_a_raw_oid(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -444,7 +267,9 @@ class PublishPreflightTests(unittest.TestCase):
                 "GIT_COMMITTER_NAME": "Fictional Private",
                 "GIT_COMMITTER_EMAIL": "owner@" + "private.invalid",
             }
-            git("tag", "-a", "v1.0.0", "-m", "fictional private tag", env=tag_identity)
+            # Tagger identity is publishable; the message leak keeps the tag private.
+            message = "fictional private tag for owner@" + "private.invalid"
+            git("tag", "-a", "v1.0.0", "-m", message, env=tag_identity)
             tag_oid = git("rev-parse", "refs/tags/v1.0.0", env=identity)
             self.assertTrue(publish_preflight.privacy_scan.scan_history(root))
 

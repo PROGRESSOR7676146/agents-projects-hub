@@ -1,6 +1,6 @@
 # ADR 0026: signed GitHub merge privacy boundary
 
-Status: accepted
+Status: superseded by [ADR 0085](0085-public-commit-authorship.md) (2026-10-30)
 Date: 2026-09-13
 
 ## Context

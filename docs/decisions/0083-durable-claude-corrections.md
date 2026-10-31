@@ -70,10 +70,13 @@ FIFO/stop/selection/provenance refusal, saved-result settlement, capacity, stale
 leases, immutable linkage and additive migration/DDL rollback. Real subprocess
 fixtures use fictional output, no account or inference. Native characterization
 and product integration evidence remain distinct from installed Telegram E2E.
-The owned file-tool branch also runs with the real stream policy for editor,
-developer and workstation profiles, maximal initial replay, command lifecycle
-and child receipt. Its fictional wrapper does not prove namespace isolation or
-productive Bash/permission-host acceptance.
+The owned file-tool branch also runs through the real `run_turn`, file-tool
+argument builder, permission wrapper, passive capability check and owned subprocess
+for editor, developer and workstation profiles, maximal initial replay, command
+lifecycle and child receipt. A separate test passes streamed stdin through the
+real descriptor-pinned namespace and permission wrapper. The full `run_turn`
+test substitutes the namespace boundary; these tests do not prove productive
+Bash/permission-host acceptance or installed Telegram behavior.
 
 Activation needs an explicit deployment task, schema55-compatible candidate and
 rollback, exact-source gates and bounded native/Telegram tests for a correction

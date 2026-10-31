@@ -12,6 +12,7 @@ with a new record.
 
 | Decision | Current outcome | Source |
 | --- | --- | --- |
+| Impact-classified incidents and owner paging | The monitor separates work-stopping incidents from noise and pages the owner only for them; analysis starts only from the owner's «Разобрать», never automatically. | [ADR 0084](0084-impact-classified-incidents-and-owner-paging.md) |
 | Late receipts and notice ordering | Exact late receipt evidence survives lease expiry; new unknown execution notices do not block later saved finals. | [ADR 0069](0069-late-receipts-and-notice-ordering.md) |
 | Proven-not-sent Telegram retry | Native initial socket failures may retry through existing fenced delivery; post-connect and historical unknown evidence stays conservative. | [ADR 0068](0068-proven-not-sent-telegram-retry.md) |
 | Product identity | Agents Projects Hub; internal `hermes_codex_router` remains for compatibility. | Product requirements |
@@ -47,7 +48,7 @@ with a new record.
 | Deterministic saved-session connect | Schema-26 unifies topic, Hub-private and local-code selection; a real marker receipt atomically activates Telegram without `/return`, while unknown sends preserve the old binding. | [ADR 0023](0023-deterministic-session-connect.md) |
 | Project/group provisioning | Schema-27 lets the owner-only Hub queue bounded local-root and forum creation through a separately enabled, pinned Telegram user session; ambiguous external operations stop for exact local reconciliation. | [ADR 0024](0024-user-authorized-project-group-provisioning.md) |
 | Provisioning fencing and owner membership | Schema-28 snapshots every configured owner, fences the private user session and workflow lease, centralizes project resolution, and persists command/result delivery recovery. | [ADR 0025](0025-provisioning-fencing-and-owner-membership.md) |
-| Signed GitHub merge privacy boundary | A pinned-signature merge may exempt an externally declared exact author-email span and only the fingerprint rule on a complete author-name or hosted source-owner span equal to local origin; all surrounding metadata remains scanned. | [ADR 0026](0026-signed-github-merge-privacy-boundary.md) |
+| Public commit authorship | Author, committer, tagger, `Name <email>` trailers and the hosted merge source owner are publishable; message prose and files stay scanned. Supersedes ADR 0026. | [ADR 0085](0085-public-commit-authorship.md) |
 | No silent session rebind on project relocation | Schema-29 project editing preserves immutable group identity, blocks live provider state, and recovers the registry/SQLite commit without rewriting provider-native roots. | [ADR 0027](0027-no-silent-session-rebind-on-project-relocation.md) |
 | Explicit Codex provider routing | Schema-30 retains source provenance while a local provider setting pins start/resume and native CLI transfer without replacing the thread. | [ADR 0028](0028-explicit-codex-provider-routing.md) |
 | Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0029](0029-execution-time-root-validation.md) |
