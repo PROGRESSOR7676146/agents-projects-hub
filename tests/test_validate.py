@@ -37,8 +37,11 @@ class ValidationTests(unittest.TestCase):
             if failure and failure in command:
                 raise subprocess.CalledProcessError(7, argv)
 
-        def run_test_modules(*, jobs: int, **_kwargs: object) -> None:
-            calls.append(f"all test modules jobs={jobs}")
+        def run_test_modules(
+            *, jobs: int, only: frozenset[str] | None = None, **_kwargs: object
+        ) -> None:
+            label = "all test modules" if only is None else f"affected {sorted(only)}"
+            calls.append(f"{label} jobs={jobs}")
             if failure and failure in "all test modules":
                 raise RuntimeError("1 of 2 test modules failed: test_example.py")
 
@@ -107,7 +110,10 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("test_example.py", output)
 
     def test_environment_parallelism_keeps_full_gates_and_failure(self) -> None:
-        with patch.dict(os.environ, {"HUB_VALIDATION_TEST_JOBS": "4"}):
+        with (
+            patch.dict(os.environ, {"HUB_VALIDATION_TEST_JOBS": "4"}),
+            patch.object(validator, "affected_test_modules", return_value=None),
+        ):
             for profile in ("canonical", "commit"):
                 with self.subTest(profile=profile):
                     code, calls, _ = self.invoke(["--profile", profile])
@@ -117,7 +123,7 @@ class ValidationTests(unittest.TestCase):
                     self.assertIn("--history", privacy)
                     code, _, output = self.invoke(["--profile", profile], "all test modules")
                     self.assertEqual(code, 1)
-                    self.assertIn("FAIL full tests", output)
+                    self.assertRegex(output, r"FAIL (?:full|affected) tests")
 
     def test_environment_parallelism_is_bounded_cli_wins_and_focused_ignores(self) -> None:
         for value in ("", "0", "33", "many"):
@@ -136,7 +142,8 @@ class ValidationTests(unittest.TestCase):
                 self.assertFalse(any("all test modules" in call for call in calls))
 
     def test_commit_gate_runs_history_and_full_tests_but_leaves_types_to_push(self) -> None:
-        code, calls, output = self.invoke(["--profile", "commit", "--jobs", "2"])
+        with patch.object(validator, "affected_test_modules", return_value=None):
+            code, calls, output = self.invoke(["--profile", "commit", "--jobs", "2"])
         self.assertEqual(code, 0)
         privacy = [call for call in calls if "privacy_scan" in call]
         self.assertEqual(len(privacy), 1)
@@ -161,6 +168,70 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             self.invoke(["--profile", "focused", "--jobs", "2"])
         self.assertEqual(error.exception.code, 2)
+
+    def test_commit_gate_runs_only_affected_tests(self) -> None:
+        with patch.object(
+            validator, "affected_test_modules", return_value=frozenset({"test_example"})
+        ):
+            code, calls, _ = self.invoke(["--profile", "commit", "--jobs", "2"])
+        self.assertEqual(code, 0)
+        self.assertIn("affected ['test_example'] jobs=2", calls)
+        self.assertNotIn("all test modules jobs=2", calls)
+
+    def test_affected_modules_follow_the_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args: str) -> None:
+                subprocess.run(
+                    ["git", "-c", "user.name=Example", "-c", "user.email=a@example.com", *args],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+
+            files = {
+                "docs/guide.md": "guide\n",
+                "src/hermes_codex_router/alpha.py": "A = 1\n",
+                "tests/test_alpha.py": "from hermes_codex_router import alpha\n",
+                "tests/__init__.py": "",
+                "tests/test_beta.py": "import os\n",
+                "pyproject.toml": "[project]\n",
+            }
+            for name, text in files.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text, encoding="utf-8")
+            git("init", "-q")
+            git("add", ".")
+            git("commit", "-q", "-m", "base")
+            self.assertEqual(validator.affected_test_modules(root), frozenset())
+            (root / "docs/guide.md").write_text("changed\n", encoding="utf-8")
+            self.assertEqual(validator.affected_test_modules(root), frozenset())
+            (root / "src/hermes_codex_router/alpha.py").write_text("A = 2\n", encoding="utf-8")
+            self.assertEqual(validator.affected_test_modules(root), frozenset({"test_alpha"}))
+            (root / "tests/test_beta.py").write_text("import sys\n", encoding="utf-8")
+            self.assertEqual(
+                validator.affected_test_modules(root), frozenset({"test_alpha", "test_beta"})
+            )
+            nested = root / "tests" / "integration"
+            nested.mkdir()
+            (nested / "__init__.py").write_text("", encoding="utf-8")
+            (nested / "test_gamma.py").write_text("import hermes_codex_router.alpha\n", "utf-8")
+            git("add", ".")
+            git("commit", "-q", "-m", "nested")
+            (root / "src/hermes_codex_router/alpha.py").write_text("A = 3\n", encoding="utf-8")
+            self.assertEqual(
+                validator.affected_test_modules(root),
+                frozenset({"test_alpha", "integration.test_gamma"}),
+            )
+            git("checkout", "-q", "--", ".")
+            (root / "tests/fixtures").mkdir()
+            (root / "tests/fixtures/prompt.md").write_text("fixture\n", encoding="utf-8")
+            git("add", ".")
+            self.assertIsNone(validator.affected_test_modules(root))
+            git("reset", "-q", "--hard")
+            (root / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+            self.assertIsNone(validator.affected_test_modules(root))
 
     def test_documentation_failure_prevents_typing_and_test_suite(self) -> None:
         code, calls, output = self.invoke([], "documentation_contract")

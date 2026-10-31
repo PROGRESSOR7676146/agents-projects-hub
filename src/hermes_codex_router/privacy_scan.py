@@ -4,9 +4,7 @@ import argparse
 import hashlib
 import os
 import re
-import stat
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,22 +57,12 @@ _RAW_SESSION_RES = (
     re.compile("<permissions " + "instructions>"),
     re.compile(r"(?m)^## \d+\. (?:User|Assistant)\s+·"),
 )
-_GITHUB_WEB_FLOW_FINGERPRINTS = frozenset(
-    {
-        "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23",
-        "968479A1AFF927E37D1A566BB5690EEEBB952194",
-    }
-)
-_PUBLIC_AUTHOR_EMAIL_FILE_ENV = "HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"
-_MAX_PUBLIC_AUTHOR_EMAIL_FILE_BYTES = 320
-_AUTHOR_HEADER_RE = re.compile(
-    r"(?m)^author (?P<name>[^<>\n]*) <(?P<email>[^<>\n]+)> "
-    r"(?P<timestamp>[0-9]+) (?P<timezone>[+-][0-9]{4})$"
-)
-_GITHUB_COMMITTER_RE = re.compile(
-    r"(?m)^committer GitHub <noreply@github\.com> "
-    r"(?P<timestamp>[0-9]+) (?P<timezone>[+-][0-9]{4})$"
-)
+# Commit authorship is publishable: names and emails of authors, committers,
+# taggers, co-author style trailers and the hosted merge source owner (ADR 0085).
+_IDENTITY_RULES = frozenset({"non-example email address", "private deployment fingerprint"})
+_IDENTITY_RE = re.compile(r"[^<>\n]*<[^<>\n]+>")
+_TRAILER_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*: \S.*")
+_HOSTED_MERGE_OWNER_RE = re.compile(r"Merge pull request #[0-9]+ from (?P<identity>[A-Za-z0-9-]+)/")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,13 +80,6 @@ class _PrivacyMatch:
     finding: PrivacyFinding
     start: int
     end: int
-
-
-@dataclass(frozen=True, slots=True)
-class _SpanExemption:
-    start: int
-    end: int
-    rules: frozenset[str]
 
 
 def _line_number(text: str, offset: int) -> int:
@@ -236,256 +217,80 @@ def scan_repository(root: Path) -> list[PrivacyFinding]:
     return findings
 
 
-def _valid_git_timezone(value: str) -> bool:
-    if not re.fullmatch(r"[+-][0-9]{4}", value):
-        return False
-    hours = int(value[1:3])
-    minutes = int(value[3:5])
-    return hours < 14 and minutes < 60 or hours == 14 and minutes == 0
+def _identity_after(prefix: str, line: str, start: int) -> tuple[int, int] | None:
+    if not line.startswith(prefix):
+        return None
+    match = _IDENTITY_RE.match(line, len(prefix))
+    return (start + len(prefix), start + match.end()) if match else None
 
 
-def _valid_github_owner(value: str) -> bool:
-    return bool(
-        re.fullmatch(r"[A-Za-z0-9-]{1,39}", value)
-        and not value.startswith("-")
-        and not value.endswith("-")
-        and "--" not in value
-    )
+def _identity_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of commit authorship in raw commit or tag metadata.
 
-
-def _metadata_privacy_exemptions(
-    metadata: bytes,
-    *,
-    declared_author_email: bytes | None,
-    github_signature_verified: bool,
-    github_owner: str | None,
-) -> tuple[_SpanExemption, ...]:
-    if not github_signature_verified:
-        return ()
-    try:
-        text = metadata.decode("utf-8")
-    except UnicodeDecodeError:
-        return ()
-    headers, separator, message = text.partition("\n\n")
-    if not separator or "\x00" in text or "\r" in text:
-        return ()
-    tree_headers = re.findall(r"(?m)^tree ([0-9a-f]{40})$", headers)
-    parents = re.findall(r"(?m)^parent ([0-9a-f]{40})$", headers)
-    author_headers = tuple(_AUTHOR_HEADER_RE.finditer(headers))
-    committer_headers = tuple(_GITHUB_COMMITTER_RE.finditer(headers))
-    if (
-        len(tree_headers) != 1
-        or len(parents) != 2
-        or len(re.findall(r"(?m)^tree ", headers)) != 1
-        or len(re.findall(r"(?m)^parent ", headers)) != 2
-        or len(author_headers) != 1
-        or len(committer_headers) != 1
-        or len(re.findall(r"(?m)^author ", headers)) != 1
-        or len(re.findall(r"(?m)^committer ", headers)) != 1
-    ):
-        return ()
-    author = author_headers[0]
-    committer = committer_headers[0]
-    if not (
-        _valid_git_timezone(author.group("timezone"))
-        and _valid_git_timezone(committer.group("timezone"))
-    ):
-        return ()
-
-    message_offset = len(headers) + len(separator)
-    hosted = re.match(
-        r"^(Merge pull request #[0-9]+ from )"
-        r"(?P<owner>[A-Za-z0-9-]{1,39})/(?P<branch>[^\n]+)(?:\n|$)",
-        message,
-    )
-    synthetic = re.fullmatch(
-        r"Merge (?P<head>[0-9a-f]{40}) into (?P<base>[0-9a-f]{40})\n?",
-        message,
-    )
-    owner_char_span: tuple[int, int] | None = None
-    if hosted:
-        source_owner = hosted.group("owner")
-        if (
-            not github_owner
-            or not _valid_github_owner(source_owner)
-            or source_owner != github_owner
-        ):
-            return ()
-        owner_char_span = (
-            message_offset + hosted.start("owner"),
-            message_offset + hosted.end("owner"),
+    Identities count only where Git puts them: top-level author, committer and
+    tagger headers, the tagger header of an embedded mergetag (not its message),
+    the trailer block that ends the message, and a hosted merge subject.
+    """
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    lines = text.split("\n")
+    index = 0
+    in_mergetag = mergetag_body = False
+    while index < len(lines):
+        line = lines[index]
+        if line == "":
+            break
+        if not line.startswith(" "):
+            in_mergetag = line.startswith("mergetag ")
+            mergetag_body = False
+            for prefix in ("author ", "committer ", "tagger "):
+                span = _identity_after(prefix, line, offset)
+                if span:
+                    spans.append(span)
+        elif in_mergetag and not mergetag_body:
+            if line == " ":
+                mergetag_body = True
+            else:
+                span = _identity_after(" tagger ", line, offset)
+                if span:
+                    spans.append(span)
+        offset += len(line) + 1
+        index += 1
+    message = text[offset + 1 :] if index < len(lines) else ""
+    message_offset = offset + 1
+    merge = _HOSTED_MERGE_OWNER_RE.match(message)
+    if merge:
+        spans.append(
+            (message_offset + merge.start("identity"), message_offset + merge.end("identity"))
         )
-    elif synthetic:
-        if synthetic.group("base") != parents[0] or synthetic.group("head") != parents[1]:
-            return ()
-    else:
-        return ()
-
-    exemptions: list[_SpanExemption] = []
-    email_char_span = author.span("email")
-    email_start, email_end = _byte_span(text, *email_char_span)
-    if (
-        declared_author_email is not None
-        and metadata[email_start:email_end] == declared_author_email
-    ):
-        exemptions.append(
-            _SpanExemption(
-                email_start,
-                email_end,
-                frozenset({"non-example email address", "private deployment fingerprint"}),
-            )
-        )
-    name_char_span = author.span("name")
-    name_start, name_end = _byte_span(text, *name_char_span)
-    if (
-        github_owner is not None
-        and _valid_github_owner(github_owner)
-        and metadata[name_start:name_end] == github_owner.encode("ascii")
-    ):
-        exemptions.append(
-            _SpanExemption(
-                name_start,
-                name_end,
-                frozenset({"private deployment fingerprint"}),
-            )
-        )
-    if owner_char_span is not None:
-        owner_start, owner_end = _byte_span(text, *owner_char_span)
-        exemptions.append(
-            _SpanExemption(
-                owner_start,
-                owner_end,
-                frozenset({"private deployment fingerprint"}),
-            )
-        )
-    return tuple(exemptions)
+    paragraphs = message.rstrip("\n").split("\n\n")
+    if len(paragraphs) > 1:
+        block = paragraphs[-1]
+        block_start = message_offset + message.rstrip("\n").rindex(block)
+        block_lines = block.split("\n")
+        if all(_TRAILER_RE.fullmatch(line) for line in block_lines):
+            position = block_start
+            for line in block_lines:
+                key = line.index(": ") + 2
+                identity = _IDENTITY_RE.fullmatch(line, key)
+                if identity:
+                    spans.append((position + key, position + identity.end()))
+                position += len(line) + 1
+    return [_byte_span(text, start, end) for start, end in spans]
 
 
-def _scan_metadata_for_privacy(
-    path: Path,
-    metadata: bytes,
-    *,
-    declared_author_email: bytes | None,
-    github_signature_verified: bool,
-    github_owner: str | None,
-) -> list[PrivacyFinding]:
+def _scan_metadata_for_privacy(path: Path, metadata: bytes) -> list[PrivacyFinding]:
     try:
         text = metadata.decode("utf-8")
     except UnicodeDecodeError:
         return [PrivacyFinding(path, 1, "non-UTF-8 Git metadata")]
-    exemptions = _metadata_privacy_exemptions(
-        metadata,
-        declared_author_email=declared_author_email,
-        github_signature_verified=github_signature_verified,
-        github_owner=github_owner,
-    )
-    findings: list[PrivacyFinding] = []
-    for match in _scan_text_matches(path, text):
-        if any(
-            match.start == exemption.start
-            and match.end == exemption.end
-            and match.finding.rule in exemption.rules
-            for exemption in exemptions
-        ):
-            continue
-        findings.append(match.finding)
-    return findings
-
-
-def _metadata_for_privacy_scan(
-    metadata: str,
-    *,
-    github_signature_verified: bool = False,
-    github_owner: str | None = None,
-) -> str:
-    """Compatibility helper: metadata must remain byte-for-byte visible to scanners."""
-    return metadata
-
-
-def _parse_public_author_email(raw: bytes) -> bytes | None:
-    if len(raw) > _MAX_PUBLIC_AUTHOR_EMAIL_FILE_BYTES:
-        return None
-    if raw.endswith(b"\n"):
-        raw = raw[:-1]
-    if not raw or b"\n" in raw or b"\r" in raw or b"\x00" in raw:
-        return None
-    try:
-        text = raw.decode("ascii")
-    except UnicodeDecodeError:
-        return None
-    if _EMAIL_RE.fullmatch(text) is None:
-        return None
-    return raw
-
-
-def _read_public_author_email(root: Path) -> bytes | None:
-    raw_path = os.environ.get(_PUBLIC_AUTHOR_EMAIL_FILE_ENV)
-    if not raw_path:
-        return None
-    path = Path(raw_path)
-    if not path.is_absolute():
-        return None
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(path, flags)
-        details = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(details.st_mode)
-            or stat.S_IMODE(details.st_mode) != 0o600
-            or details.st_uid != os.getuid()
-            or details.st_nlink != 1
-            or details.st_size > _MAX_PUBLIC_AUTHOR_EMAIL_FILE_BYTES
-        ):
-            return None
-        descriptor_link = Path(f"/proc/self/fd/{descriptor}")
-        opened_path = descriptor_link.resolve(strict=True)
-        checkout_path = root.resolve(strict=True)
-        try:
-            opened_path.relative_to(checkout_path)
-        except ValueError:
-            pass
-        else:
-            return None
-        chunks: list[bytes] = []
-        remaining = _MAX_PUBLIC_AUTHOR_EMAIL_FILE_BYTES + 1
-        while remaining > 0:
-            chunk = os.read(descriptor, remaining)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        raw = b"".join(chunks)
-        final_details = os.fstat(descriptor)
-        stable_fields = (
-            "st_dev",
-            "st_ino",
-            "st_mode",
-            "st_uid",
-            "st_nlink",
-            "st_size",
-            "st_mtime_ns",
-            "st_ctime_ns",
-        )
-        if (
-            len(raw) > _MAX_PUBLIC_AUTHOR_EMAIL_FILE_BYTES
-            or len(raw) != details.st_size
-            or any(
-                getattr(details, field) != getattr(final_details, field) for field in stable_fields
-            )
-        ):
-            return None
-        return _parse_public_author_email(raw)
-    except (OSError, RuntimeError, ValueError):
-        return None
-    finally:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
+    identities = _identity_spans(text)
+    return [
+        match.finding
+        for match in _scan_text_matches(path, text)
+        if match.finding.rule not in _IDENTITY_RULES
+        or not any(start <= match.start and match.end <= end for start, end in identities)
+    ]
 
 
 def _isolated_git_environment() -> dict[str, str]:
@@ -527,119 +332,6 @@ def _git_object_bytes_match_oid(object_type: str, object_id: str, data: bytes) -
     return hashlib.sha1(framed, usedforsecurity=False).hexdigest() == object_id
 
 
-def _github_signature_verified(root: Path, object_id: str) -> bool:
-    key_path = Path(__file__).with_name("github-web-flow.asc")
-    git_path = Path("/usr/bin/git")
-    gpg_path = Path("/usr/bin/gpg")
-    if not key_path.is_file() or not git_path.is_file() or not gpg_path.is_file():
-        return False
-    try:
-        with tempfile.TemporaryDirectory(prefix="hub-gpg-") as temporary:
-            os.chmod(temporary, 0o700)
-            environment = _isolated_git_environment()
-            environment["GNUPGHOME"] = temporary
-            imported = subprocess.run(
-                [
-                    str(gpg_path),
-                    "--batch",
-                    "--no-autostart",
-                    "--quiet",
-                    "--import",
-                    str(key_path),
-                ],
-                cwd=root,
-                env=environment,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=10,
-            )
-            if imported.returncode != 0:
-                return False
-            verified = subprocess.run(
-                [
-                    str(git_path),
-                    "-c",
-                    "gpg.format=openpgp",
-                    "-c",
-                    f"gpg.program={gpg_path}",
-                    "-c",
-                    f"gpg.openpgp.program={gpg_path}",
-                    "verify-commit",
-                    "--raw",
-                    object_id,
-                ],
-                cwd=root,
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-            )
-            valid_signatures = re.findall(
-                r"(?m)^\[GNUPG:\] VALIDSIG ([0-9A-F]{40}) ", verified.stderr
-            )
-            return (
-                verified.returncode == 0
-                and len(valid_signatures) == 1
-                and valid_signatures[0] in _GITHUB_WEB_FLOW_FINGERPRINTS
-            )
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return False
-
-
-def _is_github_merge_candidate(metadata: str) -> bool:
-    headers, separator, message = metadata.partition("\n\n")
-    if not separator:
-        return False
-    parents = re.findall(r"(?m)^parent ([0-9a-f]{40})$", headers)
-    if len(parents) != 2 or _GITHUB_COMMITTER_RE.search(headers) is None:
-        return False
-    hosted = re.match(
-        r"^Merge pull request #[0-9]+ from [A-Za-z0-9-]{1,39}/[^\n]+(?:\n|$)",
-        message,
-    )
-    synthetic = re.fullmatch(
-        r"Merge (?P<head>[0-9a-f]{40}) into (?P<base>[0-9a-f]{40})\n?",
-        message,
-    )
-    return bool(
-        hosted
-        or synthetic
-        and synthetic.group("base") == parents[0]
-        and synthetic.group("head") == parents[1]
-    )
-
-
-def _github_remote_owner(root: Path) -> str | None:
-    environment = _isolated_git_environment()
-    try:
-        result = subprocess.run(
-            [str(Path("/usr/bin/git")), "config", "--local", "--get", "remote.origin.url"],
-            cwd=root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    match = re.fullmatch(
-        r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
-        r"([A-Za-z0-9-]{1,39})/[^/\s]+?(?:\.git)?\n?",
-        result.stdout,
-    )
-    if not match:
-        return None
-    owner = match.group(1)
-    if owner.startswith("-") or owner.endswith("-") or "--" in owner:
-        return None
-    return owner
-
-
 def scan_history(root: Path) -> list[PrivacyFinding]:
     git_path = str(Path("/usr/bin/git"))
     git_environment = _isolated_git_environment()
@@ -652,8 +344,6 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
         text=True,
     )
     findings: list[PrivacyFinding] = []
-    github_owner = _github_remote_owner(root)
-    declared_author_email = _read_public_author_email(root)
     inspected: set[str] = set()
     for line in result.stdout.splitlines():
         fields = line.split(" ", 1)
@@ -680,26 +370,13 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
                     )
                 )
                 continue
-            try:
-                metadata_text = metadata.decode("utf-8")
-            except UnicodeDecodeError:
-                metadata_text = ""
-            github_signature_verified = _is_github_merge_candidate(
-                metadata_text
-            ) and _github_signature_verified(root, object_id)
             findings.extend(
                 PrivacyFinding(
                     Path(".git-metadata") / object_id[:12],
                     item.line,
                     f"{item.rule} in Git {object_type} metadata",
                 )
-                for item in _scan_metadata_for_privacy(
-                    Path(".git-metadata"),
-                    metadata,
-                    declared_author_email=declared_author_email,
-                    github_signature_verified=github_signature_verified,
-                    github_owner=github_owner,
-                )
+                for item in _scan_metadata_for_privacy(Path(".git-metadata"), metadata)
             )
             continue
         if object_type != "blob" or len(fields) != 2:

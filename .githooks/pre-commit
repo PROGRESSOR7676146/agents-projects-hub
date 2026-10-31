@@ -33,13 +33,6 @@ if [ ! -x "$python" ]; then
     exit 1
 fi
 
-policy="${HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE:-}"
-if [ -z "$policy" ]; then
-    policy="$(git -C "$root" config --local --get hub.publicAuthorEmailFile || true)"
-fi
-if [ -n "$policy" ]; then
-    export HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE="$policy"
-fi
 if [ -n "${PYTHONPATH:-}" ]; then
     export PYTHONPATH="$root/src:$PYTHONPATH"
 else
