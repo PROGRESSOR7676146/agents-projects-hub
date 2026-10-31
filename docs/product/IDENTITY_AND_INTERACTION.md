@@ -53,10 +53,26 @@ input; selected/pasted quotations are context, not Reply addressing.
 - **REQ-ROUTE-009 (Implemented behind queue mode):** Compatible consecutive messages MAY form one
   bounded turn, but MUST each be saved. Continuations inherit the open target; commands, routing
   changes and batch limits close it.
-- **REQ-ROUTE-010 (Implemented for socket-backed Codex; deterministic fallback elsewhere):** Later
-  Codex input SHOULD use safe native steering; explicit rejection returns it to FIFO and ambiguity
-  MUST remain uncertain. Unsupported steering MUST produce a later FIFO turn without loss or
-  simulation.
+- **REQ-ROUTE-010 (Implemented for socket-backed Codex; opt-in Claude source, live acceptance
+  pending; deterministic fallback elsewhere):** Later Codex input SHOULD use safe native steering;
+  explicit rejection returns it to FIFO and ambiguity MUST remain uncertain. Unsupported steering
+  MUST produce a later FIFO turn without loss or simulation.
+  - Explicit default-off Claude streamed input MAY deliver one compatible text-only FIFO successor
+    through the same owned external process, without images; later, material, explicit-context,
+    handoff and retry inputs MUST retain ordinary FIFO.
+  - Process, session, root, tool profile, permission host and writer ownership MUST stay with the
+    parent until complete stream and cleanup settle; tools MUST NOT be interrupted to simulate
+    steering.
+  - The child MUST be durably reserved before transmission and never requeued after that fence.
+    Exact processing receipts MUST bind inputs to their covering result without becoming native
+    turn IDs or claiming that the model followed the correction.
+  - Success MUST require every submitted input's receipt and covering successful result, successful
+    process exit and cleanup; raw completion MUST be saved before atomic parent result/outbox and
+    child settlement. A later receipt MUST await its later result, and the first result closes
+    further correction admission.
+  - Missing/conflicting evidence, persistence failure and mixed/failed results MUST retain submitted
+    inputs, uncertainty and root exclusion without replay. Exact confirmed owner stop MAY cancel
+    the invocation and submitted child; unreserved input remains FIFO.
 
 ### Telegram interaction contract
 

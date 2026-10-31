@@ -112,7 +112,8 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#durable-queue-and-control)
 - **REQ-QUEUE-008 (Implemented):** Pending topic work SHOULD show bounded typing through the target
   provider identity without model calls; chat-action failure MUST NOT block work or results.
 - **REQ-QUEUE-009 (Implemented):** Every Telegram input MUST retain unique durable membership
-  through batching/steering; ambiguous acceptance MUST NOT replay it.
+  through batching, Codex steering or bounded Claude streamed input under REQ-ROUTE-010; ambiguous
+  acceptance MUST NOT replay it.
 - **REQ-QUEUE-010 (Implemented in schema 33):** Material content, identity, binding, availability
   and consumption MUST commit with its job input and never download/invoke twice.
   - Private immutable bytes MUST be validated before copying only into the exact job's revalidated

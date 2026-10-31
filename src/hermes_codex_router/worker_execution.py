@@ -11,6 +11,7 @@ from .artifacts import (
     artifact_spool_root,
     spool_staged_artifacts,
 )
+from .claude_corrections import ClaudeCorrectionCallbacks
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_image_input import VerifiedClaudeImage
 from .claude_permission_wait import PermissionWaitClock
@@ -456,6 +457,7 @@ def invoke_external_provider_turn(
     claude_permission_wait: PermissionWaitClock | None = None,
     claude_images: tuple[VerifiedClaudeImage, ...] = (),
     pending_stop_request: Callable[[], str | None] | None = None,
+    claude_corrections: ClaudeCorrectionCallbacks | None = None,
 ) -> ExternalTurnResult:
     """Invoke one external CLI turn from an immutable job snapshot."""
     if getattr(adapter, "runtime", None) == "claude" and claude_session_binding is None:
@@ -483,6 +485,7 @@ def invoke_external_provider_turn(
                 claude_sandbox=claude_sandbox,
                 claude_permission_wait=claude_permission_wait,
                 claude_images=claude_images,
+                claude_corrections=claude_corrections,
             )
         except ClaudeProcessStopped as exc:
             if (

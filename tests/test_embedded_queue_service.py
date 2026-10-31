@@ -130,6 +130,19 @@ def update(message_id: int, text: str) -> dict[str, object]:
 
 
 @contextmanager
+def observed_heartbeat(renewed: threading.Event):
+    heartbeat = HubState.heartbeat_provider_job
+
+    def renew(state: HubState, *args: Any, **kwargs: Any):
+        result = heartbeat(state, *args, **kwargs)
+        renewed.set()
+        return result
+
+    with patch.object(HubState, "heartbeat_provider_job", renew):
+        yield
+
+
+@contextmanager
 def frozen_queue_clock(instant: datetime):
     # Arrival times belong to the scenario, not to parallel test-runner load.
     # Wrap the real datetime class to retain parsing/arithmetic behavior.
@@ -784,8 +797,12 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         topic = service.state.find_topic(-1001234567890, 77)
         assert topic is not None
         prepare_artifacts = service_module.prepare_worker_artifacts
+        renewed = threading.Event()
 
         def stop_while_preparing_artifacts(*args: Any, **kwargs: Any) -> Any:
+            # The no-warning assertion concerns failure handling, not a late
+            # first heartbeat racing a task that the fixture already ended.
+            self.assertTrue(renewed.wait(10), "initial heartbeat did not finish")
             _, _, pending = service.state.request_emergency_stop(
                 topic_id=topic.topic_id,
                 chat_id=-1001234567890,
@@ -796,6 +813,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             return prepare_artifacts(*args, **kwargs)
 
         with (
+            observed_heartbeat(renewed),
             patch.object(
                 service_module, "prepare_worker_artifacts", stop_while_preparing_artifacts
             ),
@@ -866,9 +884,11 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertTrue(service.handle_update(update(1, "long task")))
         topic = service.state.find_topic(-1001234567890, 77)
         assert topic is not None
+        renewed = threading.Event()
 
         def stop_then_fail(*_args: Any, **_kwargs: Any) -> Any:
             # Recovery cannot read the artifacts either; the failure commit follows.
+            self.assertTrue(renewed.wait(10), "initial heartbeat did not finish")
             service.state.request_emergency_stop(
                 topic_id=topic.topic_id,
                 chat_id=-1001234567890,
@@ -878,6 +898,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             raise OSError("fictional artifact failure")
 
         with (
+            observed_heartbeat(renewed),
             patch.object(
                 service_module,
                 "prepare_worker_artifacts",

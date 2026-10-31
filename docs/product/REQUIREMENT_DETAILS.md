@@ -43,7 +43,8 @@ target without switching active agent.
 ### REQ-ROUTE-010
 
 Socket Codex uses `turn/steer`; rejection returns FIFO, ambiguity is
-`indeterminate`. Other runtimes receive one later FIFO turn.
+`indeterminate`. Opt-in Claude accepts one streamed correction with exact
+receipts; other runtimes retain FIFO.
 
 ### REQ-UX-003
 
