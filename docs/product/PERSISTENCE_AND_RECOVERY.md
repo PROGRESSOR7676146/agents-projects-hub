@@ -1,183 +1,96 @@
 # Persistence and recovery requirements
 
-This normative module is part of the
-[product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
 
 ## 13. Persistence, restart, monitoring, and recovery
 
-- **REQ-OPS-001 (Implemented):** Routing state MUST persist locally in SQLite,
-  including numeric identities, provider session IDs, active agent, writer
-  state, visible-context cursors, and idempotency receipts.
-- **REQ-OPS-002 (Implemented):** Telegram update processing MUST be idempotent;
-  duplicate updates MUST NOT create duplicate provider turns.
-- **REQ-OPS-003 (Implemented):** Schema migrations MUST be versioned and create
-  an SQLite-consistent pre-migration backup with rollback on failure.
-- **REQ-OPS-004 (Implemented):** User services and monitoring MUST preserve
-  numeric topic/session state across ordinary restarts and report component
-  health without invoking a model merely to check health. The passive monitor
-  result MUST expose bounded aggregate counts for accepted requests, delivered
-  final results, partial outcomes, uncertain executions and recovered results,
-  plus pending queue/final-delivery/progress-delivery counts and ages. These
-  aggregates MUST contain no prompt, response, provider-session, project, topic
-  or account identity. Final/progress unknown-delivery counts MUST remain separate
-  from pending delivery/retry counts and trigger passive alerts without
-  authorizing resend. Total unknown final delivery MUST remain visible after an
-  owner disposition; outstanding and owner-released delivery holds MUST be
-  counted separately, and only outstanding final holds keep the blocking alert
-  active. Explicitly classified nonblocking unknown notices MUST remain visible in
-  separate counts and a deduplicated warning. Status MUST distinguish saved results
-  awaiting delivery from blocking unknown delivery and nonblocking notices.
-  The passive alert evaluator MUST report provider work with an expired execution
-  lease, or due and unblocked queued work waiting over 15 minutes without an
-  active worker lease. A healthy long-running execution MUST NOT alert solely
-  because its original queue timestamp is old. The evaluator MUST also report
-  committed Telegram final or progress delivery older than 5 minutes, and every newly
-  unresolved indeterminate outcome. Historical indeterminate work with an
-  operator resolution MUST remain visible in totals without keeping the alert
-  active.
-- **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
-  independent, non-mandatory recovery channels. Fresh local heartbeat/status
-  markers provide liveness evidence without exposing URLs or tokens.
-  For configured tlive recovery, a passive approval-surface projection MUST compare
-  the exact persisted native thread, turn, typed request and item identity with a
-  fresh bounded daemon snapshot. A Hub approval-wait notice is not card evidence.
-  Only the adapter's positive delivery reference MAY establish sent; queueing,
-  absent/stale/ambiguous/truncated evidence and daemon restart MUST NOT establish
-  health. New waits have a 30-second diagnostic grace, distinct from delivery.
-  A continuing unconfirmed wait MUST raise one deduplicated operational alert,
-  without inference, replay, permission decisions or automatic service repair.
-  The snapshot MUST omit inputs, prompts, credentials, paths and callback tokens.
-  Supported independent Codex service custody MUST offer explicit attach-only
-  tlive operation that never spawns or stops the server. Migration/start tooling
-  MUST refuse active or unknown work, unsettled controls, unowned existing
-  socket/server and mismatched artifact pins; it MUST NOT kill processes, delete
-  sockets or infer native idle from general diagnostics. An archived session's
-  exact immutable owner resolution MAY close its historical indeterminate job
-  for this admission gate; an unarchived unresolved generation MUST remain
-  blocked without exact native terminal proof. The gate MUST honor effective
-  full-control final-delivery consent under REQ-QUEUE-005. Neither exception
-  confirms execution or Telegram delivery, changes historical evidence, or
-  releases an independently unsettled control sender or local writer.
-  Operator-native custody,
-  exact source/rollback identities and separate live acceptance remain required.
-- **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
-  deduplicated, and delivered
-  only to one explicitly configured Hub Operations/Alerts topic. The configured
-  Hub bot is the only Telegram sender for Hub-owned operational notifications;
-  provider bot identities MUST NOT be used when `hub_bot` is absent. Hermes may
-  fall back only to that same topic. A configured operations topic MUST fail
-  configuration validation when `hub_bot` is absent. Routine monitoring MUST
-  NOT emit Codex session context-size advice; session compaction remains an explicit user decision.
-  Operational alerts are edge-triggered: unchanged conditions MUST NOT repeat,
-  and an alert re-arms only after recovery. An alert episode whose condition is
-  no longer evaluated, including one left by a retired feature, MUST be released
-  on the next notifying cycle. The first two consecutive Telegram
-  transport failures remain visible diagnostic state; the third MUST degrade
-  the owning required component and emit one error edge for that episode. A
-  successful transport request MUST clear it, emit one recovery edge only if
-  the threshold was crossed, and re-arm the threshold.
-- **REQ-OPS-007 (Retired by ADR 0047):** Hub no longer observes or reports
-  Codex account rotation; the monitor MUST NOT read rotation counters or send
+- **REQ-OPS-001 (Implemented):** Numeric bindings, provider sessions, active agents, writers,
+  context cursors and idempotency receipts MUST survive locally in SQLite.
+- **REQ-OPS-002 (Implemented):** Duplicate Telegram updates MUST NOT create duplicate provider
+  turns.
+- **REQ-OPS-003 (Implemented):** Versioned migrations MUST have a consistent pre-migration backup
+  and roll back on failure.
+- **REQ-OPS-004 (Implemented):** Ordinary restarts MUST preserve topic/session state; monitoring
+  MUST use passive, bounded, identity-free aggregates.
+  - Status MUST distinguish saved results, pending delivery, unknown delivery and execution
+    uncertainty, including historical owner-resolved totals and current blockers.
+  - Expired execution, overdue eligible queues/deliveries and new unresolved outcomes MUST alert;
+    healthy long-running work and resolved history MUST NOT create false blocking alerts.
+  - Unknown nonblocking notices MUST remain separately visible; alerts MUST NOT authorize resend.
+- **REQ-OPS-005 (Implemented):** Hermes and tlive MUST remain independently monitored recovery
+  channels; heartbeat proves liveness, not approval-card delivery.
+  - Approval health MUST require fresh exact request/session/turn evidence and a positive delivery
+    reference; unconfirmed waits MUST alert once without inference, replay, permission decisions or
+    automatic repair.
+  - Snapshots MUST exclude inputs, prompts, paths, credentials and callback tokens; restart or
+    ambiguous evidence MUST NOT establish health.
+  - Attach-only tlive MUST never spawn/stop the server; migration/start MUST refuse active/unknown
+    work, unsettled controls, unowned servers/sockets or mismatched artifacts without killing
+    processes or deleting sockets.
+  - Exact owner closure for an archived session's uncertain job and effective full-control delivery
+    consent MAY remove only their own admission blockers; they MUST NOT prove execution/delivery or
+    release other senders/writers.
+  - Exact source/rollback identity, operator-native custody and separate live acceptance remain
+    required.
+- **REQ-OPS-006 (Implemented):** Bounded deduplicated operational alerts MUST use only the
+  configured Hub Operations topic and Hub bot, with Hermes fallback to that same topic; missing Hub
+  configuration MUST refuse.
+  - Unchanged episodes MUST NOT repeat; recovery or retired conditions release them, and transport
+    failures MUST degrade once at the third consecutive failure and recover once after success.
+  - Monitoring MUST NOT send routine Codex context-size advice; compaction remains explicit.
+- **REQ-OPS-007 (Retired by ADR 0047):** Monitoring MUST NOT read Codex rotation counters or send
   rotation notices.
-- **REQ-OPS-008 (Accepted):** On replacement hardware, stale writer leases from
-  the lost host MUST be reset safely after verifying the old processes cannot
-  exist.
-- **REQ-OPS-009 (Implemented):** Controller, sender, monitor, and every configured
-  provider worker MUST publish bounded SQLite health with package version, exact
-  Git SHA, build time, and clean-tree assertion. Cache-only status MUST detect
-  mixed or unknown required-component revisions; monitoring alerts once per
-  episode and re-arms only after convergence. Health MUST contain no prompts,
-  responses, exception detail, paths, command lines, environment data,
-  credentials, or account identifiers.
-- **REQ-OPS-010 (Implemented):** Before immutable activation, a private
-  deployment manifest MUST bind the exact clean-tree active and rollback wheel
-  identities and SHA-256 digests, configuration digest, SQLite-consistent
-  backup digest/schema, and target schema. A read-only gate MUST re-inspect
-  every artifact and MUST reject activation or runtime rollback unless both
-  executables support the target state schema. Runtime and E2E dependencies
-  MUST come from the hash-locked export at the candidate Git revision; the
-  repository gate MUST reject a stale export. Manifest creation and
-  verification MUST NOT migrate state, start a service, or contact a provider.
-- **REQ-OPS-011 (Implemented as an offline dry-run):** Release acceptance MUST
-  include an automated rollout/runtime-rollback rehearsal that creates all
-  state, configuration, release directories, manifest, backup, and activation
-  pointers under one temporary root. It MUST run the candidate migration from
-  schema 20 to the candidate's target schema, run the distinct compatible
-  rollback artifact against the retained target state, and prove queued work, prepared outbox delivery, and an
-  indeterminate job remain unchanged. It MUST NOT read deployment state, invoke
-  a provider, contact Telegram, or control a service.
-- **REQ-OPS-012 (Hub application recovery planned; host recovery externally owned):**
-  Hub MUST define an encrypted versioned application recovery set with compatible
-  immutable artifacts, SQLite-consistent state, captured project/provider-session
-  stores, matching spool/history/config and explicit capture limits. A bounded
-  isolated application restore MUST verify artifacts, SQLite integrity/schema,
-  captured stores, outbox spool bindings and unchanged indeterminate work before
-  restored consumers or network access. It MUST NOT replay uncertain work or
-  claim recovery of uncaptured data. Hub MUST hand off that set and its restore
-  procedure to external infrastructure, with off-machine storage and separately
-  held recovery keys identified as external prerequisites. Host/WSL export,
-  shutdown, infrastructure scheduling, external storage/key administration and
-  full-host cold-restore drills belong to that external infrastructure, not Hub
-  implementation. Hub handoff MUST NOT claim those drills passed or make them a
-  first-editor prerequisite. Backup automation and private-data restore/drills
-  require their existing separate deployment authorization.
-- **REQ-OPS-013 (Planned; ADR 0048):** On every cycle, before Operations
-  delivery, the monitor MUST project each evaluated operational alert into a
-  private, atomically replaced incident journal. An episode carries an opaque
-  ID, code, severity, the bounded Operations message, and opened, last-seen and
-  resolved times; the journal carries its own update time. The journal MUST
-  contain no prompt, response, path, credential, account, project, topic or
-  Telegram identity, MUST be bounded, and MUST NOT be state that a runtime
-  rollback has to migrate. Every emitted alert code MUST have a runbook
-  catalogue entry with options, their consequences and a recommended option.
-- **REQ-OPS-014 (Planned; ADR 0048):** When the Hermes incident integration is
-  enabled, Hermes MUST read the incident journal read-only and send the owner
-  one card per new episode without invoking a model: the quoted trigger, the
-  catalogue options with consequences, the recommendation, and explicit analyze
-  and dismiss controls. A journal that stops updating MUST produce its own card.
-  A cold start without the Hermes cursor MUST send one summary of open episodes,
-  not a card per historical episode. Only an authorized owner's press of the
-  analyze control MAY start a Hermes model turn, which receives the incident as
-  lower-priority data, never as instructions. Hermes-owned cards do not replace
-  the Operations topic or its same-topic Hermes transport fallback of REQ-OPS-006.
-  A default-off notices-only increment MAY omit analysis while its supported
-  authorized native-turn entry remains unproved; it MUST NOT offer a functioning
-  analyze control or claim this requirement complete. Notices require a separate
-  private configuration with one exact numeric owner/private destination, a
-  supported Gateway-owned periodic lifecycle and a Hermes-owned private cursor.
-  Missing lifecycle support MUST refuse opt-in; a configuration change MUST
-  retire the task and controls rather than retarget existing delivery evidence.
-  The cursor MUST persist attempted delivery before sending, require a positive
-  exact-destination receipt to establish delivery, and retain unknown outcomes
-  without automatic resend. Only proven rejection MAY retry, with bounded
-  attempts and deadlines. Unreadable or unsafe existing delivery evidence MUST
-  be preserved and refused; only an absent cursor cold-seeds. Dismiss MUST bind
-  the exact owner, private chat, opaque token and saved delivered message, and
-  MUST NOT execute recovery, update or approval actions. Shutdown MUST join its
-  callbacks and file work without leaving a competing writer on reconnect.
-- **REQ-OPS-015 (Planned; ADR 0048):** Every component that the update tool
-  manages MUST run from immutable per-version directories behind a switchable
-  link recorded in a private stack manifest. `doctor` and the monitor MUST
-  detect drift from that manifest passively. A deterministic update tool,
-  independent of the Hub and Hermes runtimes, MUST plan read-only, then stage,
-  check and switch one exact plan in dependency order with Hermes last, and
-  roll back one recorded switch. A staging or check failure MUST stop before
-  any link changes, and a failed health gate MUST restore the previous links.
-  Apply and rollback MUST be serialized. They MUST start only from a
-  deterministic owner control that is single-use, bound to the exact plan and
-  the current links, expires after a bounded time, and does not survive a
-  gateway restart. A model turn MUST NOT stage, apply or roll back. A switch
-  that restarts Hermes MUST arm a watchdog that restores the previous Hermes
-  version when the unit or its heartbeat does not recover. Project Hub releases
-  keep their own procedure (REQ-OPS-010, REQ-OPS-011).
+- **REQ-OPS-008 (Accepted):** Lost-host writer leases MUST reset safely only after proving old
+  processes cannot still exist.
+- **REQ-OPS-009 (Implemented):** Every required component/worker slot MUST report bounded
+  clean-build identity with exact revision; passive status MUST detect and alert on mixed/unknown
+  revisions without private content, paths, commands, environment or account identities.
+- **REQ-OPS-010 (Implemented):** Activation and rollback MUST verify exact clean immutable
+  artifacts, configuration, consistent backup and target schema; both executables MUST support
+  retained state and use the candidate's hash-locked dependencies. Manifest preparation/checking
+  MUST remain read-only, without migration, services or provider calls.
+- **REQ-OPS-011 (Implemented as an offline dry-run):** Release acceptance MUST rehearse candidate
+  migration and distinct compatible runtime rollback entirely under temporary state, proving queued,
+  outbox and uncertain work unchanged. It MUST NOT access deployment state, providers, Telegram or
+  services.
+- **REQ-OPS-012 (Hub application recovery planned; host recovery externally owned):** Hub MUST
+  define an encrypted versioned recovery set with explicit captured scope and a verified isolated
+  restore before consumers/network access. Restore MUST preserve uncertainty and spool/store
+  integrity, never replay or claim uncaptured data; external host/storage/key/drill work stays
+  separately owned and authorized, not a first-editor gate.
+  - Hub MUST hand off the set and restore procedure, identifying off-machine storage and separately
+    held keys as external prerequisites without claiming a passed host drill.
+- **REQ-OPS-013 (Planned; ADR 0048):** Each monitoring cycle MUST record every evaluated alert in a
+  bounded private atomic incident journal before Operations delivery, with episode identity/times
+  and a runbook recommendation. It MUST contain no user content, paths, credentials or deployment
+  identities and require no runtime-rollback migration.
+- **REQ-OPS-014 (Planned; ADR 0048):** Enabled Hermes incident cards MUST remain model-free,
+  read-only and owner-specific, with options, consequences, recommendation and explicit controls;
+  only an authorized Analyze press MAY invoke a model with the incident as data.
+  - Stale journals MUST alert and cold starts summarize open episodes once; cards do not replace
+    Operations delivery.
+  - A default-off notices-only increment MUST omit functional analysis and completion claims until
+    supported; missing Gateway lifecycle support MUST refuse opt-in.
+  - Exact private owner/destination, private cursor and callbacks MUST stay pinned; configuration
+    changes retire controls instead of retargeting evidence.
+  - Attempts MUST be saved before sending; only exact positive receipts prove delivery, ambiguity
+    MUST NOT resend, and only proven rejection permits bounded retry.
+  - Unsafe existing evidence MUST be retained and refused; Dismiss MUST bind the delivered card and
+    owner without recovery/update/approval authority, and shutdown MUST leave no competing writer.
+- **REQ-OPS-015 (Planned; ADR 0048):** Managed components MUST use immutable versions and a private
+  stack manifest with passive drift detection; an independent deterministic updater MUST apply only
+  an exact owner-confirmed plan.
+  - Staging/check failure MUST leave links unchanged; failed health MUST restore them, with
+    serialized apply/rollback and Hermes last.
+  - Owner controls MUST be bounded, single-use, bound to current links/plan and invalid after
+    restart; model turns MUST NOT stage/apply/rollback.
+  - A Hermes-restarting switch MUST arm independent recovery of its previous version; Hub releases
+    retain their own verified procedure.
 
-**Recovery limit:** exact in-flight turns are not portable across process or
-machine loss. Only completed state that was persisted before the loss can be
-recovered. Git and Telegram history can help reconstruct work, but cannot
-recreate unsaved provider context or a partially executed turn.
+Only completed persisted state is recoverable after process/machine loss; history
+cannot recreate unsaved context or guarantee an in-flight turn.
 
 ### Implemented queue compatibility and local provider-worker isolation
 
-The complete durable provider queue and control contract is owned by
-[section 22](DURABLE_QUEUE_AND_CONTROL.md), including REQ-HUBBOT-001 and
-REQ-QUEUE-001..014. Requirement IDs and complete clause text are retained.
+[Section 22](DURABLE_QUEUE_AND_CONTROL.md) owns queue and control outcomes.
