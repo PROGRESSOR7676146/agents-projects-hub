@@ -19,6 +19,7 @@ CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
         "claude_cli_unavailable",
         "claude_cli_capabilities_unverified",
         "claude_image_input_unverified",
+        "claude_image_configuration_conflict",
         "claude_permission_host_unverified",
         "claude_session_mode_changed",
         "claude_material_notice_unverified",

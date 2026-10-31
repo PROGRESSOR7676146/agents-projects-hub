@@ -121,10 +121,12 @@ from .telegram import (
     TelegramError,
     TopicCallback,
     TopicMessage,
+    is_topic_edit,
     parse_direct_callback,
     parse_direct_message,
     parse_topic_callback,
     parse_topic_message,
+    parse_topic_rename,
 )
 from .telegram_interaction import (
     telegram_contract_version,
@@ -134,6 +136,7 @@ from .telegram_turn_provenance import group_ingress_identity
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
+from .topic_titles import observe_topic_rename
 from .turn_observation import TurnObservation, owning_read_client
 from .worker_execution import (
     classify_worker_failure,
@@ -1292,10 +1295,11 @@ class ProjectHubService:
 
     def _topic(self, message: TopicMessage, project_id: str) -> TopicRecord:
         existing = self.state.find_topic(message.chat_id, message.thread_id)
+        placeholder = "General" if message.thread_id == 1 else f"Topic {message.thread_id}"
         title = (
             existing.title
-            if existing is not None
-            else ("General" if message.thread_id == 1 else f"Topic {message.thread_id}")
+            if existing is not None and (existing.title != placeholder or not message.topic_name)
+            else message.topic_name or placeholder
         )
         project = self.registry.require_project(project_id)
         return self.state.observe_topic(
@@ -2699,6 +2703,9 @@ class ProjectHubService:
         return any(self._queue_enabled(agent.agent_id) for agent in self.config.agents)
 
     def handle_update(self, update: dict[str, object]) -> bool:
+        if is_topic_edit(update):
+            rename = parse_topic_rename(update)
+            return rename is not None and observe_topic_rename(self.config, self.state, rename)
         try:
             return self._handle_update(update)
         except QueueAcceptanceError:

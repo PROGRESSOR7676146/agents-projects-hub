@@ -57,6 +57,7 @@ from .session_adoption_state import CodexSessionOrigins
 from .session_connect import ConnectCandidate, SessionConnectStore
 from .state import HubState, ProviderJobRecord, StateError
 from .state_errors import ConnectPermissionSelectionChanged
+from .state_runtime_health import REPEATED_REFUSAL_LIMIT, REQUEST_REFUSAL_CODES
 from .supervisor import CodexAppServerSupervisor
 from .telegram_interaction import (
     telegram_contract_version,
@@ -173,6 +174,8 @@ class ExternalQueueWorker:
                 raise
         self._last_success_at: datetime | None = None
         self._last_error_code: str | None = None
+        # ADR 0084: repeated request refusals without a success are component evidence.
+        self._consecutive_refusals = 0
         self._provider_state = "unknown"
         self._quota_remaining_percent: float | None = None
         self._quota_reset_at: datetime | None = None
@@ -514,6 +517,7 @@ class ExternalQueueWorker:
         completed = self.state.get_provider_job(job.job_id)
         if completed.status == "result_ready":
             self._last_success_at = datetime.now(timezone.utc)
+            self._consecutive_refusals = 0
             self._last_error_code = None
             self._provider_state = "ready"
             self._quota_remaining_percent = None
@@ -750,8 +754,7 @@ class ExternalQueueWorker:
                 self._record_event("warning", "provider_limit", exc.limit.to_json())
             elif failure.notice == "provider_unavailable":
                 assert isinstance(exc, ProviderUnavailableError)
-                self._last_error_code = failure.error_code
-                self._provider_state = "unavailable"
+                self._record_unavailable(failure.error_code)
                 self.state.terminate_provider_job_with_notice(
                     executing.job_id,
                     token,
@@ -842,6 +845,16 @@ class ExternalQueueWorker:
         if self.agent.runtime == "codex":
             self._discard_client()
 
+    def _record_unavailable(self, error_code: str) -> None:
+        """Keep the error visible; only a component failure, or the third request
+        refusal in a row without a success, makes the provider unavailable."""
+        self._last_error_code = error_code
+        if error_code in REQUEST_REFUSAL_CODES:
+            self._consecutive_refusals += 1
+            if self._consecutive_refusals < REPEATED_REFUSAL_LIMIT:
+                return
+        self._provider_state = "unavailable"
+
     def _record_known_claude_failure(
         self,
         job: ProviderJobRecord,
@@ -872,8 +885,11 @@ class ExternalQueueWorker:
             self._provider_state = "ready"
             self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
             return
-        self._last_error_code = failure.error_code
-        self._provider_state = "limited" if failure.error_class == "quota" else "unavailable"
+        if failure.error_class == "quota":
+            self._last_error_code = failure.error_code
+            self._provider_state = "limited"
+        else:
+            self._record_unavailable(failure.error_code)
         self._record_event("warning", "claude_provider_failure", failure.error_code)
 
     def _claude_partial_notice(
@@ -1110,7 +1126,7 @@ class ExternalQueueWorker:
         adapter = self.adapter
         if self.config.claude_image_input and self.config.claude_file_permissions is not None:
             raise ProviderUnavailableError(
-                "claude_image_input_unverified",
+                "claude_image_configuration_conflict",
                 "Claude image input cannot be combined with file tools.",
             )
         prepared = prepare_worker_materials(

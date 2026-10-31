@@ -162,9 +162,13 @@ receipt/cache: another push runs the full hook again. The trade-off is recorded
 in [ADR 0034](../decisions/0034-fail-fast-maintenance-validation.md).
 
 The pre-commit gate (`--profile commit`) runs every cheap contract, the
-privacy/history scan and the complete parallel test suite; only whole-project
-Pyright is left to the pre-push canonical run and CI. It takes about a minute
-and a half. It refuses a commit while unstaged or untracked, non-ignored files
+privacy/history scan and only the test modules the change can affect. A test
+module is affected when it changed, or when it names a changed source module or
+script. A documentation-only commit runs no tests. Any change outside docs,
+Markdown, `src/hermes_codex_router/*.py`, `scripts/*.py` and `tests/test_*.py`,
+or to an `__init__.py`, runs the full suite. The full suite and whole-project
+Pyright always run in the pre-push canonical run and in CI
+([ADR 0086](../decisions/0086-lighter-local-gates-and-bounded-review.md)). It refuses a commit while unstaged or untracked, non-ignored files
 exist, because it validates the working tree. A checkout that predates the
 profile falls back to focused checks plus the history scan. The rationale is
 recorded in [ADR 0042](../decisions/0042-pre-commit-gate.md).
@@ -174,14 +178,7 @@ GitHub CI and tag-release validation both call the same reusable
 matrix entry installs the exact `uv.lock` dependencies of the `dev` extra with
 `uv sync --locked`, including the test-only Telegram client used by the
 acceptance-actor unit tests, runs the suite once more in a single shared process
-to catch cross-module state leaks, prepares an optional external public-author
-declaration from a repository Actions variable, and runs this full canonical
-command. The value enters through the step environment and is written without
-output to a temporary `0600` file outside the checkout. It is not a secret or a
-security boundary against candidate code running as the same runner user.
-When the variable is absent, including in a fork or reusable-workflow context
-where it is unavailable, no declaration is set and the required canonical
-privacy scan runs without an exception; history that needs it remains red. The
+to catch cross-module state leaks, and runs this full canonical command. The
 release publication job depends on the entire reusable validation job and alone
 has `contents: write`. `tests/test_workflows.py` parses the workflows
 structurally, including GitHub's `on` key, and has negative temporary-copy cases
@@ -228,23 +225,14 @@ tree and every reachable Git blob plus commit/tag metadata. It rejects:
 - private deployment fingerprints retained only as one-way hashes.
 
 False positives must be resolved by using conspicuously fictional fixtures, not
-by allowlisting real deployment data. The sole external policy declaration
-permits one exact public author email only in its original author-email byte span
-after strict merge structure and pinned GitHub signature verification. It does
-not suppress body, trailer, file, credential, path, invite or other rule matches.
-The fingerprint rule alone may be suppressed on the complete author-name or
-hosted source-owner byte span when it exactly equals the valid local origin
-owner; case variants, substrings, whitespace, lookalikes and all other display
-names remain scanned. The scanner accepts zero or one final LF in the declaration
-without stripping, case-folding or Unicode normalization; an absent, malformed,
-linked, non-owner, non-`0600`, oversized or in-checkout file gives no exception.
+by allowlisting real deployment data. Commit authorship (author, committer and
+tagger identities, `Name <email>` trailers such as `Co-Authored-By`, and the
+source owner of a hosted merge) is exempt from the email and fingerprint rules
+only (ADR 0085); the rest of the message and every file are scanned in full.
 Regression coverage creates a real temporary Git replacement mapping and proves
 that history reads keep the original object bytes; the scanner also recomputes
-each SHA-1 object ID before any metadata exception is applied.
-An isolated canonical-history fixture combines a fictional declaration with
-real temporary Git objects and a mocked successful signature result to test
-policy wiring only. Pinned-key cryptographic verification has separate tests;
-the mock is not evidence that a fixture was cryptographically signed.
+each SHA-1 object ID before scanning metadata. A real temporary history proves
+that authorship passes and a leak in message prose fails.
 
 ## Optional offline native Codex profile rehearsal
 
@@ -665,16 +653,13 @@ gates in the [control-loss runbook](../operations/CODEX_CONTROL_LOSS.md).
 
 ## Publication preflight
 
-Repository maintainers can install the versioned pre-commit and pre-push hooks
-after creating the external author-policy file used by the canonical privacy scan:
+Repository maintainers can install the versioned pre-commit and pre-push hooks:
 
 ```bash
-HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE=/home/example/.config/agents-projects-hub/public-author-policy \
-  PYTHONPATH=src .venv/bin/python -m hermes_codex_router.publish_preflight --install
+PYTHONPATH=src .venv/bin/python -m hermes_codex_router.publish_preflight --install
 ```
 
-The installation records only the private file path in local Git configuration
-and installs `.githooks/pre-commit` and `.githooks/pre-push` as one immutable,
+The installation places `.githooks/pre-commit` and `.githooks/pre-push` as one immutable,
 mode-`0700` hook set under the shared Git common directory
 (`hub-hooks/sets/<digest>`). Git runs hooks through the `hub-hooks/active`
 link, which one atomic rename switches to a new set; the previous set and all
@@ -700,21 +685,17 @@ repository-local environment variable reported by
 suite therefore operate on their explicit temporary repositories rather than
 the caller's index, object database or worktree. The hook then requires a clean
 checkout and requires every published ref to resolve to the checked-out `HEAD`,
-validates the external declaration through the canonical
-scanner rules, and compares it exactly with the one named GitHub repository
-variable without printing either value. It then prepends the current checkout's
+and then prepends the current checkout's
 `src` directory to `PYTHONPATH` and runs `python scripts/validate.py`. This
 prevents an editable environment from another worktree from silently supplying
 the validator implementation. The hook prints the validator's stage timings
-and rechecks tree, HEAD, published refs and author policy before permitting the
-push. It never reuses a result from a different Python environment or policy.
+and rechecks tree, HEAD and published refs before permitting the push. It never
+reuses a result from a different Python environment. It needs no network.
 
-The hook fails before publication when GitHub or the repository variable is
-unavailable. It reduces avoidable hosted-CI retries; it cannot promise that a
-remote runner, dependency service, or network will remain available, and Git's
+The hook reduces avoidable hosted-CI retries; it cannot promise that a remote
+runner, dependency service, or network will remain available, and Git's
 explicit `--no-verify` option can bypass a local hook. Exact-SHA hosted checks
-remain the publication evidence. Forks and reusable callers without the
-repository variable retain the fail-closed behavior described above.
+remain the publication evidence.
 
 ## Dedicated acceptance user
 

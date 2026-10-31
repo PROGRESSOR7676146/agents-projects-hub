@@ -33,6 +33,19 @@ unresolved finding, truncated answer or missing verdict is not approval. If the
 required reviewer cannot supply a valid verdict, preserve the candidate and
 report the actual failure; do not select a replacement reviewer automatically.
 
+## How many rounds
+
+Owner decision, 2026-10-30 ([ADR 0086](../decisions/0086-lighter-local-gates-and-bounded-review.md)):
+
+1. One full review. The author fixes or answers every finding.
+2. A second round only when the first one had a blocker, a demonstrated defect
+   with a failure scenario. That round checks only the blockers and their fixes.
+3. Nothing is reviewed automatically after that. The author records the open
+   findings in the pull request, and the owner decides. A request for more
+   evidence, or a finding with no failure scenario, never opens another round.
+
+A blocker that is still open stops the merge until the owner decides.
+
 ## Route and request
 
 1. Prepare a bounded public-source capsule from a separate clean checkout at

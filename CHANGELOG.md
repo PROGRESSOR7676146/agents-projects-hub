@@ -5,6 +5,29 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Hub follows topic renames made in Telegram, including the General topic,
+  and names a newly seen topic from its creation message instead of
+  "Topic N". Titles stay display-only; routing still uses numeric IDs.
+- The history privacy scan reads Git objects through one batched
+  `git cat-file` process instead of two processes per object, so every
+  commit and push spends far less time in it.
+- A Claude request refused before it starts (for example a changed session
+  mode or an unverifiable launch boundary) no longer leaves its worker shown
+  as degraded and its provider unavailable until that slot's next success; the
+  refusal stays visible as the last error. A third refusal in a row without a
+  success still marks the provider unavailable (ADR 0084, stage 1).
+- Every operational alert now carries an impact class: blocking, awaiting the
+  owner, degraded or diagnostic. A failed worker counts as blocking only when
+  its agent has no healthy worker left. The incident journal keeps actionable
+  episodes first and reports saturation instead of silently dropping one
+  (ADR 0084, stage 1).
+- Commit authorship is public: author, committer, tagger and `Co-Authored-By`
+  style emails pass the privacy gate, which no longer needs a private policy
+  file, a GitHub signature check or a repository variable (ADR 0085).
+- Commits run only the tests their change can affect; push and CI keep the
+  full suite. Independent review stops after one round plus one round for
+  blockers, then the owner decides (ADR 0086).
+
 ## [0.9.0] - 2026-10-30
 
 - Package the merged schema-54 source stack since 0.8.1. Source publication,

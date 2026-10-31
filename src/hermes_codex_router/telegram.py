@@ -255,6 +255,62 @@ class TopicMessage:
     media_group_id: str | None = None
     quote_text: str | None = None
     unavailable_materials: tuple[str, ...] = ()
+    # Display name from the topic's creation anchor; never identity.
+    topic_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TopicRename:
+    """An owner-visible forum topic rename; the title is display metadata only."""
+
+    chat_id: int
+    thread_id: int
+    sender_id: int
+    title: str
+
+
+def _topic_title(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    title = " ".join(value.split())[:128]
+    return title or None
+
+
+def is_topic_edit(update: dict[str, Any]) -> bool:
+    """A forum topic edit service message; it is never ordinary input."""
+    message = update.get("message")
+    return isinstance(message, dict) and "forum_topic_edited" in message
+
+
+def parse_topic_rename(update: dict[str, Any]) -> TopicRename | None:
+    """Telegram posts `forum_topic_edited` in the renamed topic, General included.
+
+    Only an absent thread ID means General; any other value must be a positive
+    integer. Icon-only or malformed edits yield None.
+    """
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return None
+    edited, chat, sender = (message.get(key) for key in ("forum_topic_edited", "chat", "from"))
+    raw_thread_id = message.get("message_thread_id")
+    if (
+        not isinstance(edited, dict)
+        or not isinstance(chat, dict)
+        or chat.get("type") != "supergroup"
+        or not chat.get("is_forum")
+        or not isinstance(sender, dict)
+        or type(sender.get("id")) is not int
+        or type(chat.get("id")) is not int
+        or (title := _topic_title(edited.get("name"))) is None
+    ):
+        return None
+    if "message_thread_id" not in message:
+        thread_id = 1
+    elif type(raw_thread_id) is int and raw_thread_id > 0:
+        thread_id = raw_thread_id
+    else:
+        return None
+    return TopicRename(chat["id"], thread_id, sender["id"], title)
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +460,15 @@ def _reply_address(
     return username, message_id
 
 
+def _topic_anchor_name(message: dict[str, Any], thread_id: object) -> str | None:
+    """Messages in a topic reply to its creation anchor, which carries the name."""
+    reply = message.get("reply_to_message")
+    if not isinstance(reply, dict) or reply.get("message_id") != thread_id:
+        return None
+    created = reply.get("forum_topic_created")
+    return _topic_title(created.get("name")) if isinstance(created, dict) else None
+
+
 def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     message = update.get("message")
     if not isinstance(message, dict) or message.get("from", {}).get("is_bot"):
@@ -448,6 +513,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         is_forwarded=is_forwarded,
         text_source=parsed_text[1],
         attachments=attachments,
+        topic_name=_topic_anchor_name(message, raw_thread_id),
         media_group_id=(
             str(message["media_group_id"])[:256]
             if isinstance(message.get("media_group_id"), str)
