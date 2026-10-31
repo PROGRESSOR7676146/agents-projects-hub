@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
+from .claude_correction_state import ClaudeCorrectionState
 from .worker_identity import MAX_PROVIDER_WORKER_SLOTS, worker_instance_id
 
 PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
@@ -75,11 +76,18 @@ def read_queue_capacity(
             (timestamp,),
         ).fetchone()[0]
     )
+    child_filter = (
+        "AND NOT EXISTS(SELECT 1 FROM claude_input_children c WHERE c.child_job_id=provider_jobs.job_id) "
+        if ClaudeCorrectionState(connection).available()
+        else ""
+    )
     busy_agents = {
         str(row["agent_id"]): int(row["active_count"])
         for row in connection.execute(
             "SELECT agent_id, COUNT(*) AS active_count FROM provider_jobs "
-            "WHERE status IN ('leased','executing') AND lease_expires_at > ? GROUP BY agent_id",
+            "WHERE status IN ('leased','executing') AND lease_expires_at > ? "
+            + child_filter
+            + "GROUP BY agent_id",
             (timestamp,),
         ).fetchall()
     }

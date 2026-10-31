@@ -5,6 +5,16 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-31
+
+- Add a distinct schema-55 compatibility release for runtime rollback from the
+  later Claude streamed-input release, preserving accepted work and saved
+  results without replay. Claude invocation remains single-input; enabling
+  streamed input is refused. See the [rollback procedure](docs/operations/CLAUDE_CORRECTIONS_ROLLBACK.md).
+- Retry typed SQLite contention when renewing a live worker lease and sample
+  renewal time only after acquiring the writer, so brief contention does not
+  abandon running work or revive an expired lease.
+
 ## [0.9.0] - 2026-10-30
 
 - Package the merged schema-54 source stack since 0.8.1. Source publication,

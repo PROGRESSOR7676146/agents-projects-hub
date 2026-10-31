@@ -1087,6 +1087,16 @@ def load_hub_config(
     topology = _parse_runtime_topology(
         root, agents, hub_bot=hub_bot, manage_codex_server=codex.manage_codex_server
     )
+    # This compatibility runtime retains schema55 settlement and recovery, but
+    # deliberately uses the previous single-input invocation path.
+    claude_stream_input = root.get("claude_stream_input", False)
+    if type(claude_stream_input) is not bool:
+        raise HubConfigError("claude_stream_input must be a boolean")
+    if claude_stream_input:
+        raise HubConfigError(
+            "claude_stream_input is unavailable in the schema55 rollback runtime; "
+            "explicitly disable it before activation"
+        )
     claude_image_input = root.get("claude_image_input", False)
     if type(claude_image_input) is not bool:
         raise HubConfigError("claude_image_input must be a boolean")
