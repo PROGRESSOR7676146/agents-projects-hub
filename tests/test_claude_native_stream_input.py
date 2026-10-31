@@ -176,6 +176,18 @@ class StreamInputObservationTests(unittest.TestCase):
 
 
 class NativeClaudeStreamInputTests(unittest.TestCase):
+    def test_owned_product_runner_consumes_current_and_next_result(self):
+        executable = os.environ.get("HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE")
+        if not executable:
+            self.skipTest("explicit offline native input executable is unavailable")
+        digest = os.environ.get("HUB_NATIVE_CLAUDE_FIXTURE_SHA256")
+        self.assertTrue(digest)
+        assert digest
+        for scenario in SCENARIOS:
+            with self.subTest(scenario=scenario):
+                report = run_native_input(Path(executable), digest, scenario, owned_runner=True)
+                print("offline_owned_stream_input=" + str(report))
+
     def test_mid_tool_correction_and_terminal_boundary(self):
         executable = os.environ.get("HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE")
         if not executable:

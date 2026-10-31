@@ -22,6 +22,7 @@ from .claude_cli_capabilities import (
     ClaudeCliCleanupError,
     ClaudeCliUnavailableError,
 )
+from .claude_corrections import ClaudeCorrectionCallbacks, ClaudeCorrectionInput
 from .claude_environment import claude_environment_prompt
 from .claude_file_policy import file_tool_argv, file_tool_event_policy, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
@@ -442,9 +443,13 @@ class ExternalCliAdapter:
         claude_permission_wait: PermissionWaitClock | None = None,
         claude_images: tuple[VerifiedClaudeImage, ...] = (),
         project_id: str | None = None,
+        claude_corrections: ClaudeCorrectionCallbacks | None = None,
     ) -> ExternalTurnResult:
         if self.runtime == "claude" and claude_sandbox is not None and prompt.strip():
             prompt = claude_environment_prompt(claude_sandbox) + "\n\n" + prompt
+        correction_input = self._prepare_claude_corrections(
+            prompt, session_id or new_session_id, claude_corrections, bool(claude_images)
+        )
         argv = self.build_argv(
             cwd=cwd,
             prompt=prompt,
@@ -452,12 +457,14 @@ class ExternalCliAdapter:
             model=model,
             effort=effort,
             new_session_id=new_session_id,
-            structured_input=bool(claude_images),
+            structured_input=bool(claude_images) or correction_input is not None,
         )
         environment = self._turn_environment(claude_sandbox, project_id)
         input_data = self._prepare_claude_input(
             prompt, claude_images, session_id or new_session_id, claude_sandbox
         )
+        if correction_input is not None:
+            input_data = correction_input.initial_data
         if claude_sandbox is not None:
             if self.runtime != "claude" or not self._uses_default_runner:
                 raise ProviderUnavailableError(
@@ -489,6 +496,7 @@ class ExternalCliAdapter:
                 sandbox=claude_sandbox,
                 permission_wait=claude_permission_wait,
                 input_data=input_data,
+                correction_input=correction_input,
             )
         elif self._uses_default_runner:
             if self.runtime == "antigravity":
@@ -650,6 +658,32 @@ class ExternalCliAdapter:
             environment.pop(CLAUDE_SUBSCRIPTION_TOKEN, None)
         return environment
 
+    def _prepare_claude_corrections(
+        self,
+        prompt: str,
+        session_id: str | None,
+        callbacks: ClaudeCorrectionCallbacks | None,
+        images: bool,
+    ) -> ClaudeCorrectionInput | None:
+        if callbacks is None:
+            return None
+        if (
+            self.runtime != "claude"
+            or not self._uses_default_runner
+            or session_id is None
+            or images
+        ):
+            raise ProviderUnavailableError(
+                "claude_stream_input_unverified",
+                "Claude streamed text requires the owned runner without images.",
+            )
+        try:
+            return ClaudeCorrectionInput(prompt, session_id, callbacks)
+        except ClaudeStreamError as exc:
+            raise ProviderUnavailableError(
+                "claude_stream_input_unverified", "Claude text input could not be prepared."
+            ) from exc
+
     def _prepare_claude_input(
         self,
         prompt: str,
@@ -699,9 +733,10 @@ class ExternalCliAdapter:
         sandbox: FileToolSandboxConfig | None,
         permission_wait: PermissionWaitClock | None = None,
         input_data: bytes | None = None,
+        correction_input: ClaudeCorrectionInput | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Own mount descriptors across every productive invocation exit path."""
-        if sandbox is not None and input_data is not None:
+        if sandbox is not None and input_data is not None and correction_input is None:
             raise ProviderUnavailableError(
                 "claude_image_input_unverified",
                 "Claude image input requires the owned tools-disabled runner.",
@@ -710,7 +745,7 @@ class ExternalCliAdapter:
             try:
                 receipt = (
                     ClaudeImageReceipt(input_data, expected_session_id=expected_session_id)
-                    if input_data is not None
+                    if input_data is not None and correction_input is None
                     else None
                 )
             except ClaudeImageInputError:
@@ -733,6 +768,7 @@ class ExternalCliAdapter:
                     input_data=input_data,
                     image_receipt=receipt,
                     permission_wait=permission_wait,
+                    correction_input=correction_input,
                 )
         try:
             argv = (str(sandbox.claude_executable), *argv[1:])
@@ -744,7 +780,11 @@ class ExternalCliAdapter:
             ) from None
         with self._claude_stop_proof(expected_session_id), launch:
             verified = self._verified_claude_argv(
-                argv, cwd=cwd, environment=environment, file_tools=True
+                argv,
+                cwd=cwd,
+                environment=environment,
+                file_tools=True,
+                image_input=correction_input is not None,
             )
             if verified[0] != argv[0]:
                 raise ProviderUnavailableError(
@@ -762,6 +802,8 @@ class ExternalCliAdapter:
                 event_policy=file_tool_event_policy(sandbox.profile),
                 pass_fds=launch.pass_fds,
                 permission_wait=permission_wait,
+                input_data=input_data,
+                correction_input=correction_input,
             )
 
     def _verified_claude_argv(
@@ -816,6 +858,7 @@ class ExternalCliAdapter:
         input_data: bytes | None = None,
         image_receipt: ClaudeImageReceipt | None = None,
         permission_wait: PermissionWaitClock | None = None,
+        correction_input: ClaudeCorrectionInput | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Drain both pipes without communicate() or an unbounded reader queue."""
         if self._interrupt_requested.is_set():
@@ -836,6 +879,7 @@ class ExternalCliAdapter:
             on_visible_assistant=on_visible_assistant,
             event_policy=event_policy,
             image_receipt=image_receipt,
+            correction_input=correction_input,
         )
         try:
             process = subprocess.Popen(
@@ -859,6 +903,7 @@ class ExternalCliAdapter:
         deadline = ProductiveDeadline(timeout, permission_wait)
         diagnostic_bytes = 0
         input_offset = 0
+        next_input_poll = 0.0
         stop_draining = False
         try:
             if on_process_started is not None:
@@ -883,11 +928,27 @@ class ExternalCliAdapter:
                         stop_draining = True
                         deadline.stop_within(5)
                         if process.stdin is not None and not process.stdin.closed:
-                            selector.unregister(process.stdin)
+                            if process.stdin in selector.get_map():
+                                selector.unregister(process.stdin)
                             process.stdin.close()
                     remaining = deadline.remaining()
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
+                    if (
+                        correction_input is not None
+                        and not stop_draining
+                        and process.stdin is not None
+                        and not process.stdin.closed
+                        and input_offset == len(input_data or b"")
+                    ):
+                        if correction_input.complete:
+                            process.stdin.close()
+                        elif time.monotonic() >= next_input_poll:
+                            next_input_poll = time.monotonic() + 0.25
+                            pending = correction_input.poll()
+                            if pending is not None:
+                                input_data, input_offset = pending, 0
+                                selector.register(process.stdin, selectors.EVENT_WRITE)
                     for key, _ in selector.select(min(0.1, remaining)):
                         if key.fileobj is process.stdin:
                             assert input_data is not None
@@ -912,7 +973,8 @@ class ExternalCliAdapter:
                             input_offset += written
                             if input_offset == len(input_data):
                                 selector.unregister(key.fileobj)
-                                process.stdin.close()
+                                if correction_input is None:
+                                    process.stdin.close()
                             continue
                         try:
                             chunk = os.read(key.fd, 65536)

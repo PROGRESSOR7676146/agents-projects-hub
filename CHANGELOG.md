@@ -5,6 +5,15 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-31
+
+- Add opt-in text clarification during an owned Claude invocation: one compatible
+  message shares the running process; later messages keep FIFO order. Durable
+  input receipts and complete results prevent automatic replay after uncertainty.
+- Retain the distinct 0.9.1 schema-55 consumer as the compatible runtime rollback;
+  both artifacts and their enabled/disabled configurations require a populated
+  state rehearsal before activation. Native Telegram acceptance remains separate.
+
 ## [0.9.1] - 2026-10-31
 
 - Add a distinct schema-55 compatibility release for runtime rollback from the
