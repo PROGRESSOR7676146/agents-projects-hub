@@ -7,6 +7,7 @@ import unittest
 from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock, patch
 
 from hermes_codex_router import alerts as alert_module
@@ -118,8 +119,9 @@ class IncidentMonitorTests(unittest.TestCase):
             ):
                 result = run_monitor_once(config, notify=False)
             self.assertFalse(result["ok"])
-            self.assertEqual(result["incident_journal"]["status"], "saturated")
-            self.assertEqual(result["incident_journal"]["omitted_open_by_impact"], {"blocking": 1})
+            journal_status = cast(dict[str, object], result["incident_journal"])
+            self.assertEqual(journal_status["status"], "saturated")
+            self.assertEqual(journal_status["omitted_open_by_impact"], {"blocking": 1})
             with closing(HubState.open_existing(config.state_path)) as state:
                 health = state.get_runtime_health("monitor", MONITOR_INSTANCE_ID)
                 assert health is not None

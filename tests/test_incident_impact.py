@@ -34,7 +34,7 @@ def alert(key: str, code: str, impact: str | None = None) -> OperationalAlert:
     return OperationalAlert(key, code, "error", "Example condition.", impact)
 
 
-def workers(*items: tuple[str, str, str]) -> dict[str, object]:
+def workers(*items: tuple[str, str, str]) -> dict[str, list[dict[str, str]]]:
     return {
         "provider_workers": [
             {"instance_id": instance, "agent_id": agent, "status": status}
