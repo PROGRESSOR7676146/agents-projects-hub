@@ -61,7 +61,7 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
                     tlive_config_path=Path(directory) / "tlive/config.json",
                 ),
             )
-            now = datetime.now(timezone.utc)
+            now = datetime(2026, 1, 1, tzinfo=timezone.utc)
             wait = ApprovalWait(
                 "thread",
                 "turn",
@@ -92,6 +92,7 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
             sender = Mock()
             with (
                 f.monitor(alerts=()),
+                patch.object(monitoring, "datetime", wraps=datetime) as clock,
                 patch.object(monitoring, "_hermes_health", return_value=None),
                 patch.object(
                     HubState, "pending_codex_approvals", return_value=((wait,), False)
@@ -99,13 +100,14 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
                 patch.object(monitoring, "read_snapshot", return_value=None) as read,
                 patch.object(monitoring, "_operational_telegram", return_value=(sender, "hub")),
             ):
+                clock.now.return_value = now
                 first = monitoring.run_monitor_once(cfg, notify=True)
                 monitoring.run_monitor_once(cfg, notify=True)
                 counts = first["approval_surface"]
                 assert isinstance(counts, dict)
                 self.assertEqual(counts["unknown"], 1)
                 self.assertEqual(sender.send_html.call_count, 1)
-                fresh = replace(wait, observed_at=datetime.now(timezone.utc))
+                fresh = replace(wait, observed_at=now)
                 grace_snapshot = dict(
                     snapshot,
                     entries=[
