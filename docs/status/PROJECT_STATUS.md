@@ -226,9 +226,8 @@ repository checkpoint.
 
 A versioned publication preflight can now install the repository's pre-push
 hook into the shared Git common directory so it covers every local worktree. It
-fails locally on a dirty or non-`HEAD` publication, a missing or
-mismatched external author-policy declaration, an unavailable GitHub repository
-variable, or canonical validation failure. The hook binds Python imports to the
+fails locally on a dirty or non-`HEAD` publication or canonical validation
+failure. The hook binds Python imports to the
 current worktree before validation so an editable environment from another
 branch cannot supply stale scanner code. Hosted exact-SHA checks remain required
 because a local hook is bypassable and cannot guarantee external runner or
@@ -612,11 +611,9 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
-  One external declaration can authorize only an exact public author-email span
-  in a strictly structured, pinned-signature GitHub merge. The fingerprint rule
-  alone may also be suppressed on a complete author-name or hosted source-owner
-  span that exactly repeats the valid local origin owner; all surrounding
-  metadata and unrelated rules remain scanned.
+  Commit authorship (author, committer, tagger, `Name <email>` trailers and the
+  hosted merge source owner) is publishable under ADR 0085; message prose and
+  files remain scanned.
 - Documentation validation inventories normative requirement IDs, protects
   numbered baseline sections by content hash, and checks local Markdown
   files/anchors repository-wide. The product index routes capability modules;
