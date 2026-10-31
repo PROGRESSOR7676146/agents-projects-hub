@@ -70,6 +70,7 @@ Every case must prove zero independent child invocation or requeue. Saved
 completion settles once; absent completion preserves uncertainty and root hold.
 
 Current focused source coverage is in `tests/test_claude_correction_state.py`,
-`tests/test_claude_rollback_config.py` and `tests/test_claude_rollback_recovery.py`.
+`tests/test_claude_correction_config.py` and `tests/test_claude_rollback_recovery.py`.
+The retained 0.9.1 consumer additionally owns `tests/test_claude_rollback_config.py`.
 Passing those tests does not establish installed rollback readiness. Activation
 and service actions require their own authorized task and exact manifest gate.

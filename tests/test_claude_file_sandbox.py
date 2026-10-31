@@ -153,6 +153,40 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             self.assertEqual(launch.environment["CLAUDE_CODE_OAUTH_TOKEN"], "example")
             self.assertNotIn("GH_TOKEN", launch.environment)
 
+    def test_real_namespace_permission_wrapper_preserves_streamed_stdin(self) -> None:
+        from hermes_codex_router.claude_file_policy import wrap_file_tool_argv
+
+        require_namespace_runtime(self, self.config.bwrap_executable)
+        cat = Path("/usr/bin/cat")
+        runtime = (cat, self.executable, Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/lib64"))
+        if not all(path.exists() for path in runtime):
+            namespace_unavailable(self, "system cat runtime fixture unavailable")
+        try:
+            config = dataclasses.replace(self.config, claude_executable=cat, runtime_roots=runtime)
+        except FileToolSandboxError:
+            namespace_unavailable(self, "system cat runtime is not immutable to this worker")
+        # Real outer wrapper and descriptor-pinned namespace; cat echoes only
+        # fictional frames. This proves stdin forwarding, not native permissions.
+        frames = '{"type":"user","message":{"content":"Example first"}}\n'
+        frames += '{"type":"user","message":{"content":"Example correction"}}\n'
+        with wrap_file_tool_argv((str(cat),), {}, self.project, config) as launch:
+            result = subprocess.run(
+                launch.argv,
+                env=launch.environment,
+                cwd="/",
+                close_fds=True,
+                pass_fds=launch.pass_fds,
+                input=frames,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        if result.returncode and namespace_permission_refused(result.stderr):
+            namespace_unavailable(self, "kernel disallows user namespaces")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, frames)
+
     def test_project_cannot_also_be_the_writable_session_home(self) -> None:
         # A second writable alias at HOME would expose .git without the
         # project's readonly overlay, even with different pinned descriptors.
