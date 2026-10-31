@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Every operational alert now carries an impact class: blocking, awaiting the
+  owner, degraded or diagnostic. A failed worker counts as blocking only when
+  its agent has no healthy worker left. The incident journal keeps actionable
+  episodes first and reports saturation instead of silently dropping one
+  (ADR 0084, stage 1).
 - Commit authorship is public: author, committer, tagger and `Co-Authored-By`
   style emails pass the privacy gate, which no longer needs a private policy
   file, a GitHub signature check or a repository variable (ADR 0085).

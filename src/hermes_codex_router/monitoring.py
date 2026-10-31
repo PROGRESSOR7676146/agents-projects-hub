@@ -25,7 +25,13 @@ from .hermes_health import (
     sync_hermes_group_policy,
 )
 from .hub_config import HubConfig, OperationalAlertSettings, read_telegram_token
-from .incident_journal import IncidentJournal, IncidentJournalBusy, IncidentJournalError
+from .incident_impact import classify_alerts
+from .incident_journal import (
+    IncidentJournal,
+    IncidentJournalBusy,
+    IncidentJournalError,
+    omitted_actionable,
+)
 from .monitor_health import MonitorHealth
 from .provider_catalog_cache import ProviderCatalogCache
 from .runtime_health import project_runtime_health
@@ -198,12 +204,14 @@ def _project_incidents(
     except IncidentJournalError as error:
         survived("monitoring.incident_projection", error)
         return {"status": "unavailable", "error_code": "incident_journal_unavailable"}
+    # An actionable episode the bounded journal had to omit is itself visible.
     return {
-        "status": "updated",
+        "status": "saturated" if omitted_actionable(snapshot) else "updated",
         "open_episodes": sum(row["resolved_at"] is None for row in snapshot["episodes"]),
         "resolved_episodes": sum(row["resolved_at"] is not None for row in snapshot["episodes"]),
         "omitted_open_count": snapshot["omitted_open_count"],
         "omitted_resolved_count": snapshot["omitted_resolved_count"],
+        "omitted_open_by_impact": snapshot["omitted_open_by_impact"],
     }
 
 
@@ -292,13 +300,14 @@ def _run_monitor_once(
         )
         health.observe(probe_errors, checked=bool(access))
         health.publish()
+        runtime_health = project_runtime_health(state, config)
         alerts = evaluate_operational_alerts(
             state_snapshot=snapshot,
             doctor_ok=bool(doctor["ok"]),
             recovery_status=recovery_status or None,
             telegram_access=access,
             hermes_telegram=hermes_telegram,
-            runtime_health=project_runtime_health(state, config),
+            runtime_health=runtime_health,
             codex_config_proxy_ok=next(
                 (
                     bool(check.get("ok"))
@@ -339,6 +348,7 @@ def _run_monitor_once(
             )
             for agent_id in stale_catalogs
         )
+        alerts = classify_alerts(alerts, runtime_health)
         incident_status = _project_incidents(journal, alerts, unobserved_keys=unobserved_keys)
         delivered: list[str] = []
         if notify:
@@ -394,7 +404,7 @@ def _run_monitor_once(
             success_at=completed_at if incident_status["status"] == "updated" else None,
             error_code=None
             if incident_status["status"] == "updated"
-            else "incident_journal_unavailable",
+            else f"incident_journal_{incident_status['status']}",
         )
         monitor_completed = True
         return result

@@ -72,10 +72,21 @@ If the lock itself is unavailable or unsafe, projection is disabled and the
 existing monitor/Operations path continues without journal serialization,
 reporting degraded health. Lock contention instead skips the entire cycle.
 
-At most 500 episodes are retained. Current open keys have priority in stable
-opaque order; remaining capacity retains the newest resolved rows, including
-the exact 30-day boundary. Open episodes do not age out. Omission counts describe
-this projection cycle, not a lifetime loss count. An evicted ongoing episode
+At most 500 episodes are retained. Current open keys have priority, ordered by
+impact class first (`blocking`, `awaiting_owner`, `degraded`, `diagnostic`;
+[ADR 0084](../decisions/0084-impact-classified-incidents-and-owner-paging.md))
+and then in stable opaque order; remaining capacity retains the newest resolved
+rows, including the exact 30-day boundary. Open episodes do not age out.
+Omission counts describe this projection cycle, not a lifetime loss count;
+`omitted_open_by_impact` splits the open omissions by class. If an actionable
+episode had to be omitted, the monitor reports `incident_journal_saturated`
+health instead of success.
+
+Schema 2 adds `impact` to every episode and `omitted_open_by_impact` to the
+header. A schema 1 journal is read with catalogue-default impacts and rewritten
+as schema 2 on the next cycle. A reader that only accepts schema 1, such as a
+Hermes plugin pinned to an older Hub source, reports the journal unavailable
+until it is updated. An evicted ongoing episode
 that later re-enters has a new observation identity; no missing recovery event
 is invented.
 

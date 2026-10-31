@@ -7,6 +7,9 @@ from types import MappingProxyType
 
 RUNTIME_COMPONENTS = ("controller", "monitor", "sender", "provider_worker", "runtime")
 RUNTIME_FAILURE_STATUSES = ("unknown", "degraded", "stale")
+# ADR 0084: blocking > awaiting_owner > degraded > diagnostic, most actionable first.
+IMPACTS = ("blocking", "awaiting_owner", "degraded", "diagnostic")
+ACTIONABLE_IMPACTS = frozenset({"blocking", "awaiting_owner"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +24,7 @@ class IncidentRunbook:
     title: str
     options: tuple[RunbookOption, ...]
     recommended_option: str
+    impact: str = "degraded"
 
 
 _INSPECT = RunbookOption(
@@ -51,9 +55,13 @@ _RESTORE = RunbookOption(
 
 
 def _runbook(
-    title: str, first: RunbookOption = _INSPECT, second: RunbookOption = _WAIT
+    title: str,
+    first: RunbookOption = _INSPECT,
+    second: RunbookOption = _WAIT,
+    *,
+    impact: str = "degraded",
 ) -> IncidentRunbook:
-    return IncidentRunbook(title, (first, second), first.option_id)
+    return IncidentRunbook(title, (first, second), first.option_id, impact)
 
 
 _ENTRIES = {
@@ -64,10 +72,12 @@ _ENTRIES = {
     "deployment_revision_unknown": _runbook(
         "Required release identity is unknown", second=_RESTORE
     ),
-    "codex_config_proxy_unavailable": _runbook("Configured local Codex proxy is unavailable"),
+    "codex_config_proxy_unavailable": _runbook(
+        "Configured local Codex proxy is unavailable", impact="blocking"
+    ),
     "hermes_recovery_unavailable": _runbook("Independent Hermes channel is unavailable"),
     "tlive_approval_surface_unconfirmed": _runbook(
-        "Remote permission card delivery is unconfirmed", second=_AUDIT
+        "Remote permission card delivery is unconfirmed", second=_AUDIT, impact="awaiting_owner"
     ),
     "tlive_recovery_unavailable": _runbook("Independent remote-approval channel is unavailable"),
     "recovery_plane_unavailable": _runbook(
@@ -77,29 +87,46 @@ _ENTRIES = {
     "hermes_group_policy_incomplete": _runbook("Hermes group policy is incomplete"),
     "hermes_gateway_heartbeat_stale": _runbook("Hermes event-loop heartbeat is stale"),
     "hermes_telegram_api_unavailable": _runbook("Hermes Telegram API check failed"),
-    "hermes_telegram_updates_pending": _runbook("Hermes has pending Telegram updates"),
-    "provider_catalog_stale": _runbook("A provider catalogue refresh failed"),
-    "dispatch_stuck": _runbook("A dispatch has exceeded its expected interval", _AUDIT, _INSPECT),
-    "provider_work_stalled": _runbook("Provider work is stalled", _AUDIT, _INSPECT),
-    "unresolved_provider_outcome": _runbook(
-        "Provider execution outcome remains unknown", _AUDIT, _INSPECT
+    "hermes_telegram_updates_pending": _runbook(
+        "Hermes has pending Telegram updates", impact="diagnostic"
     ),
-    "telegram_delivery_age_exceeded": _runbook("Final delivery is delayed", _DELIVERY, _INSPECT),
+    "provider_catalog_stale": _runbook("A provider catalogue refresh failed"),
+    "dispatch_stuck": _runbook(
+        "A dispatch has exceeded its expected interval", _AUDIT, _INSPECT, impact="blocking"
+    ),
+    "provider_work_stalled": _runbook(
+        "Provider work is stalled", _AUDIT, _INSPECT, impact="blocking"
+    ),
+    "unresolved_provider_outcome": _runbook(
+        "Provider execution outcome remains unknown", _AUDIT, _INSPECT, impact="blocking"
+    ),
+    "telegram_delivery_age_exceeded": _runbook(
+        "Final delivery is delayed", _DELIVERY, _INSPECT, impact="blocking"
+    ),
     "progress_delivery_age_exceeded": _runbook("Progress delivery is delayed", _DELIVERY, _INSPECT),
     "unknown_notice_delivery": _runbook(
-        "Service notice delivery is unconfirmed", _DELIVERY, _INSPECT
+        "Service notice delivery is unconfirmed", _DELIVERY, _INSPECT, impact="diagnostic"
     ),
-    "unknown_delivery": _runbook("Final delivery outcome is unknown", _DELIVERY, _INSPECT),
+    "unknown_delivery": _runbook(
+        "Final delivery outcome is unknown", _DELIVERY, _INSPECT, impact="awaiting_owner"
+    ),
     "unknown_progress_delivery": _runbook(
         "Progress delivery outcome is unknown", _DELIVERY, _INSPECT
     ),
     # Retained local diagnostic; automatic context-size advice remains disabled.
-    "codex_context_bloat": _runbook("Explicit local context-size diagnostic"),
+    "codex_context_bloat": _runbook("Explicit local context-size diagnostic", impact="diagnostic"),
 }
 for _component in RUNTIME_COMPONENTS:
     for _status in RUNTIME_FAILURE_STATUSES:
+        # A stale or unknown controller or sender stops all work; provider
+        # workers are refined by remaining capability in incident_impact.
+        _impact = (
+            "blocking"
+            if _component in {"controller", "sender"} and _status != "degraded"
+            else "degraded"
+        )
         _ENTRIES[f"{_component}_health_{_status}"] = _runbook(
-            f"Configured {_component.replace('_', ' ')} health is {_status}"
+            f"Configured {_component.replace('_', ' ')} health is {_status}", impact=_impact
         )
 
 RUNBOOKS = MappingProxyType(_ENTRIES)
