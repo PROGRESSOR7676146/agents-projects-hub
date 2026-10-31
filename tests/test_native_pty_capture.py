@@ -19,6 +19,9 @@ from tests.native_pty_capture import NativePtyError, NativePtyInput, capture_own
 
 # Bounds only a fixture that never finishes; success paths must not race it.
 HANG_GUARD_SECONDS = 30.0
+# Closing the master hangs up the session and would end these fixtures without
+# the helper's own group kill; ignoring it makes cleanup assertions prove that kill.
+IGNORE_HANGUP = "import signal; signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
 
 
 class NativePtyCaptureTests(unittest.TestCase):
@@ -127,7 +130,7 @@ class NativePtyCaptureTests(unittest.TestCase):
 
     def test_timeout_kills_owned_leader_and_descendant(self) -> None:
         proof = self.root / "pids.json"
-        code = (
+        code = IGNORE_HANGUP + (
             "import os,json,time; from pathlib import Path; child=os.fork(); "
             "\nif child == 0: time.sleep(30)"
             f"\nmarker=Path({str(proof)!r}); ready=marker.with_suffix('.ready'); "
@@ -156,7 +159,7 @@ class NativePtyCaptureTests(unittest.TestCase):
 
     def test_exited_leader_is_not_reaped_before_descendant_cleanup(self) -> None:
         proof = self.root / "pids.json"
-        code = (
+        code = IGNORE_HANGUP + (
             "import os,json,time; from pathlib import Path; child=os.fork(); "
             "\nif child == 0: time.sleep(30)"
             f"\nPath({str(proof)!r}).write_text(json.dumps([os.getpid(),child])); os._exit(0)"
@@ -169,10 +172,13 @@ class NativePtyCaptureTests(unittest.TestCase):
 
     def test_output_flood_fails_bounded_and_cleans_process(self) -> None:
         proof = self.root / "pid"
-        code = (
-            "import os; from pathlib import Path; "
+        # A hung-up terminal fails writes with EIO; the flood then waits to be killed.
+        code = IGNORE_HANGUP + (
+            "import os,time; from pathlib import Path; "
             f"Path({str(proof)!r}).write_text(str(os.getpid())); "
-            "\nwhile True: os.write(1,b'x'*8192)"
+            "\nwhile True:"
+            "\n    try: os.write(1,b'x'*8192)"
+            "\n    except OSError: time.sleep(30)"
         )
         with self.assertRaisesRegex(NativePtyError, "native_pty_output_bound"):
             self.capture(code, output_limit=1024)
@@ -181,7 +187,7 @@ class NativePtyCaptureTests(unittest.TestCase):
     def test_terminal_eof_with_living_leader_waits_for_deadline_and_reaps(self) -> None:
         proof = self.root / "pid"
         closed = self.root / "closed"
-        code = (
+        code = IGNORE_HANGUP + (
             "import os,time; from pathlib import Path; "
             f"Path({str(proof)!r}).write_text(str(os.getpid())); "
             "os.close(0); os.close(1); os.close(2); "
@@ -237,7 +243,7 @@ class NativePtyCaptureTests(unittest.TestCase):
 
     def test_readiness_fault_closes_process_without_resending_input(self) -> None:
         proof = self.root / "pid"
-        code = (
+        code = IGNORE_HANGUP + (
             "import os,time; from pathlib import Path; "
             f"proof=Path({str(proof)!r}); pending=proof.with_suffix('.pending'); "
             "pending.write_text(str(os.getpid())); pending.replace(proof); time.sleep(30)"
