@@ -14,7 +14,11 @@ from unittest.mock import patch
 
 from hermes_codex_router.claude_stream import ClaudeStreamError, ClaudeTerminalFailure
 from hermes_codex_router.execution_journal import ExecutionJournal
-from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalTurnResult
+from hermes_codex_router.external_runtime import (
+    ExternalCliAdapter,
+    ExternalTurnResult,
+    ProviderUnavailableError,
+)
 from hermes_codex_router.external_worker import ExternalQueueWorker
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState
@@ -79,6 +83,12 @@ class ObservingClaudeAdapter:
             )
         if self.outcome == "contradictory":
             raise ClaudeStreamError("claude returned a conflicting terminal outcome")
+        if self.outcome in {"claude_permission_host_unverified", "claude_cli_unavailable"}:
+            raise ProviderUnavailableError(self.outcome, "Fictional refusal before start.")
+        if self.outcome.startswith("terminal:"):
+            raise ClaudeTerminalFailure(
+                self.outcome.removeprefix("terminal:"), "Fictional terminal refusal.", expected
+            )
         returned = (
             (OTHER_UUID if expected != OTHER_UUID else NATIVE_UUID)
             if self.outcome == "wrong_result"
@@ -435,6 +445,63 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         checkpoint = ExecutionJournal(worker.state).read(prior_id)
         assert checkpoint is not None
         self.assertEqual(checkpoint["project_root"], str(other_root))
+
+    def run_outcomes(self, *outcomes: str) -> tuple[str | None, str | None, str]:
+        """Run one job per outcome on the same worker; return its final health."""
+        adapter = ObservingClaudeAdapter(self.path)
+        worker = self.worker(adapter)
+        for index, outcome in enumerate(outcomes, start=1):
+            adapter.outcome = outcome
+            # A separate topic per job: a saved result blocks its own topic until delivery.
+            job_id = self.fixture.enqueue("claude", index, thread_id=100 + index)
+            worker.run_cycle()
+            self.assertIn(worker.state.get_provider_job(job_id).status, {"result_ready", "failed"})
+        health = worker.state.get_runtime_health("provider_worker", "example-claude-worker")
+        assert health is not None
+        status = worker.state.runtime_health_status("provider_worker", "example-claude-worker")
+        return health.provider_state, health.error_code, status.status
+
+    def test_one_request_refusal_is_recorded_without_degrading_the_worker(self) -> None:
+        refusal = "claude_permission_host_unverified"
+        # A fresh worker has no success yet, so its availability stays unknown.
+        self.assertEqual(self.run_outcomes(refusal), ("unknown", refusal, "healthy"))
+
+    def test_refusals_after_a_success_keep_the_provider_ready(self) -> None:
+        refusal = "claude_permission_host_unverified"
+        self.assertEqual(
+            self.run_outcomes("success", refusal, refusal), ("ready", refusal, "healthy")
+        )
+
+    def test_both_failure_paths_treat_request_refusals_alike(self) -> None:
+        self.assertEqual(
+            self.run_outcomes("success", "terminal:claude_resume_invalid"),
+            ("ready", "claude_resume_invalid", "healthy"),
+        )
+
+    def test_third_refusal_in_a_row_makes_the_provider_unavailable(self) -> None:
+        refusal = "claude_permission_host_unverified"
+        self.assertEqual(
+            self.run_outcomes("success", refusal, refusal, refusal),
+            ("unavailable", refusal, "degraded"),
+        )
+
+    def test_a_success_resets_the_refusal_count(self) -> None:
+        refusal = "claude_permission_host_unverified"
+        self.assertEqual(
+            self.run_outcomes(refusal, refusal, "success", refusal, refusal),
+            ("ready", refusal, "healthy"),
+        )
+
+    def test_component_failure_is_kept_through_a_later_refusal(self) -> None:
+        self.assertEqual(
+            self.run_outcomes(
+                "success", "claude_cli_unavailable", "claude_permission_host_unverified"
+            ),
+            ("unavailable", "claude_permission_host_unverified", "degraded"),
+        )
+
+    def test_quota_still_limits_the_provider(self) -> None:
+        self.assertEqual(self.run_outcomes("success", "quota")[0], "limited")
 
     def test_exact_terminal_quota_failure_is_failed_without_invented_quota_telemetry(self) -> None:
         job_id = self.enqueue(1)

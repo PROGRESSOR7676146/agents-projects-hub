@@ -110,6 +110,37 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertIsNone(refreshed.active_job_id)
         self.assertEqual(refreshed.success_at, self.now.isoformat())
 
+    def test_request_refusal_is_visible_but_does_not_degrade_a_live_worker(self) -> None:
+        common = {
+            "component": "provider_worker",
+            "runtime": "claude",
+            "agent_id": "claude",
+            "pid": 4321,
+            "process_start_marker": "start-refusal",
+            "started_at": self.now - timedelta(minutes=5),
+            "heartbeat_at": self.now - timedelta(seconds=10),
+        }
+        self.state.upsert_runtime_health(
+            instance_id="worker-refused",
+            error_code="claude_permission_host_unverified",
+            **cast(Any, common),
+        )
+        self.state.upsert_runtime_health(
+            instance_id="worker-broken", error_code="claude_cli_unavailable", **cast(Any, common)
+        )
+        refused = self.state.runtime_health_status(
+            "provider_worker", "worker-refused", now=self.now
+        )
+        broken = self.state.runtime_health_status("provider_worker", "worker-broken", now=self.now)
+        self.assertEqual(refused.status, "healthy")
+        assert refused.record is not None
+        self.assertEqual(refused.record.error_code, "claude_permission_host_unverified")
+        self.assertEqual(broken.status, "degraded")
+        stale = self.state.runtime_health_status(
+            "provider_worker", "worker-refused", now=self.now + timedelta(minutes=10)
+        )
+        self.assertEqual(stale.status, "stale")
+
     def test_health_classification_uses_cached_timestamps_only(self) -> None:
         self.state.upsert_runtime_health(
             component="controller",
