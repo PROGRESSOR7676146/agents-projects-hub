@@ -13,6 +13,8 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#identity-and-interaction).
   no authority.
 - **REQ-ID-004 (Implemented):** Numeric chat and thread IDs MUST identify a topic; renaming MUST NOT
   change its identity.
+  The displayed title MUST follow an authorized owner rename in a bound group and MAY start from
+  the topic's creation name; it never selects a session or route.
 - **REQ-ID-005 (Implemented):** Projects and topics MUST keep sessions, context, routing and writer
   state separate.
 - **REQ-ID-006 (Implemented):** Unknown, disabled, mismatched or unbound identities MUST refuse work
