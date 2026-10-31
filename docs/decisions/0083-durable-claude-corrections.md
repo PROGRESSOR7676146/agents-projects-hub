@@ -1,6 +1,6 @@
 # ADR 0083: Durable Claude corrections in one owned process
 
-Status: source candidate; exact-source review and publication pending.
+Status: implemented offline; activation and native/Telegram acceptance pending.
 Date: 2026-10-30
 Owner: Hub maintainer; sole implementation writer: primary development agent.
 Contract: [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md).
@@ -85,5 +85,7 @@ gate defaults false; ordinary deployments preserve their existing FIFO.
 
 ## Closure
 
-Open until exact-source review and publication. Installed acceptance stays open
-after source closure. Inspect tracked/staged/untracked lane state before cleanup.
+Source implementation and independent review are complete at `99f0416`. The
+owning pull request records final integration and publication gates; this does
+not close installed acceptance. Inspect tracked/staged/untracked lane state
+before cleanup.

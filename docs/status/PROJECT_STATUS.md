@@ -15,7 +15,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
-| Claude corrections during execution | Opt-in bounded source candidate (schema55); review/publication pending | Pending | [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0083](../decisions/0083-durable-claude-corrections.md) |
+| Claude corrections during execution | Opt-in bounded implementation (schema55); offline tests and native source review at `99f0416` | Pending | [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0083](../decisions/0083-durable-claude-corrections.md) |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
 | Claude Code CPA worker | Text-only default; opt-in developer and workstation implemented; confined linked worktrees; subscription route: ADR 0082 | Bounded ordinary-root developer acceptance complete; linked-worktree productive acceptance and full parity remain separate | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
 | Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending scoped live checks; global helper/admin isolation not claimed; unsupported local boundaries remain refused | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
