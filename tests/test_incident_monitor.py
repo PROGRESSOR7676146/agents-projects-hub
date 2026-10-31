@@ -7,6 +7,7 @@ import unittest
 from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock, patch
 
 from hermes_codex_router import alerts as alert_module
@@ -104,6 +105,27 @@ class IncidentMonitorTests(unittest.TestCase):
             with self.monitor(alerts=()):
                 run_monitor_once(config, notify=False)
             self.assertIsNotNone(json.loads(path.read_text())["episodes"][0]["resolved_at"])
+
+    def test_omitted_blocker_makes_the_monitor_visibly_saturated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(directory)
+            alerts = tuple(
+                OperationalAlert(f"stalled:{index}", "provider_work_stalled", "error", "Stalled")
+                for index in range(3)
+            )
+            with (
+                self.monitor(alerts=alerts),
+                patch("hermes_codex_router.incident_journal.MAX_EPISODES", 2),
+            ):
+                result = run_monitor_once(config, notify=False)
+            self.assertFalse(result["ok"])
+            journal_status = cast(dict[str, object], result["incident_journal"])
+            self.assertEqual(journal_status["status"], "saturated")
+            self.assertEqual(journal_status["omitted_open_by_impact"], {"blocking": 1})
+            with closing(HubState.open_existing(config.state_path)) as state:
+                health = state.get_runtime_health("monitor", MONITOR_INSTANCE_ID)
+                assert health is not None
+                self.assertEqual(health.error_code, "incident_journal_saturated")
 
     def test_projection_failure_preserves_operations_and_reports_health(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

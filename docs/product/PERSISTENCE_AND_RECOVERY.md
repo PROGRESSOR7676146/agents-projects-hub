@@ -18,6 +18,11 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
   - Expired execution, overdue eligible queues/deliveries and new unresolved outcomes MUST alert;
     healthy long-running work and resolved history MUST NOT create false blocking alerts.
   - Unknown nonblocking notices MUST remain separately visible; alerts MUST NOT authorize resend.
+  - Every alert MUST carry an impact class (ADR 0084): `blocking` when requested or accepted work
+    is stopped, `awaiting_owner` when it waits for a decision the system asked for, `degraded`
+    when capacity is reduced but a healthy path remains, otherwise `diagnostic`. A failed provider
+    worker is `blocking` only when its agent has no healthy worker left. Severity alone never sets
+    the class.
 - **REQ-OPS-005 (Implemented):** Hermes and tlive MUST remain independently monitored recovery
   channels; heartbeat proves liveness, not approval-card delivery.
   - Approval health MUST require fresh exact request/session/turn evidence and a positive delivery
@@ -65,6 +70,9 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
   bounded private atomic incident journal before Operations delivery, with episode identity/times
   and a runbook recommendation. It MUST contain no user content, paths, credentials or deployment
   identities and require no runtime-rollback migration.
+  - Each episode MUST record its impact class. When the bound is reached, open `blocking` and
+    `awaiting_owner` episodes MUST be kept first, omissions MUST be counted per class, and an
+    omitted actionable episode MUST make the monitor visibly saturated (ADR 0084).
 - **REQ-OPS-014 (Planned; ADR 0048):** Enabled Hermes incident cards MUST remain model-free,
   read-only and owner-specific, with options, consequences, recommendation and explicit controls;
   only an authorized Analyze press MAY invoke a model with the incident as data.

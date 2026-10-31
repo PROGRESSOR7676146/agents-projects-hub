@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from .incident_runbooks import ACTIONABLE_IMPACTS, IMPACTS, incident_runbook
 from .operational_alert import OperationalAlert
 
 MAX_BYTES = 1024 * 1024
@@ -34,6 +35,10 @@ _FIELDS = {
     "omitted_resolved_count",
     "episodes",
 }
+# Schema 2 (ADR 0084) adds each episode's impact and per-impact open omissions.
+SCHEMA_VERSION = 2
+_ROW_FIELDS_V2 = _ROW_FIELDS | {"impact"}
+_FIELDS_V2 = _FIELDS | {"omitted_open_by_impact"}
 
 
 class IncidentJournalError(RuntimeError):
@@ -103,12 +108,15 @@ def _valid_message(code: object, severity: object, message: object) -> bool:
 
 
 def _load(raw: bytes) -> dict[str, Any]:
+    """Validate schema 1 or 2; a schema 1 projection is upgraded in memory."""
     value = json.loads(raw)
+    version = value.get("schema_version") if isinstance(value, dict) else None
+    fields, row_fields = {1: (_FIELDS, _ROW_FIELDS), 2: (_FIELDS_V2, _ROW_FIELDS_V2)}.get(
+        version if type(version) is int else 0, (None, None)
+    )
     if (
-        not isinstance(value, dict)
-        or set(value) != _FIELDS
-        or type(value["schema_version"]) is not int
-        or value["schema_version"] != 1
+        fields is None
+        or set(value) != fields
         or not isinstance(value["seed_binding"], str)
         or _DIGEST.fullmatch(value["seed_binding"]) is None
     ):
@@ -123,7 +131,11 @@ def _load(raw: bytes) -> dict[str, Any]:
     identifiers: set[str] = set()
     open_keys: set[str] = set()
     for row in rows:
-        if not isinstance(row, dict) or set(row) != _ROW_FIELDS:
+        if not isinstance(row, dict) or set(row) != row_fields:
+            raise IncidentJournalError()
+        if version == 1:
+            row["impact"] = incident_runbook(row["code"]).impact
+        elif row["impact"] not in IMPACTS:
             raise IncidentJournalError()
         identifier = row["id"]
         if (
@@ -144,6 +156,15 @@ def _load(raw: bytes) -> dict[str, Any]:
             open_keys.add(prefix)
         elif not seen <= _time(row["resolved_at"]) <= updated:
             raise IncidentJournalError()
+    if version == 1:
+        value["omitted_open_by_impact"] = {}
+    omitted = value["omitted_open_by_impact"]
+    if not isinstance(omitted, dict) or any(
+        name not in IMPACTS or type(count) is not int or count < 0
+        for name, count in omitted.items()
+    ):
+        raise IncidentJournalError()
+    value["schema_version"] = SCHEMA_VERSION
     return value
 
 
@@ -154,6 +175,15 @@ def read_incident_snapshot(path: Path) -> dict[str, Any]:
         return _load(_read(path, MAX_BYTES))
     except (OSError, ValueError, TypeError, RecursionError, OverflowError):
         raise IncidentJournalError() from None
+
+
+def omitted_actionable(snapshot: dict[str, Any]) -> int:
+    """Open blocking or awaiting-owner episodes the bounded journal could not keep."""
+    return sum(
+        count
+        for impact, count in snapshot["omitted_open_by_impact"].items()
+        if impact in ACTIONABLE_IMPACTS
+    )
 
 
 class IncidentJournal:
@@ -285,8 +315,20 @@ class IncidentJournal:
                 row["resolved_at"] = stamp
             if _time(row["resolved_at"]) >= now - RETENTION:
                 resolved.append(row)
+
         # Select opaque keys before creating rows: unchanged storms retain IDs.
-        selected = sorted(current.keys() | active.keys())[:MAX_EPISODES]
+        # Actionable episodes come first, so overflow never evicts a blocker.
+        def impact_of(token: str) -> str:
+            alert = current.get(token)
+            if alert is not None:
+                return alert.impact or incident_runbook(alert.code).impact
+            return active[token]["impact"]
+
+        candidates = sorted(
+            current.keys() | active.keys(),
+            key=lambda token: (IMPACTS.index(impact_of(token)), token),
+        )
+        selected = candidates[:MAX_EPISODES]
         open_rows: list[dict[str, Any]] = []
         for token in selected:
             if token not in current:
@@ -300,18 +342,24 @@ class IncidentJournal:
                 code=alert.code,
                 severity=alert.severity,
                 message=alert.message,
+                impact=impact_of(token),
                 last_seen_at=stamp,
                 resolved_at=None,
             )
             open_rows.append(row)
         resolved.sort(key=lambda row: (row["resolved_at"], row["id"]), reverse=True)
         keep_resolved = resolved[: MAX_EPISODES - len(open_rows)]
+        omitted_by_impact: dict[str, int] = {}
+        for token in candidates[MAX_EPISODES:]:
+            impact = impact_of(token)
+            omitted_by_impact[impact] = omitted_by_impact.get(impact, 0) + 1
         result = {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "seed_binding": seed_binding,
             "updated_at": stamp,
-            "omitted_open_count": len(current.keys() | active.keys()) - len(open_rows),
+            "omitted_open_count": len(candidates) - len(open_rows),
             "omitted_resolved_count": len(resolved) - len(keep_resolved),
+            "omitted_open_by_impact": omitted_by_impact,
             "episodes": open_rows + keep_resolved,
         }
         self._publish(result)
