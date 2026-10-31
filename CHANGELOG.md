@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Hub follows topic renames made in Telegram, including the General topic,
+  and names a newly seen topic from its creation message instead of
+  "Topic N". Titles stay display-only; routing still uses numeric IDs.
 - The history privacy scan reads Git objects through one batched
   `git cat-file` process instead of two processes per object, so every
   commit and push spends far less time in it.
