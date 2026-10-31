@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from hermes_codex_router.privacy_scan import (
     _git_object_bytes_match_oid,
     _read_git_object,
+    _read_git_objects,
     _scan_metadata_for_privacy,
     scan_history,
 )
@@ -149,6 +151,69 @@ class GitObjectReadTests(unittest.TestCase):
             self.assertFalse(
                 _git_object_bytes_match_oid("blob", original.decode(), b"replacement\n")
             )
+
+    def blob_repository(self, root: Path, count: int) -> list[str]:
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        ids = []
+        for index in range(count):
+            # Incompressible enough to fill the stdout pipe many times over.
+            data = os.urandom(64 * 1024) + str(index).encode()
+            ids.append(
+                subprocess.run(
+                    ["git", "hash-object", "-w", "--stdin"],
+                    cwd=root,
+                    input=data,
+                    capture_output=True,
+                    check=True,
+                )
+                .stdout.decode()
+                .strip()
+            )
+        return ids
+
+    def finish_within(self, action, seconds: float = 30.0) -> list[BaseException]:
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                action()
+            except BaseException as error:  # noqa: BLE001 - reported to the test
+                errors.append(error)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(seconds)
+        self.assertFalse(worker.is_alive(), "batched Git read did not finish")
+        return errors
+
+    def test_batched_read_returns_every_object_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ids = self.blob_repository(root, 40)
+            read = [object_id for object_id, kind, _ in _read_git_objects(root, ids)]
+            self.assertEqual(read, ids)
+
+    def test_early_close_and_missing_object_finish_promptly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ids = self.blob_repository(root, 40)
+
+            def close_early() -> None:
+                stream = _read_git_objects(root, ids)
+                next(stream)
+                stream.close()
+
+            self.assertEqual(self.finish_within(close_early), [])
+            missing = ["0" * 40, *ids]
+            errors = self.finish_within(lambda: list(_read_git_objects(root, missing)))
+            self.assertEqual([type(error) for error in errors], [RuntimeError])
+
+            def fail_in_body() -> None:
+                for _ in _read_git_objects(root, ids):
+                    raise ValueError("scan body failed")
+
+            errors = self.finish_within(fail_in_body)
+            self.assertEqual([type(error) for error in errors], [ValueError])
 
     def test_history_scan_accepts_authorship_and_rejects_message_leaks(self) -> None:
         with tempfile.TemporaryDirectory() as directory_name:

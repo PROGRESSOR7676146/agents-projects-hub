@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The history privacy scan reads Git objects through one batched
+  `git cat-file` process instead of two processes per object, so every
+  commit and push spends far less time in it.
 - A Claude request refused before it starts (for example a changed session
   mode or an unverifiable launch boundary) no longer leaves its worker shown
   as degraded and its provider unavailable until that slot's next success; the
