@@ -17,6 +17,9 @@ from unittest.mock import patch
 
 from tests.native_pty_capture import NativePtyError, NativePtyInput, capture_owned_pty
 
+# Bounds only a fixture that never finishes; success paths must not race it.
+HANG_GUARD_SECONDS = 30.0
+
 
 class NativePtyCaptureTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -32,7 +35,7 @@ class NativePtyCaptureTests(unittest.TestCase):
         return capture_owned_pty(
             self.argv(code),
             self.environment,
-            timeout=options.pop("timeout", 3),
+            timeout=options.pop("timeout", HANG_GUARD_SECONDS),
             output_limit=options.pop("output_limit", 65536),
             **options,
         )
@@ -184,7 +187,27 @@ class NativePtyCaptureTests(unittest.TestCase):
             "os.close(0); os.close(1); os.close(2); "
             f"Path({str(closed)!r}).touch(); time.sleep(30)"
         )
-        with self.assertRaisesRegex(NativePtyError, "native_pty_timeout"):
+        started = time.monotonic()
+        initialized = seen_closed = False
+
+        def clock() -> float:
+            nonlocal initialized, seen_closed
+            if not initialized:
+                initialized = True
+                return 0
+            # The terminal hung up before the marker appeared, so the loop pass
+            # that first sees the marker selects and consumes that EOF. Expire
+            # on the next pass, with the leader still alive. Keep an independent
+            # real startup watchdog.
+            if seen_closed or time.monotonic() - started >= 10:
+                return 1
+            seen_closed = closed.exists()
+            return 0
+
+        with (
+            patch("tests.native_pty_capture.time", SimpleNamespace(monotonic=clock)),
+            self.assertRaisesRegex(NativePtyError, "native_pty_timeout"),
+        ):
             self.capture(code, timeout=0.75)
         self.assertTrue(closed.exists(), "fixture must close the terminal before timing out")
         self.assertFalse(Path(f"/proc/{int(proof.read_text())}").exists())
@@ -269,7 +292,7 @@ class NativePtyCaptureTests(unittest.TestCase):
         result = capture_owned_pty(
             (str(self.root / "missing-native-program"),),
             self.environment,
-            timeout=3,
+            timeout=HANG_GUARD_SECONDS,
             output_limit=1024,
         )
         self.assertTrue(result.tty_verified)
