@@ -1,111 +1,60 @@
 # Maintenance requirements
 
-This normative module is part of the
-[product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
+Supporting detail: [reference](REQUIREMENT_DETAILS.md#maintenance).
 
 ## 18. Known limitations
 
-- Live acceptance is point-in-time evidence and must be repeated after material
-  routing, provider, Telegram-policy, or persistence changes.
-- Exact provider capability and resume flags can change between CLI versions.
-- OpenCode and Antigravity lack a tlive-equivalent semantic remote companion;
-  tmux/PTY remains the low-level fallback.
-- Hermes native local transfer capability needs separate confirmation before a
-  common `/local` experience can claim provider parity.
-- Antigravity automatic rotation is unavailable without a supported headless
-  account-pool interface.
-- The current recovery plane handles component/service failure on the existing
-  machine. Hub application snapshots, bounded restore and recovery handoff remain
-  planned under REQ-OPS-012. Full-host/WSL export, off-machine infrastructure and
-  cold-host drills are externally owned, not unfinished Hub implementation;
-  handoff does not prove them. Exact recovery of an in-flight turn is impossible.
-- OpenCode and Antigravity have one worker slot each. Codex and Claude default
-  to one each; extra processes require an explicit external-worker rollout.
-  Claude defaults to text-only queue execution. The opt-in protected file-tool
-  boundary has offline coverage; scoped installed checks, native/Telegram and
-  live CPA or subscription route acceptance remain pending. Global same-UID/admin authority-data
-  isolation is not claimed under REQ-SEC-008, rather than pending. Existing
-  unsupported managed local/steering boundaries remain unsupported.
-- Topic creation depends on the deployment bot's Telegram Manage Topics
-  permission.
+Live acceptance is point-in-time and needs repetition after material changes.
+Provider resume capabilities vary; OpenCode/Antigravity lack semantic tlive parity,
+Hermes local transfer needs verification, and Antigravity rotation awaits support.
+
+Recovery covers existing-machine service failure; application restore is planned
+and host recovery externally owned. In-flight turns are not recoverable.
+
+Extra Codex/Claude workers require explicit rollout; OpenCode/Antigravity have one
+slot each. Claude tools/routes retain separate installed/live gates; hostile
+same-UID isolation is not claimed, and unsupported managed local/steering stays
+unsupported. Topic creation requires Telegram Manage Topics permission.
 
 ## 19. Maintenance and change policy
 
-1. Define observable behavior, trust boundaries, and acceptance criteria once,
-   in the owning product requirement module. Update only the affected contract
-   and its reviewed section digest; the manifest is a generated integrity guard,
-   never a second normative source. A fix restoring an existing contract does
-   not require rewriting requirements.
-2. Update `docs/status/PROJECT_STATUS.md` only when evidence changes a capability's
-   lifecycle or acceptance state. Use a short status and a contract link rather
-   than repeating its behavior. Runbooks own executable procedures; the testing
-   guide owns check commands and evidence boundaries. Update them only when
-   those procedures change, linking to the product contract for behavior.
-3. Record new consequential durable choices under `docs/decisions/`; do not
-   rewrite accepted rationale invisibly or add an ADR for a mechanical fix.
-   Changelog entries are short release-facing summaries and links, not another
-   specification. There is no requirement to touch all these documents per change.
-4. Preserve backward compatibility for persisted state through explicit schema
-   migrations and backups.
-5. Prefer official provider interfaces and capability probes. Pin or test fast-
-   moving optional dependencies; retain a simpler official fallback where
-   feasible.
-6. Prefer deterministic small adapters, bounded state, and reversible failure
-   over deep CLI coupling, TUI scraping, autonomous repair, or speculative
-   abstraction.
-7. Store live deployment evidence outside Git and publish only reusable
-   acceptance requirements or anonymized aggregate results.
-8. Background monitors, daemons, healthchecks, and scheduled timers MUST NEVER
-   make live inference calls to LLMs or trigger `--live` probes. Telemetry,
-   quota status, and health metrics must always be read passively from local
-   cached files (`quota-cache.json`, logs) or response headers. Live probes are
-   strictly prohibited except upon explicit, interactive operator request.
-9. Focused development checks are partial offline feedback, never acceptance.
-   Publication and CI MUST run the full canonical validator. Cheap static and
-   documentation contracts MUST fail before whole-project typing and the full
-   test suite. With the installed pre-push hook, its clean-commit canonical run
-   is the final local gate; do not also run it manually on the unchanged tree.
-   CI MUST independently execute the full gate for its exact checked-out revision.
-10. An architecture review and an explicit extraction plan are required when at
-    least one review trigger fires: a file of roughly more than 1,500 lines
-    receives a new responsibility; a function of roughly more than 200 lines
-    receives a materially new branch or lifecycle behavior; or one lifecycle or
-    invariant is duplicated across multiple runtime paths. These values are
-    review triggers, not blocking line-count limits or automatic refactoring
-    orders.
-11. When extraction is not currently justified, the bounded exception MUST name
-    the concrete rationale, owner, scope, next review date, and event that
-    reopens the decision.
-12. A feature PR that touches an already triggered hotspot MUST either reduce
-    the component's responsibility or include the bounded exception defined
-    above. Mechanical splitting solely to pass a size or complexity metric is
-    prohibited. The canonical gate enforces this rule through
-    `docs/operations/hotspots.json`: a new hotspot or growth past a recorded
-    bound fails validation, and raising a bound in the same change is the
-    reviewed bounded exception.
-13. A PR that materially changes Controller, state, or worker lifecycle behavior
-    MUST identify the component owner, transaction owner, provider-invocation
-    boundary, replay safety, failure certainty, cleanup owner, focused tests,
-    and exact publication evidence.
-14. Architecture fitness review MUST check import direction, preserve one owner
-    of each SQLite transaction, and prevent runtime code from bypassing the
-    applicable state or domain facade. Orchestration and facades MAY depend on
-    dependency-neutral contracts and domain helpers; lower layers MUST NOT
-    import Controller, provider-worker, or Telegram runtime orchestration.
-    Beyond the growth ratchet of rule 12, size and complexity measurements are
-    for trend reporting and review selection, not a standalone blocking
-    quality gate.
-15. Before a major feature wave, review active hotspots, accepted bounded
-    exceptions, unclosed accepted plans, and debt in worktrees, branches, and
-    release tags. Resolve or explicitly carry each item before opening the wave.
-16. Every accepted plan MUST record its current state, last verified revision,
-    next trigger, and a closure section when the work is complete.
-17. Every long-lived worktree MUST record its owner, purpose, base branch or
-    revision, and a post-merge review point. Never remove a worktree
-    automatically before checking its tracked, staged, and untracked state.
+1. Observable outcomes, boundaries and acceptance MUST have one owning module; update only affected
+    contracts/digests, not requirements for a fix restoring them.
+2. Status MUST change only with lifecycle/acceptance evidence; runbooks own procedures and testing
+    guides own checks, with contract links instead of duplication.
+3. Consequential choices MUST retain visible ADR rationale; mechanical fixes need no ADR, and
+    changelogs remain short release summaries.
+4. Persisted-state compatibility MUST use explicit migrations and backups.
+5. Prefer official interfaces/probes, tested or pinned fast-moving dependencies and simple official
+    fallbacks.
+6. Prefer small deterministic adapters, bounded state and reversible failure over scraping,
+    autonomous repair or speculative abstraction.
+7. Live deployment evidence MUST stay outside Git; publish only reusable criteria or anonymized
+    aggregates.
+8. Background monitoring, daemons, health checks and timers MUST NEVER invoke inference or live
+    probes; telemetry MUST be passive and live probes require explicit interactive owner requests.
+9. Focused checks MUST NOT claim acceptance; publication/CI MUST run the canonical gate for the
+    exact revision, with cheap checks first and no redundant unchanged-tree local run.
+10. New responsibility in large files/functions or duplicated lifecycle invariants MUST trigger
+    architecture review and an extraction plan; size is a review trigger, not an automatic refactor.
+11. A bounded deferral MUST name rationale, owner, scope, next review date and reopening event.
+12. Feature changes in triggered hotspots MUST reduce responsibility or carry that exception;
+    recorded hotspot growth MUST fail the gate without reviewed bounds, and metric-only splitting is
+    prohibited.
+13. Material Controller/state/worker changes MUST name ownership, transaction/invocation boundaries,
+    replay/failure/cleanup behavior and focused/publication evidence.
+14. Architecture review MUST preserve import direction, one SQLite transaction owner and facade
+    access; lower layers MUST NOT import runtime orchestration, and metrics beyond the growth rule
+    remain review evidence.
+15. Before major feature work, hotspots, exceptions, unfinished plans and worktree/branch/tag debt
+    MUST be resolved or explicitly carried.
+16. Accepted plans MUST record state, verified revision, next trigger and closure.
+17. Long-lived worktrees MUST record owner, purpose, base and post-merge review; automatic removal
+    MUST first inspect tracked, staged and untracked state.
 
 ## 20. Provenance
 
-This baseline is derived from current repository behavior and automated tests.
-Raw conversations, rollout logs, local configuration, and deployment identities
-remain private operator state and must not be copied into Git.
+This baseline derives from repository behavior and automated tests.
+Conversations, rollout logs, local configuration and deployment identities MUST
+remain private and outside Git.
