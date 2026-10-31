@@ -5,8 +5,10 @@ import hashlib
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generator
 
 _PRIVATE_FINGERPRINTS = frozenset(
     {
@@ -332,6 +334,49 @@ def _git_object_bytes_match_oid(object_type: str, object_id: str, data: bytes) -
     return hashlib.sha1(framed, usedforsecurity=False).hexdigest() == object_id
 
 
+def _read_git_objects(
+    root: Path, object_ids: list[str]
+) -> Generator[tuple[str, str, bytes], None, None]:
+    """Stream (id, type, raw bytes) for each object from one ``git cat-file --batch``.
+
+    One process replaces two per object; it uses the same isolated environment,
+    so replacement objects stay ignored. Requests come from a private temporary
+    file rather than a pipe, so no writer can block on a full pipe. A missing or
+    truncated object fails the scan, and any early exit kills the process.
+    """
+    with tempfile.TemporaryFile() as requests:
+        requests.write("".join(f"{object_id}\n" for object_id in object_ids).encode())
+        requests.seek(0)
+        process = subprocess.Popen(
+            [str(Path("/usr/bin/git")), "cat-file", "--batch"],
+            cwd=root,
+            env=_isolated_git_environment(),
+            stdin=requests,
+            stdout=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        stdout = process.stdout
+        completed = False
+        try:
+            for expected in object_ids:
+                header = stdout.readline().decode("ascii", "replace").split()
+                if len(header) != 3 or header[0] != expected:
+                    raise RuntimeError(f"Git object {expected[:12]} is unavailable")
+                size = int(header[2])
+                data = stdout.read(size)
+                if len(data) != size or stdout.read(1) != b"\n":
+                    raise RuntimeError(f"Git object {expected[:12]} was truncated")
+                yield expected, header[1], data
+            completed = True
+        finally:
+            if not completed:
+                process.kill()
+            stdout.close()
+            returncode = process.wait()
+        if returncode != 0:
+            raise RuntimeError("git cat-file failed")
+
+
 def scan_history(root: Path) -> list[PrivacyFinding]:
     git_path = str(Path("/usr/bin/git"))
     git_environment = _isolated_git_environment()
@@ -344,23 +389,14 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
         text=True,
     )
     findings: list[PrivacyFinding] = []
-    inspected: set[str] = set()
+    paths: dict[str, str | None] = {}
     for line in result.stdout.splitlines():
         fields = line.split(" ", 1)
-        object_id = fields[0]
-        if object_id in inspected:
-            continue
-        inspected.add(object_id)
-        object_type = subprocess.run(
-            [git_path, "cat-file", "-t", object_id],
-            cwd=root,
-            env=git_environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        paths.setdefault(fields[0], fields[1] if len(fields) == 2 else None)
+    for object_id, object_type, data in _read_git_objects(root, list(paths)):
+        raw_path = paths[object_id]
         if object_type in {"commit", "tag"}:
-            metadata = _read_git_object(root, object_id)
+            metadata = data
             if not _git_object_bytes_match_oid(object_type, object_id, metadata):
                 findings.append(
                     PrivacyFinding(
@@ -379,10 +415,9 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
                 for item in _scan_metadata_for_privacy(Path(".git-metadata"), metadata)
             )
             continue
-        if object_type != "blob" or len(fields) != 2:
+        if object_type != "blob" or raw_path is None:
             continue
-        raw_path = fields[1]
-        blob = _read_git_object(root, object_id)
+        blob = data
         if not _git_object_bytes_match_oid(object_type, object_id, blob):
             findings.append(
                 PrivacyFinding(
