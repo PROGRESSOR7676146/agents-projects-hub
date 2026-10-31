@@ -11,6 +11,7 @@ from typing import Iterator
 
 from .migration_sql import _execute_migration_script
 from .schema_claude_activity import CLAUDE_ACTIVITY_SCHEMA as MIGRATION_42
+from .schema_claude_corrections import CLAUDE_CORRECTIONS_SCHEMA as MIGRATION_55
 from .schema_claude_material_notice import CLAUDE_MATERIAL_NOTICE_SCHEMA as MIGRATION_53
 from .schema_claude_material_notice import ensure_claude_material_notice_column
 from .schema_claude_permissions import CLAUDE_PERMISSIONS_SCHEMA as MIGRATION_38
@@ -1519,6 +1520,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_52,
         MIGRATION_53,
         MIGRATION_54,
+        MIGRATION_55,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

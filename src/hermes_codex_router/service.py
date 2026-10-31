@@ -97,6 +97,7 @@ from .provider_catalog import (
     provider_source_version,
 )
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
+from .provider_lease_heartbeat import maintain_provider_lease
 from .registry import (
     ExecutionRootError,
     Project,
@@ -971,25 +972,10 @@ class ProjectHubService:
         project = target.project
         heartbeat_stop = threading.Event()
 
-        def maintain_lease() -> None:
-            heartbeat_state = HubState.open(
-                self.config.state_path,
-                codex_permission_profile=self.config.codex_permission_profile,
-            )
-            try:
-                while not heartbeat_stop.is_set():
-                    try:
-                        heartbeat_state.heartbeat_provider_job(
-                            executing.job_id, token, lease_seconds=120
-                        )
-                    except Exception:
-                        return
-                    heartbeat_stop.wait(30)
-            finally:
-                heartbeat_state.close()
-
         heartbeat = threading.Thread(
-            target=maintain_lease,
+            target=lambda: maintain_provider_lease(
+                self.config, executing.job_id, token, heartbeat_stop
+            ),
             name=f"hub-provider-heartbeat-{agent.agent_id}",
             daemon=True,
         )

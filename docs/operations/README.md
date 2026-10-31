@@ -37,6 +37,8 @@ Operational truth is split by purpose:
   rewriting them.
 - Immutable artifact manifest and schema-compatibility gate:
   [`IMMUTABLE_RELEASES.md`](IMMUTABLE_RELEASES.md).
+- Pre-feature Claude schema55 consumer release and retained-work rollback drill:
+  [`CLAUDE_CORRECTIONS_ROLLBACK.md`](CLAUDE_CORRECTIONS_ROLLBACK.md).
 - Deployment diagnostics that never create or migrate state:
   `agents-projects-hub doctor HUB_CONFIG` reads it only, and
   `agents-projects-hub monitor HUB_CONFIG` records only its own health, alert

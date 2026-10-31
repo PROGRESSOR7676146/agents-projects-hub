@@ -5,20 +5,14 @@ Version: 1.0
 Date: 2026-08-30
 Product owner: repository owner
 
-This index and its linked modules are the primary product orientation for future
-agents. They record accepted intent and distinguish current, planned, deferred,
-and rejected behavior. Current implementation claims are bounded by code and
-passing tests; the live Telegram E2E baseline remains a separate acceptance
-step.
-
-Normative words MUST, SHOULD, and MAY are used in their BCP 14 sense.
+This baseline defines required outcomes and their lifecycle. Repository implementation
+requires code and passing tests; live Telegram acceptance is separate.
+MUST, SHOULD and MAY have their BCP 14 meanings.
 
 ## Normative modules
 
-The index and every module below form one accepted baseline. Follow the scoped
-read order in [AGENTS.md](../../AGENTS.md); requirements, architecture, security,
-and release/deployment contract changes require reading all modules. Scoped
-reading never exempts an implementation from any requirement.
+All modules form one baseline. Follow [AGENTS.md](../../AGENTS.md) for reading scope;
+requirements, architecture, security and release/deployment changes require all modules.
 
 - [Identity and interaction](IDENTITY_AND_INTERACTION.md)
 - [Accounts, control, and security](ACCOUNTS_CONTROL_AND_SECURITY.md)
@@ -27,120 +21,75 @@ reading never exempts an implementation from any requirement.
 - [Telegram delivery and receipts](DELIVERY_AND_RECEIPTS.md)
 - [Onboarding and acceptance](ONBOARDING_AND_ACCEPTANCE.md)
 - [Maintenance](MAINTENANCE.md)
-- [Evaluation and resource-aware task allocation](EVALUATION_AND_ALLOCATION.md)
-  — accepted foundation; implementation and acceptance pending.
+- [Evaluation and resource-aware task allocation](EVALUATION_AND_ALLOCATION.md) — accepted
+  foundation; implementation and acceptance pending.
+
+[Requirement details](REQUIREMENT_DETAILS.md) preserves supporting detail by ID.
+It is non-normative and does not add requirements.
 
 ## 1. Mission
 
-Agents Projects Hub helps one owner work on multiple real local projects through
-private Telegram project groups and native provider interfaces without
-collapsing independent providers into one agent or weakening local safety.
-
-The product binds durable project conversation to allowlisted local Git roots,
-routes each topic to the intended provider session, preserves visible context
-across providers, and keeps control of files, credentials, approvals, and writer
-ownership on the local machine.
-
-The product succeeds when the owner can understand which project, topic, agent,
-provider session, account mode, and writer are active; communicate directly
-with different agent identities; recover completed work after ordinary service
-failure; and observe failures without hidden cross-project access or surprise
-model spend.
+Help one owner work on multiple local Git projects through private Telegram groups
+and native provider interfaces. The owner can see the active project, topic, agent,
+session, account mode and writer, recover saved work, and understand failures
+without losing local control or incurring surprise model spend.
 
 ## 2. Product principles
 
-1. **Project first.** A Telegram project group is a durable collaboration and
-   history plane for exactly one registered local project.
-2. **Deterministic routing.** Local code, not another model, decides which agent
-   receives a request.
-3. **Provider identity remains visible.** Codex, Claude Code, Hermes,
-   OpenCode, and Antigravity remain directly addressable identities with provider-owned
-   sessions and credentials.
-4. **One coherent user input, one provider turn by default.** A short burst of
-   consecutive compatible Telegram messages is one coherent input. Passive
-   observation MUST NOT invoke paid models.
-5. **One writer.** A provider session MUST NOT accept concurrent Telegram and
-   local writers.
-6. **Local authority.** Telegram may select only registered identities and MUST
-   NOT select filesystem paths, relax a sandbox, or approve an action.
-7. **Bounded visible sharing.** Cross-agent context contains visible project
-   dialogue, never hidden reasoning, raw tool output, terminal screens,
-   credentials, or environment dumps.
-8. **Independent recovery paths.** Project Hub, Hermes Gateway, and Agent Session
-   Remote/tlive MUST NOT form a chain of mandatory dependencies.
-9. **Reversible failure.** Small deterministic adapters SHOULD fail visibly and
-   locally. The system SHOULD prefer a clear degraded state over fragile CLI
-   coupling or concealed repair.
+1. Each project group holds one project's durable conversation and history.
+2. Local deterministic code chooses recipients; provider identities stay directly addressable.
+3. One coherent input normally creates one turn; passive observation MUST NOT spend model tokens.
+4. A provider session MUST have one writer, across Telegram and local frontends.
+5. Telegram MUST NOT select paths, relax sandboxes or grant approvals.
+6. Sharing MUST contain only bounded visible dialogue, never hidden reasoning, raw tools/screens,
+    credentials or environment dumps.
+7. Hub, Hermes Gateway and tlive MUST remain independent recovery paths.
+8. Small adapters SHOULD fail visibly and reversibly, without concealed repair or fragile CLI
+    coupling.
 
 ## 3. Scope and non-goals
 
 ### In scope
 
-- Private Telegram forum groups mapped to allowlisted canonical local Git roots.
-- Independent topic work streams and persistent provider sessions.
-- One active/main agent plus explicitly invoked satellite agents.
-- Direct provider identity, deterministic Reply/mention routing, and bounded
-  shared visible context.
-- Codex, Claude Code, Hermes, OpenCode, and Antigravity provider boundaries.
-- Explicit model/session management and safe operational diagnostics.
-- Official Codex login through a shared app-server socket with an official stdio
-  fallback; no Codex multi-account integration (ADR 0047).
-- Native provider CLI continuity, explicit writer ownership, and tmux as a
-  low-level fallback.
-- Independent Hermes and tlive service/recovery capabilities.
-- Local persistence, monitoring, controlled upgrades, and disaster-recovery
-  planning.
+Private forum groups bind to allowlisted Git roots. Topics have persistent sessions,
+an active agent and explicitly addressed satellites, with bounded visible context.
+Codex, Claude Code, Hermes, OpenCode and Antigravity retain their own identities,
+credentials and provider boundaries.
+
+The product supports explicit session/model controls, official Codex login and stdio
+fallback, native CLI continuity, writer leases, tmux fallback, local persistence,
+diagnostics, controlled upgrades and recovery planning.
 
 ### Non-goals
 
-- A provider-neutral autonomous super-agent that hides provider identity.
-- Remote selection of arbitrary directories, credentials, commands, or policy.
-- Automatic approvals, approval by Hermes, or approval on timeout/failure.
-- Forwarding hidden chain-of-thought, raw terminal output, or secret material.
-- Full transcript mirroring between Telegram and every native CLI. Productive
-  Telegram inputs are still delivered durably to their selected provider.
-- Screen scraping provider TUIs or automatic OS terminal/PID orchestration.
-- Automatic GIF selection or delivery.
-- Guaranteed portability of an in-flight turn after process or machine loss.
-- A bot for every model or account; bot identity represents an agent runtime.
-- Treating tlive as semantic integration for unsupported providers.
-- Hub-managed lead/advisor roles and review/continuation orchestration; project
-  instructions own independent cross-provider review (ADR 0065).
+No hidden super-agent, remote arbitrary paths/credentials/commands/policy, automatic
+approval, secret or hidden-reasoning publication, TUI scraping, OS terminal/PID
+management, automatic GIFs, or per-model/account bots. No guaranteed recovery of
+in-flight turns, full CLI transcript mirroring, Codex multi-account integration,
+unsupported tlive semantic integration, or Hub-managed lead/advisor orchestration.
 
 ## 4. User mental model and terminology
 
 | Term | Meaning |
 | --- | --- |
-| Project | A locally registered immutable `project_id`, display name, and canonical allowlisted Git root. |
-| Project group | One private Telegram forum supergroup bound locally to one project. |
-| Topic | A work stream identified by numeric `(chat_id, message_thread_id)`; its title is mutable display metadata. |
-| Agent | A directly addressable runtime identity such as Codex, Claude Code, Hermes, OpenCode, or Antigravity. |
-| Active/main agent | The default recipient of ordinary messages in one topic and the eventual observer of visible satellite dialogue. |
-| Satellite agent | An agent invoked by mention or Reply without changing the active agent. |
-| Provider session | The provider-owned thread/session/conversation associated with one agent in one topic. |
-| Visible topic journal | Bounded completed user/agent dialogue eligible for cross-agent awareness. |
-| Writer lease | Persisted authority for `telegram`, future `local`, or fallback `tmux` to write to one provider session. |
-| Project Hub | The deterministic router/control plane and this product. |
-| Hermes Gateway | Hermes's independently operated native Telegram/session runtime. |
-| Agent Session Remote | The renamed tlive private session-control chat for supported native sessions; not a project group. |
+| Project / project group | Immutable local project ID and allowlisted Git root / its private forum group. |
+| Topic | Work stream keyed by numeric chat and thread IDs; its title is display only. |
+| Agent / provider session | Addressable runtime / its own conversation in a topic. |
+| Active / satellite agent | Default topic recipient / explicitly addressed agent without changing that default. |
+| Visible topic journal | Bounded completed user/agent dialogue available for explicit sharing. |
+| Writer lease | Persisted Telegram, local or tmux writing authority for one session. |
+| Project Hub | Deterministic router/control plane. |
+| Hermes Gateway | Independent Hermes Telegram/session runtime. |
+| Agent Session Remote / tlive | Private control chat for supported native sessions. |
 
-The canonical product name is **Agents Projects Hub**. The Telegram project
-group display name is **Hub**. The internal Python package name
-`hermes_codex_router` is retained for compatibility and does not redefine the
-product.
+The product is **Agents Projects Hub**, displayed as **Hub** in Telegram.
+The package name `hermes_codex_router` remains for compatibility.
 
 ## 5. Lifecycle labels
 
-Every capability in this baseline uses one of these labels:
-
-- **Implemented** — present in the repository and covered by automated tests;
-  live behavior may still need the explicitly listed E2E acceptance.
-- **Accepted** — required product behavior or boundary, whether or not every
-  provider implementation is complete.
-- **Planned** — accepted next work with a defined place in the roadmap.
-- **Deferred** — intentionally not scheduled until an explicit trigger or stable
-  upstream capability exists.
-- **Rejected** — explicitly outside the intended design unless the product owner
-  revises this baseline.
-- **Retired** — a previously accepted capability has been withdrawn by an
-  explicit decision; its identifier remains reserved and is not completion evidence.
+- **Implemented** — repository code and automated coverage; listed live acceptance may remain.
+- **Accepted** — required behavior, possibly incomplete.
+- **Planned** — accepted roadmap work.
+- **Deferred** — waits for an explicit trigger or stable upstream capability.
+- **Rejected** — outside scope unless the owner revises the baseline.
+- **Retired** — withdrawn by decision; the ID stays reserved and is not completion evidence.
