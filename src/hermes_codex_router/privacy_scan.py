@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import multiprocessing
 import os
 import re
 import subprocess
 import tempfile
+from collections import deque
+from collections.abc import Sequence
+from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
@@ -65,6 +71,12 @@ _IDENTITY_RULES = frozenset({"non-example email address", "private deployment fi
 _IDENTITY_RE = re.compile(r"[^<>\n]*<[^<>\n]+>")
 _TRAILER_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*: \S.*")
 _HOSTED_MERGE_OWNER_RE = re.compile(r"Merge pull request #[0-9]+ from (?P<identity>[A-Za-z0-9-]+)/")
+# History scanning is CPU-bound pattern matching over every reachable object.
+# Workers receive ordered chunks of about this many content bytes.
+_HISTORY_CHUNK_BYTES = 4_000_000
+_HISTORY_MAX_JOBS = 8
+# Object ID, Git type, first path reported by rev-list (blobs only) and raw bytes.
+_HistoryObject = tuple[str, str, str | None, bytes]
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,27 +389,28 @@ def _read_git_objects(
             raise RuntimeError("git cat-file failed")
 
 
-def scan_history(root: Path) -> list[PrivacyFinding]:
-    git_path = str(Path("/usr/bin/git"))
-    git_environment = _isolated_git_environment()
-    result = subprocess.run(
-        [git_path, "rev-list", "--objects", "--all", "--filter=object:type=blob"],
-        cwd=root,
-        env=git_environment,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+def _history_chunks(
+    root: Path, paths: dict[str, str | None]
+) -> Generator[list[_HistoryObject], None, None]:
+    """Group the batched objects, in rev-list order, into bounded scan chunks."""
+    with closing(_read_git_objects(root, list(paths))) as objects:
+        chunk: list[_HistoryObject] = []
+        chunk_bytes = 0
+        for object_id, object_type, data in objects:
+            chunk.append((object_id, object_type, paths[object_id], data))
+            chunk_bytes += len(data)
+            if chunk_bytes >= _HISTORY_CHUNK_BYTES:
+                yield chunk
+                chunk, chunk_bytes = [], 0
+        if chunk:
+            yield chunk
+
+
+def _scan_history_chunk(objects: Sequence[_HistoryObject]) -> list[PrivacyFinding]:
     findings: list[PrivacyFinding] = []
-    paths: dict[str, str | None] = {}
-    for line in result.stdout.splitlines():
-        fields = line.split(" ", 1)
-        paths.setdefault(fields[0], fields[1] if len(fields) == 2 else None)
-    for object_id, object_type, data in _read_git_objects(root, list(paths)):
-        raw_path = paths[object_id]
+    for object_id, object_type, raw_path, data in objects:
         if object_type in {"commit", "tag"}:
-            metadata = data
-            if not _git_object_bytes_match_oid(object_type, object_id, metadata):
+            if not _git_object_bytes_match_oid(object_type, object_id, data):
                 findings.append(
                     PrivacyFinding(
                         Path(".git-metadata") / object_id[:12],
@@ -412,13 +425,12 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
                     item.line,
                     f"{item.rule} in Git {object_type} metadata",
                 )
-                for item in _scan_metadata_for_privacy(Path(".git-metadata"), metadata)
+                for item in _scan_metadata_for_privacy(Path(".git-metadata"), data)
             )
             continue
         if object_type != "blob" or raw_path is None:
             continue
-        blob = data
-        if not _git_object_bytes_match_oid(object_type, object_id, blob):
+        if not _git_object_bytes_match_oid(object_type, object_id, data):
             findings.append(
                 PrivacyFinding(
                     Path(raw_path),
@@ -427,12 +439,80 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
                 )
             )
             continue
-        historical = _scan_blob(Path(raw_path), blob)
+        historical = _scan_blob(Path(raw_path), data)
         findings.extend(
             PrivacyFinding(item.path, item.line, f"{item.rule} in historical blob {object_id[:12]}")
             for item in historical
         )
     return findings
+
+
+def scan_history(root: Path, *, jobs: int | None = None) -> list[PrivacyFinding]:
+    """Scan every reachable commit, tag and blob; findings keep rev-list order."""
+    git_path = str(Path("/usr/bin/git"))
+    git_environment = _isolated_git_environment()
+    result = subprocess.run(
+        [git_path, "rev-list", "--objects", "--all", "--filter=object:type=blob"],
+        cwd=root,
+        env=git_environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    paths: dict[str, str | None] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split(" ", 1)
+        paths.setdefault(fields[0], fields[1] if len(fields) == 2 else None)
+    workers = min(_HISTORY_MAX_JOBS, os.cpu_count() or 1) if jobs is None else jobs
+    executor = _start_history_pool(workers) if workers > 1 else None
+    findings: list[PrivacyFinding] = []
+    with closing(_history_chunks(root, paths)) as chunks:
+        if executor is None:
+            for chunk in chunks:
+                findings.extend(_scan_history_chunk(chunk))
+            return findings
+        try:
+            # Bounded, ordered submission: Git reads ahead by at most a few
+            # chunks per worker, so memory follows the chunk size, not history.
+            pending: deque[Future[list[PrivacyFinding]]] = deque()
+            for chunk in chunks:
+                pending.append(executor.submit(_scan_history_chunk, chunk))
+                if len(pending) >= 2 * workers:
+                    findings.extend(pending.popleft().result())
+            while pending:
+                findings.extend(pending.popleft().result())
+        except BaseException:
+            executor.shutdown(wait=True, cancel_futures=True)
+            raise
+        executor.shutdown(wait=True)
+    return findings
+
+
+def _start_history_pool(workers: int) -> ProcessPoolExecutor | None:
+    """Start every worker now, or return None for the same scan in-process."""
+    executor = None
+    try:
+        # Fork, unlike spawn, never re-imports the caller's __main__. A fork
+        # context starts every worker on this first submission, before the
+        # scan opens cat-file.
+        executor = ProcessPoolExecutor(
+            max_workers=workers, mp_context=multiprocessing.get_context("fork")
+        )
+        executor.submit(int).result()
+    except (BrokenProcessPool, ImportError, OSError, NotImplementedError, ValueError):
+        # Includes a sandbox without /dev/shm, which refuses multiprocessing
+        # locks with OSError or ImportError.
+        if executor is not None:
+            # A failed later fork leaves earlier workers waiting for work while
+            # no manager thread exists to stop them; end them explicitly.
+            processes = dict(getattr(executor, "_processes", None) or {})
+            executor.shutdown(wait=False, cancel_futures=True)
+            for process in processes.values():
+                if process.is_alive():
+                    process.terminate()
+                process.join()
+        return None
+    return executor
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import multiprocessing
 import os
 import subprocess
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router.privacy_scan import (
+    PrivacyFinding,
     _git_object_bytes_match_oid,
     _read_git_object,
     _read_git_objects,
+    _scan_history_chunk,
     _scan_metadata_for_privacy,
     scan_history,
 )
@@ -257,6 +262,163 @@ class GitObjectReadTests(unittest.TestCase):
                 [finding.rule for finding in scan_history(root)],
                 ["non-example email address in Git commit metadata"],
             )
+
+
+class HistoryScanBatchTests(unittest.TestCase):
+    """One cat-file process and a worker pool must report exactly the serial findings."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.environment = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Example Person",
+            "GIT_AUTHOR_EMAIL": "person@example.com",
+            "GIT_COMMITTER_NAME": "Example Person",
+            "GIT_COMMITTER_EMAIL": "person@example.com",
+        }
+        self.git("init", "-q")
+
+    def git(self, *args: str, input_data: bytes | None = None) -> str:
+        return (
+            subprocess.run(
+                ["git", *args],
+                cwd=self.root,
+                env=self.environment,
+                input=input_data,
+                capture_output=True,
+                check=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
+
+    def commit(self, files: dict[str, bytes], message: str) -> str:
+        for name, data in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def build_history(self) -> None:
+        self.commit(
+            {
+                "docs/guide.md": b"Clean guide\n",
+                "copy/guide.md": b"Clean guide\n",
+                "notes.txt": f"Contact {PERSON_EMAIL}\n".encode(),
+                "secrets/example.txt": b"placeholder\n",
+                "image.bin": b"\0binary",
+            },
+            "Add fixtures",
+        )
+        self.commit({"notes.txt": b"Clean notes\n"}, f"Moved from {HOME}someone/work")
+        self.git("tag", "-a", "v1", "-m", f"Release by {PERSON_EMAIL}")
+
+    def test_parallel_chunks_match_serial_findings_in_order(self) -> None:
+        self.build_history()
+        serial = scan_history(self.root, jobs=1)
+        self.assertEqual(
+            sorted(finding.rule for finding in serial),
+            sorted(
+                [
+                    "owner-specific home path in Git commit metadata",
+                    "non-example email address in Git tag metadata",
+                    "binary tracked file requires explicit review in historical blob "
+                    + self.git("rev-parse", "HEAD:image.bin")[:12],
+                    "local runtime or secret-bearing file is forbidden in historical blob "
+                    + self.git("rev-parse", "HEAD:secrets/example.txt")[:12],
+                    "non-example email address in historical blob "
+                    + self.git("rev-parse", "HEAD~1:notes.txt")[:12],
+                ]
+            ),
+        )
+        # Tiny chunks force several worker tasks; order must not depend on them.
+        with patch("hermes_codex_router.privacy_scan._HISTORY_CHUNK_BYTES", 1):
+            self.assertEqual(scan_history(self.root, jobs=3), serial)
+        self.assertEqual(scan_history(self.root), serial)
+
+    def test_batch_read_ignores_replace_mapping(self) -> None:
+        leaking = self.commit({"notes.txt": f"Contact {PERSON_EMAIL}\n".encode()}, "Leak")
+        blob = self.git("rev-parse", f"{leaking}:notes.txt")
+        clean = self.git("hash-object", "-w", "--stdin", input_data=b"Clean\n")
+        self.git("replace", blob, clean)
+        self.assertEqual(
+            [finding.rule for finding in scan_history(self.root, jobs=2)],
+            [f"non-example email address in historical blob {blob[:12]}"],
+        )
+
+    def test_mismatched_object_bytes_are_reported_not_scanned(self) -> None:
+        object_id = hashlib.sha1(b"blob 6\0Clean\n", usedforsecurity=False).hexdigest()
+        findings = _scan_history_chunk(
+            [(object_id, "blob", "notes.txt", f"Contact {PERSON_EMAIL}\n".encode())]
+        )
+        self.assertEqual(
+            findings,
+            [PrivacyFinding(Path("notes.txt"), 1, "Git object bytes do not match object ID")],
+        )
+
+    def test_unavailable_worker_pool_falls_back_to_the_same_serial_scan(self) -> None:
+        self.build_history()
+        serial = scan_history(self.root, jobs=1)
+        for error in (
+            OSError("example: no process pool in this sandbox"),
+            ImportError("example: this platform lacks a functioning sem_open"),
+        ):
+            with (
+                self.subTest(error=type(error).__name__),
+                patch("hermes_codex_router.privacy_scan.ProcessPoolExecutor", side_effect=error),
+            ):
+                self.assertEqual(scan_history(self.root, jobs=4), serial)
+
+    def test_partial_worker_start_failure_stops_started_workers(self) -> None:
+        self.build_history()
+        serial = scan_history(self.root, jobs=1)
+        fork = multiprocessing.get_context("fork")
+        started: list[BaseProcess] = []
+
+        class SecondStartFails(type(fork).Process):  # type: ignore[misc]
+            def start(self) -> None:
+                if started:
+                    raise OSError("example: process limit reached")
+                started.append(self)
+                super().start()
+
+        class FailingContext(type(fork)):  # type: ignore[misc]
+            Process = SecondStartFails
+
+        with patch(
+            "hermes_codex_router.privacy_scan.multiprocessing.get_context",
+            return_value=FailingContext(),
+        ):
+            self.assertEqual(scan_history(self.root, jobs=3), serial)
+        self.assertEqual(len(started), 1)
+        self.assertFalse(started[0].is_alive())
+
+    def test_submission_is_bounded_and_ordered(self) -> None:
+        self.build_history()
+        serial = scan_history(self.root, jobs=1)
+        submitted = threading.Semaphore(0)
+        outstanding: list[int] = []
+        real_submit = ProcessPoolExecutor.submit
+
+        def counting_submit(executor, fn, *args):  # type: ignore[no-untyped-def]
+            future = real_submit(executor, fn, *args)
+            if fn is not int:
+                outstanding.append(1)
+                future.add_done_callback(lambda _: outstanding.pop())
+                self.assertLessEqual(len(outstanding), 2 * 2)
+                submitted.release()
+            return future
+
+        with (
+            patch("hermes_codex_router.privacy_scan._HISTORY_CHUNK_BYTES", 1),
+            patch.object(ProcessPoolExecutor, "submit", counting_submit),
+        ):
+            self.assertEqual(scan_history(self.root, jobs=2), serial)
+        self.assertTrue(submitted.acquire(blocking=False))
 
 
 if __name__ == "__main__":
