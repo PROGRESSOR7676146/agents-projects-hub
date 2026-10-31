@@ -9,6 +9,8 @@ import threading
 import time
 import unittest
 import uuid
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -34,12 +36,48 @@ from hermes_codex_router.external_runtime import (
 from hermes_codex_router.owned_process_exit import peek_exit_code
 from tests.test_claude_cli_capabilities import HELP, LeaderExitClock
 
+# Bounds only a fixture that never reaches its event; no assertion depends on it.
+HANG_GUARD_SECONDS = 10.0
+
 
 def fictional_claude_source(source: str) -> str:
     return (
         f"#!{sys.executable}\nimport sys\n"
         f"if sys.argv[1:] == ['--help']:\n    print({HELP!r})\n    sys.exit(0)\n" + source
     )
+
+
+class FixtureClock:
+    """Fake monotonic time that moves only on fixture events, never with host load.
+
+    The owned process runs at the scheduler's pace while its productive deadline
+    and permission wait read this clock. Reads return zero until that deadline
+    exists, so an event cannot be observed before the deadline it must expire.
+    ``expire_when`` jumps far past every test deadline once it holds.
+    """
+
+    def __init__(self, expire_when: Callable[[], bool] | None = None) -> None:
+        self.now = 0.0
+        self.armed = False
+        self._expire_when = expire_when
+
+    def __call__(self) -> float:
+        if not self.armed:
+            return 0.0
+        if self._expire_when is not None and self.now < 1000 and self._expire_when():
+            self.now = 1000.0
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def drive_deadline(self) -> AbstractContextManager[object]:
+        def deadline(seconds: float, wait: PermissionWaitClock | None) -> ProductiveDeadline:
+            created = ProductiveDeadline(seconds, wait, clock=self)
+            self.armed = True
+            return created
+
+        return patch("hermes_codex_router.external_runtime.ProductiveDeadline", deadline)
 
 
 class ExternalRuntimeTests(unittest.TestCase):
@@ -319,7 +357,7 @@ class ExternalRuntimeTests(unittest.TestCase):
                 os.fstat(descriptor)
 
     def _claude_process(
-        self, source: str, *, timeout: float = 1, **kwargs: Any
+        self, source: str, *, timeout: float = HANG_GUARD_SECONDS, **kwargs: Any
     ) -> ExternalTurnResult:
         """Run a fictional child and verify that every failure reaps its pipes."""
         spawned: list[subprocess.Popen[str]] = []
@@ -397,7 +435,8 @@ class ExternalRuntimeTests(unittest.TestCase):
             self._claude_process("import time\ntime.sleep(30)\n", timeout=0.05)
 
     def test_human_wait_outlasts_productive_timeout_and_result_is_drained(self) -> None:
-        waiting = PermissionWaitClock()
+        clock = FixtureClock()
+        waiting = PermissionWaitClock(clock=clock)
         native = str(uuid.uuid4())
         terminal = json.dumps(
             {
@@ -410,16 +449,18 @@ class ExternalRuntimeTests(unittest.TestCase):
         )
 
         def human_wait() -> None:
+            # Twice the productive budget passes while a human decides.
             with waiting.waiting():
-                time.sleep(0.4)
+                clock.advance(0.4)
 
-        result = self._claude_process(
-            f"print({terminal!r}, flush=True)\n",
-            timeout=0.2,
-            new_session_id=native,
-            claude_permission_wait=waiting,
-            on_claude_process_started=human_wait,
-        )
+        with clock.drive_deadline():
+            result = self._claude_process(
+                f"print({terminal!r}, flush=True)\n",
+                timeout=0.2,
+                new_session_id=native,
+                claude_permission_wait=waiting,
+                on_claude_process_started=human_wait,
+            )
         self.assertEqual(result.text, "Finished after approval")
 
     def test_productive_timeout_resumes_after_permission_wait(self) -> None:
@@ -438,19 +479,22 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
 
     def test_background_descendant_during_wait_cannot_extend_total_credit(self) -> None:
-        waiting = PermissionWaitClock()
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "background-running"
+            # The wait outlasts both budgets only after the descendant runs.
+            clock = FixtureClock(expire_when=marker.exists)
+            waiting = PermissionWaitClock(clock=clock)
             source = (
                 "import os, pathlib, time\n"
                 "if os.fork() == 0:\n"
                 f"    pathlib.Path({str(marker)!r}).write_text('running')\n"
-                "    time.sleep(3)\n"
+                "    time.sleep(30)\n"
                 "    os._exit(0)\n"
-                "time.sleep(3)\n"
+                "time.sleep(30)\n"
             )
             with (
                 patch("hermes_codex_router.claude_permission_wait.HUMAN_PERMISSION_SECONDS", 0.15),
+                clock.drive_deadline(),
                 waiting.waiting(),
                 self.assertRaisesRegex(RuntimeError, "timed out"),
             ):
@@ -458,7 +502,8 @@ class ExternalRuntimeTests(unittest.TestCase):
             self.assertTrue(marker.exists(), "background descendant did not execute during wait")
 
     def test_concurrent_human_wait_starts_after_visible_stream_progress(self) -> None:
-        waiting = PermissionWaitClock()
+        clock = FixtureClock()
+        waiting = PermissionWaitClock(clock=clock)
         begin, active = threading.Event(), threading.Event()
         native = str(uuid.uuid4())
         message = json.dumps(
@@ -481,30 +526,33 @@ class ExternalRuntimeTests(unittest.TestCase):
         )
 
         def human_wait() -> None:
-            if begin.wait(3):
+            # The reader is parked in the progress callback until ``active``,
+            # so no deadline read can split this advance from its credit.
+            if begin.wait(HANG_GUARD_SECONDS):
                 with waiting.waiting():
+                    clock.advance(0.5)
                     active.set()
-                    time.sleep(0.5)
 
         thread = threading.Thread(target=human_wait, daemon=True)
         thread.start()
 
         def progress(_item: ClaudeVisibleAssistant) -> None:
             begin.set()
-            self.assertTrue(active.wait(3))
+            self.assertTrue(active.wait(HANG_GUARD_SECONDS))
 
         try:
-            result = self._claude_process(
-                f"import time\nprint({message!r}, flush=True)\ntime.sleep(0.6)\nprint({terminal!r}, flush=True)\n",
-                timeout=0.4,
-                new_session_id=native,
-                claude_permission_wait=waiting,
-                on_visible_assistant=progress,
-            )
+            with clock.drive_deadline():
+                result = self._claude_process(
+                    f"print({message!r}, flush=True)\nprint({terminal!r}, flush=True)\n",
+                    timeout=0.4,
+                    new_session_id=native,
+                    claude_permission_wait=waiting,
+                    on_visible_assistant=progress,
+                )
             self.assertEqual(result.text, "After wait")
         finally:
             begin.set()
-            thread.join(3)
+            thread.join(HANG_GUARD_SECONDS)
             self.assertFalse(thread.is_alive())
 
     def test_claude_help_and_turn_reserve_leader_pid_until_last_group_signal(self) -> None:
@@ -794,7 +842,12 @@ class ExternalRuntimeTests(unittest.TestCase):
                 self.assertTrue(adapter.interrupt())
 
             with self.assertRaises(ExternalTurnInterrupted):
-                adapter.run_turn(cwd=root, prompt="work", timeout=2, on_visible_assistant=stop)
+                adapter.run_turn(
+                    cwd=root,
+                    prompt="work",
+                    timeout=HANG_GUARD_SECONDS,
+                    on_visible_assistant=stop,
+                )
             self.assertEqual([item.text for item in visible], ["Saved partial"])
             self.assertIsNotNone(processes[0].poll())
             self.assertIsNone(adapter._active_process)
@@ -805,44 +858,22 @@ class ExternalRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             child_pid = Path(directory) / "descendant-pid"
             source = (
-                "import os, pathlib, subprocess, sys, time\n"
-                # Startup must not race the real 0.2-second productive budget.
-                "time.sleep(0.3)\n"
+                "import os, pathlib, subprocess, sys\n"
                 "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
                 f"marker = pathlib.Path({str(child_pid)!r})\n"
                 "ready = marker.with_suffix('.ready')\n"
                 "ready.write_text(f'{child.pid} {os.getpid()}')\n"
                 "ready.replace(marker)\n"
             )
-            clock = LeaderExitClock(child_pid)
-
-            def productive_deadline(
-                seconds: float, wait: PermissionWaitClock | None
-            ) -> ProductiveDeadline:
-                # Start at virtual zero even if the leader exits before Popen returns.
-                initialized = False
-                deadline = ProductiveDeadline(
-                    seconds, wait, clock=lambda: clock.monotonic() if initialized else 0.0
-                )
-                initialized = True
-                return deadline
-
-            with (
-                patch(
-                    "hermes_codex_router.external_runtime.ProductiveDeadline",
-                    side_effect=productive_deadline,
-                ),
-                patch(
-                    "hermes_codex_router.external_runtime.time",
-                    # A loaded host can still see the leader alive at
-                    # graceful termination, which then polls with sleep.
-                    SimpleNamespace(monotonic=clock.monotonic, sleep=time.sleep),
-                ),
-                self.assertRaisesRegex(RuntimeError, "timed out"),
-            ):
+            # The turn deadline expires exactly when the published leader is
+            # seen exited while its descendant still holds the pipes; the
+            # leader clock's own watchdog ends a fixture that never gets there.
+            leader = LeaderExitClock(child_pid)
+            clock = FixtureClock(expire_when=lambda: leader.monotonic() > 0)
+            with clock.drive_deadline(), self.assertRaisesRegex(RuntimeError, "timed out"):
                 self._claude_process(source, timeout=0.2)
             self.assertTrue(child_pid.exists())
-            self.assertTrue(clock.observed_leader_exit)
+            self.assertTrue(leader.observed_leader_exit)
             pid = int(child_pid.read_text().split()[0])
             deadline = time.monotonic() + 1
             while time.monotonic() < deadline:
@@ -1353,7 +1384,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
 
             with self.assertRaises(ProviderUnavailableError) as raised:
-                adapter.run_turn(cwd=root, prompt="work", timeout=5)
+                adapter.run_turn(cwd=root, prompt="work", timeout=HANG_GUARD_SECONDS)
 
         self.assertEqual(raised.exception.code, "unsupported_network_location")
         self.assertNotIn("400", raised.exception.public_message)
@@ -1369,7 +1400,7 @@ class ExternalRuntimeTests(unittest.TestCase):
                 "import pathlib, time\n"
                 f"p=pathlib.Path({str(log)!r})\n"
                 "p.write_text('Monthly usage limit reached. Resets in 14 days.\\n')\n"
-                "time.sleep(30)\n",
+                "time.sleep(300)\n",
                 encoding="utf-8",
             )
             executable.chmod(0o700)
@@ -1378,11 +1409,11 @@ class ExternalRuntimeTests(unittest.TestCase):
                 executable=str(executable),
                 opencode_log_path=log,
             )
-            started = time.monotonic()
+            # Expiry raises a timeout instead, so the limit type alone proves the
+            # monitor stopped a CLI that would otherwise outlive the deadline.
             with self.assertRaises(ProviderLimitError) as raised:
-                adapter.run_turn(cwd=root, prompt="work", timeout=5)
+                adapter.run_turn(cwd=root, prompt="work", timeout=HANG_GUARD_SECONDS)
 
-        self.assertLess(time.monotonic() - started, 3)
         self.assertEqual(raised.exception.limit.window, "monthly")
 
     def test_opencode_limit_monitor_ignores_preexisting_log_history(self) -> None:
@@ -1405,7 +1436,7 @@ class ExternalRuntimeTests(unittest.TestCase):
                 "opencode",
                 executable=str(executable),
                 opencode_log_path=log,
-            ).run_turn(cwd=root, prompt="work", timeout=5)
+            ).run_turn(cwd=root, prompt="work", timeout=HANG_GUARD_SECONDS)
 
         self.assertEqual(result.text, "Visible answer")
 
@@ -1428,18 +1459,18 @@ class ExternalRuntimeTests(unittest.TestCase):
 
             def run() -> None:
                 try:
-                    adapter.run_turn(cwd=root, prompt="work", timeout=1)
+                    adapter.run_turn(cwd=root, prompt="work", timeout=HANG_GUARD_SECONDS)
                 except BaseException as exc:
                     errors.append(exc)
 
             thread = threading.Thread(target=run)
             thread.start()
-            deadline = time.monotonic() + 0.5
+            deadline = time.monotonic() + HANG_GUARD_SECONDS
             while not ready.exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertTrue(ready.exists())
             self.assertTrue(adapter.interrupt())
-            thread.join(timeout=2)
+            thread.join(timeout=HANG_GUARD_SECONDS)
 
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(errors), 1)
