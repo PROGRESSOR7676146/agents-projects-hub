@@ -20,6 +20,9 @@ HUB_VALIDATION_TEST_JOBS=4 git push
 
 An explicit `--jobs` takes precedence. Without either input, CPU count capped
 at eight remains the default. Focused runs ignore this environment setting.
+The same number bounds the worker processes of the commit and canonical
+privacy/history scan, which run at the lowest CPU priority so that a gate
+never outcompetes a live Hub on the same host.
 Invalid environment values in canonical/commit runs fail before any stages,
 unless an explicit `--jobs` overrides the environment setting.
 

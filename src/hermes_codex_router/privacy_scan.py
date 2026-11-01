@@ -75,6 +75,8 @@ _HOSTED_MERGE_OWNER_RE = re.compile(r"Merge pull request #[0-9]+ from (?P<identi
 # Workers receive ordered chunks of about this many content bytes.
 _HISTORY_CHUNK_BYTES = 4_000_000
 _HISTORY_MAX_JOBS = 8
+# Explicit worker counts follow the validator's bound for test processes.
+_HISTORY_JOBS_LIMIT = 32
 # Object ID, Git type, first path reported by rev-list (blobs only) and raw bytes.
 _HistoryObject = tuple[str, str, str | None, bytes]
 
@@ -488,6 +490,11 @@ def scan_history(root: Path, *, jobs: int | None = None) -> list[PrivacyFinding]
     return findings
 
 
+def _lower_worker_priority() -> None:
+    # The live Hub shares this host; a gate's scan must never outcompete it.
+    os.nice(19)
+
+
 def _start_history_pool(workers: int) -> ProcessPoolExecutor | None:
     """Start every worker now, or return None for the same scan in-process."""
     executor = None
@@ -496,7 +503,9 @@ def _start_history_pool(workers: int) -> ProcessPoolExecutor | None:
         # context starts every worker on this first submission, before the
         # scan opens cat-file.
         executor = ProcessPoolExecutor(
-            max_workers=workers, mp_context=multiprocessing.get_context("fork")
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("fork"),
+            initializer=_lower_worker_priority,
         )
         executor.submit(int).result()
     except (BrokenProcessPool, ImportError, OSError, NotImplementedError, ValueError):
@@ -515,14 +524,30 @@ def _start_history_pool(workers: int) -> ProcessPoolExecutor | None:
     return executor
 
 
+def _parse_jobs(value: str) -> int:
+    try:
+        jobs = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be an integer") from None
+    if not 1 <= jobs <= _HISTORY_JOBS_LIMIT:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {_HISTORY_JOBS_LIMIT}")
+    return jobs
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Reject private deployment data from Git")
     parser.add_argument("root", nargs="?", type=Path, default=Path.cwd())
     parser.add_argument("--history", action="store_true", help="also scan every reachable Git blob")
+    parser.add_argument(
+        "--jobs",
+        type=_parse_jobs,
+        help=f"history scan worker processes, 1-{_HISTORY_JOBS_LIMIT} (default: CPUs, at most "
+        f"{_HISTORY_MAX_JOBS})",
+    )
     args = parser.parse_args(argv)
     findings = scan_repository(args.root.resolve())
     if args.history:
-        findings.extend(scan_history(args.root.resolve()))
+        findings.extend(scan_history(args.root.resolve(), jobs=args.jobs))
     if findings:
         print("Privacy scan failed:")
         for finding in findings:
