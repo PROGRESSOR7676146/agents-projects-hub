@@ -36,6 +36,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
   - Exact owner closure for an archived session's uncertain job and effective full-control delivery
     consent MAY remove only their own admission blockers; they MUST NOT prove execution/delivery or
     release other senders/writers.
+  - An exact `externally_completed` resolution MAY remove an unarchived job's server-start blocker
+    only with matching completed thread/turn/root evidence in unchanged private native history.
+    This read-only check MUST preserve jobs, sessions and uncertainty, grant no replay or delivery
+    authority, and MUST NOT waive other work, control owners/readers, writers or custody checks.
   - Exact source/rollback identity, operator-native custody and separate live acceptance remain
     required.
 - **REQ-OPS-006 (Implemented):** Bounded deduplicated operational alerts MUST use only the

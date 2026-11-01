@@ -6,12 +6,14 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import stat
 import sys
 import time
 from pathlib import Path
 
 from .codex_control_predicates import unsettled_control
+from .codex_rollout_completion import completed_rollout_turns
 from .delivery_control_predicates import result_ready_control_reconciled
 from .release_identity import CURRENT_RELEASE
 from .state_connection import connect_existing
@@ -95,14 +97,15 @@ def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
             raise ValueError("process custody unavailable") from None
 
 
-def require_idle_state(path: Path) -> None:
+def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
     db, _ = connect_existing(path, writable=False, state_error=StateError)
+    db.row_factory = sqlite3.Row
     try:
         db.execute("BEGIN")
         # Archived, explicitly owner-resolved history is closed for admission;
         # it remains uncertain evidence, never native terminality or replay proof.
         busy = db.execute(
-            "SELECT 1 FROM provider_jobs j WHERE j.agent_id='codex' AND ("
+            "SELECT j.job_id,j.status FROM provider_jobs j WHERE j.agent_id='codex' AND ("
             "j.status IN ('queued','retry_wait','leased','executing') OR "
             f"(j.status='result_ready' AND NOT {result_ready_control_reconciled('j')}) OR "
             "(j.status='indeterminate' AND NOT EXISTS "
@@ -112,8 +115,8 @@ def require_idle_state(path: Path) -> None:
             "AND NOT EXISTS (SELECT 1 FROM provider_job_resolutions r JOIN agent_sessions s "
             "ON s.session_id=j.session_id WHERE r.job_id=j.job_id AND s.status='archived' "
             "AND s.agent_id=j.agent_id AND s.generation=j.session_generation "
-            "AND r.resolution IN ('acknowledged','superseded','externally_completed')))) LIMIT 1"
-        ).fetchone()
+            "AND r.resolution IN ('acknowledged','superseded','externally_completed'))))"
+        ).fetchall()
         controls = db.execute(
             "SELECT 1 FROM codex_turn_controls control_owner WHERE read_claim_token IS NOT NULL OR "
             f"{unsettled_control('control_owner')} LIMIT 1"
@@ -122,8 +125,29 @@ def require_idle_state(path: Path) -> None:
             "SELECT 1 FROM agent_sessions WHERE agent_id='codex' AND writer_mode!='telegram' "
             "AND status IN ('active','satellite') LIMIT 1"
         ).fetchone()
-        if busy or controls or writers:
+        if controls or writers:
             raise ValueError("active or unknown Codex work blocks service start")
+        completions: dict[tuple[str, str], frozenset[str]] = {}
+        for job in busy:
+            if codex_home is None or job["status"] != "indeterminate":
+                raise ValueError("active or unknown Codex work blocks service start")
+            checkpoint = db.execute(
+                "SELECT c.provider_thread_id,c.provider_turn_id,c.project_root "
+                "FROM provider_jobs j JOIN provider_execution_checkpoints c USING(job_id) "
+                "JOIN provider_job_resolutions r USING(job_id) "
+                "JOIN agent_sessions s ON s.session_id=j.session_id "
+                "WHERE j.job_id=? AND r.resolution='externally_completed' "
+                "AND s.agent_id=j.agent_id AND s.generation=j.session_generation "
+                "AND s.provider_session_id=c.provider_thread_id",
+                (job["job_id"],),
+            ).fetchone()
+            if checkpoint is None or not checkpoint["provider_turn_id"]:
+                raise ValueError("active or unknown Codex work blocks service start")
+            key = checkpoint["provider_thread_id"], checkpoint["project_root"]
+            if key not in completions:
+                completions[key] = completed_rollout_turns(codex_home, *key)
+            if checkpoint["provider_turn_id"] not in completions[key]:
+                raise ValueError("active or unknown Codex work blocks service start")
     finally:
         db.close()
 
@@ -133,7 +157,7 @@ def prepare(manifest: dict, *, clients_closed: bool, now: float | None = None) -
         raise ValueError("explicit closed-native-clients assertion required")
     verify_pins(manifest)
     refuse_existing_servers()
-    require_idle_state(Path(manifest["state_path"]))
+    require_idle_state(Path(manifest["state_path"]), codex_home=Path(manifest["codex_home"]))
     timestamp = time.time() if now is None else now
     return dict(
         version=1,

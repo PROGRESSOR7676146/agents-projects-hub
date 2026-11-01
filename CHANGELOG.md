@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Codex server startup can verify an exact owner-resolved completion directly
+  from private native history, preserving the active session and unknown-job
+  history without replay or database changes.
 - Hub follows topic renames made in Telegram, including the General topic,
   and names a newly seen topic from its creation message instead of
   "Topic N". Titles stay display-only; routing still uses numeric IDs.
