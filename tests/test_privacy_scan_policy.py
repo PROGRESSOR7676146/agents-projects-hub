@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import multiprocessing
 import os
 import subprocess
@@ -8,6 +9,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import redirect_stderr, redirect_stdout
 from multiprocessing.process import BaseProcess
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +21,8 @@ from hermes_codex_router.privacy_scan import (
     _read_git_objects,
     _scan_history_chunk,
     _scan_metadata_for_privacy,
+    _start_history_pool,
+    main,
     scan_history,
 )
 
@@ -372,6 +376,33 @@ class HistoryScanBatchTests(unittest.TestCase):
                 patch("hermes_codex_router.privacy_scan.ProcessPoolExecutor", side_effect=error),
             ):
                 self.assertEqual(scan_history(self.root, jobs=4), serial)
+
+    def test_workers_run_at_lowest_cpu_priority(self) -> None:
+        caller = os.nice(0)
+        executor = _start_history_pool(2)
+        assert executor is not None
+        with executor:
+            self.assertEqual(executor.submit(os.nice, 0).result(), 19)
+        # Only the workers yield; the caller keeps its own priority.
+        self.assertEqual(os.nice(0), caller)
+
+    def test_cli_passes_bounded_jobs_to_the_history_scan(self) -> None:
+        with (
+            patch("hermes_codex_router.privacy_scan.scan_repository", return_value=[]),
+            patch("hermes_codex_router.privacy_scan.scan_history", return_value=[]) as history,
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(main([str(self.root), "--history", "--jobs", "2"]), 0)
+            self.assertEqual(main([str(self.root), "--history"]), 0)
+            self.assertEqual([call.kwargs["jobs"] for call in history.call_args_list], [2, None])
+            for jobs in ("0", "33", "many"):
+                with (
+                    self.subTest(jobs=jobs),
+                    redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit) as error,
+                ):
+                    main([str(self.root), "--history", "--jobs", jobs])
+                self.assertEqual(error.exception.code, 2)
 
     def test_partial_worker_start_failure_stops_started_workers(self) -> None:
         self.build_history()

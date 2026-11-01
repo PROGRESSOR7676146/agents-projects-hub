@@ -88,6 +88,7 @@ class ValidationTests(unittest.TestCase):
             )
         privacy = next(call for call in calls if "privacy_scan" in call)
         self.assertIn("--history", privacy)
+        self.assertTrue(privacy.endswith(f"--jobs {validator.default_test_jobs()}"))
 
     def test_canonical_test_parallelism_is_bounded_and_selectable(self) -> None:
         _, calls, _ = self.invoke([])
@@ -121,6 +122,7 @@ class ValidationTests(unittest.TestCase):
                     self.assertEqual(calls.count("all test modules jobs=4"), 1)
                     privacy = next(call for call in calls if "privacy_scan" in call)
                     self.assertIn("--history", privacy)
+                    self.assertTrue(privacy.endswith("--jobs 4"))
                     code, _, output = self.invoke(["--profile", profile], "all test modules")
                     self.assertEqual(code, 1)
                     self.assertRegex(output, r"FAIL (?:full|affected) tests")
@@ -148,6 +150,7 @@ class ValidationTests(unittest.TestCase):
         privacy = [call for call in calls if "privacy_scan" in call]
         self.assertEqual(len(privacy), 1)
         self.assertIn("--history", privacy[0])
+        self.assertTrue(privacy[0].endswith("--jobs 2"))
         self.assertIn("all test modules jobs=2", calls)
         self.assertFalse(any("pyright" in call for call in calls))
         self.assertEqual(calls.count("release-lock check"), 1)

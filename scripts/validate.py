@@ -470,6 +470,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "hermes_codex_router.privacy_scan",
                     str(ROOT),
                     "--history",
+                    # The test parallelism choice also bounds the scan's workers.
+                    "--jobs",
+                    str(jobs),
                 ),
             )
         )
