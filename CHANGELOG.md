@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Codex server startup can verify an exact owner-resolved completion directly
+  from private native history, preserving the active session and unknown-job
+  history without replay or database changes.
 - A transient SQLite writer lock no longer ends lease renewal while a native
   task keeps running: queue consumers retry typed BUSY/LOCKED against the same
   renewal token and acquire the writer before checking expiry. Long Codex turns
