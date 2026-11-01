@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- A transient SQLite writer lock no longer ends lease renewal while a native
+  task keeps running: queue consumers retry typed BUSY/LOCKED against the same
+  renewal token and acquire the writer before checking expiry. Long Codex turns
+  stop losing Hub control under brief contention.
 - Hub follows topic renames made in Telegram, including the General topic,
   and names a newly seen topic from its creation message instead of
   "Topic N". Titles stay display-only; routing still uses numeric IDs.
