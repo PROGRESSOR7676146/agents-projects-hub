@@ -9,6 +9,7 @@ from .state import HubState, RuntimeHealthStatus
 from .worker_identity import worker_instance_id
 
 CONTROLLER_INSTANCE_ID = "project-hub-controller"
+CODEX_DM_INSTANCE_ID = "codex-direct-messages"
 SENDER_INSTANCE_ID = "telegram-outbox-sender"
 MONITOR_INSTANCE_ID = "operations-monitor"
 PROJECT_PROVISIONER_INSTANCE_ID = "project-group-provisioner"

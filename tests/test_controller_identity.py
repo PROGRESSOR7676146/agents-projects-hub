@@ -281,6 +281,47 @@ class ControllerIdentityTests(unittest.TestCase):
         finally:
             service.close()
 
+    def test_codex_direct_health_does_not_overwrite_group_controller(self) -> None:
+        self.codex_token.write_text("123456:codex-secret", encoding="utf-8")
+        self.codex_token.chmod(0o600)
+        path = self.config_path()
+        with patch("hermes_codex_router.service.TelegramBotApi", side_effect=FakeTelegram):
+            controller = ProjectHubService(load_controller_config(path))
+            direct = ProjectHubService(
+                load_provider_service_config(path, "codex"),
+                ingress_identity="codex",
+                direct_messages_only=True,
+            )
+        try:
+            original = controller.state.get_runtime_health("controller", "project-hub-controller")
+            self.assertIsNotNone(original)
+            observed = direct.state.get_runtime_health("controller", "codex-direct-messages")
+            self.assertIsNotNone(observed)
+            assert original is not None and observed is not None
+            self.assertEqual((observed.runtime, observed.agent_id), ("codex", "codex"))
+            self.assertNotEqual(observed.process_start_marker, original.process_start_marker)
+            direct._publish_runtime_health(
+                activity_state="executing", active_job_id="example-dm-update", force=True
+            )
+            refreshed = direct.state.get_runtime_health("controller", "codex-direct-messages")
+            assert refreshed is not None
+            self.assertEqual(refreshed.activity_state, "executing")
+            self.assertEqual(refreshed.active_job_id, "example-dm-update")
+            self.assertEqual(
+                controller.state.get_runtime_health("controller", "project-hub-controller"),
+                original,
+            )
+            self.assertFalse(direct._publishes_controller_health)
+            direct._record_telegram_poll_success("codex")
+            direct._publish_runtime_health(force=True)
+            ready = direct.state.get_runtime_health("controller", "codex-direct-messages")
+            assert ready is not None
+            self.assertEqual(ready.activity_state, "idle")
+            self.assertIsNotNone(ready.transport_success_at)
+        finally:
+            direct.close()
+            controller.close()
+
     def test_hub_mention_is_removed_from_external_provider_queue_prompt(self) -> None:
         path = self.config_path()
         document = json.loads(path.read_text(encoding="utf-8"))
