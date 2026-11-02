@@ -110,7 +110,7 @@ from .routing import (
     parse_command,
     parse_context_request,
 )
-from .runtime_health import CONTROLLER_INSTANCE_ID
+from .runtime_health import CODEX_DM_INSTANCE_ID, CONTROLLER_INSTANCE_ID
 from .session_connect import SessionConnectStore
 from .session_controls import bind_controls, validate_control
 from .state import HubState, SessionRecord, StateError, TopicRecord
@@ -326,8 +326,9 @@ class ProjectHubService:
         active_job_id: str | None = None,
         force: bool = False,
     ) -> None:
-        """Best-effort Controller liveness with bounded, non-secret identity only."""
-        if not getattr(self, "_publishes_controller_health", True):
+        """Best-effort ingress health with bounded, non-secret identity only."""
+        direct = getattr(self, "direct_messages_only", False)
+        if not direct and not getattr(self, "_publishes_controller_health", True):
             return
         now_monotonic = time.monotonic()
         last_publish = getattr(self, "_health_last_publish_monotonic", 0.0)
@@ -336,7 +337,9 @@ class ProjectHubService:
         try:
             self.state.upsert_runtime_health(
                 component="controller",
-                instance_id=CONTROLLER_INSTANCE_ID,
+                instance_id=CODEX_DM_INSTANCE_ID if direct else CONTROLLER_INSTANCE_ID,
+                runtime="codex" if direct else None,
+                agent_id="codex" if direct else None,
                 pid=os.getpid(),
                 process_start_marker=self._health_process_start_marker,
                 started_at=self._health_started_at,
