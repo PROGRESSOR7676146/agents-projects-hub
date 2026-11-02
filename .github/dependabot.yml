@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # ADR 0087: green updates merge without review, so wait a week first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       python-development:
@@ -12,4 +15,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # ADR 0087: green updates merge without review, so wait a week first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5

@@ -141,11 +141,41 @@ revision and highest proven level.
   validation, privacy checks, applicable independent review, exact-head hosted
   gates and branch protection remain in force. Never move existing tags or
   expand the task scope. Merging remains governed by the preceding bullet.
-  Deployment, service restarts, credential changes and
-  branch deletion retain their separate authorization requirements.
+  Routine deployment, service restarts and merged-branch deletion follow
+  [Autonomous upkeep](#autonomous-upkeep); credential changes and everything
+  else that section reserves keep their separate authorization.
 - Provider work may proceed while live acceptance is pending (ADR 0045), but
   never present repository evidence as deployment evidence; track open live
   acceptance in `docs/operations/STABILIZATION_PLAN.md`.
+
+## Autonomous upkeep
+
+Owner decision, 2026-11-02 ([ADR 0087](docs/decisions/0087-autonomous-project-upkeep.md)):
+the owner does not watch routine upkeep. Every assigned session does it without
+asking and reports it afterwards, following the
+[upkeep sweep](docs/operations/UPKEEP.md). Do not leave it for later and do not
+ask for approval one action at a time.
+
+- **Agents do on their own:** close pull requests that are merged in another
+  form or superseded; merge green Dependabot updates; fix and rebase their own
+  pull requests; deploy a released revision and restart services for it, and
+  roll back on a failed check; delete branches whose commits are in `main`;
+  remove clean merged worktrees; settle stale uncertain jobs and deliveries
+  through supported Hub commands; keep the handoff and plans current.
+- **The owner keeps:** restoring data from a backup, and any step whose only
+  way back is a backup restore; credentials and accounts, such as
+  `claude setup-token`; permanent deletion of data or unmerged work; rewriting
+  shared history or moving tags; changing trust, security profiles or project
+  registration; enabling default-off features; live acceptance and live
+  probes; approval answers; product decisions and scope changes. When unsure
+  whether a step can be undone, treat it as reserved and ask once with a
+  recommendation.
+- **Always:** back up before changing state, keep a verified rollback that
+  needs no backup restore, and send one report per session with the exact
+  revision, the rollback pointer and what is left for the owner.
+
+This grants nothing to Hub-hosted provider turns, Hermes cards or background
+timers, which stay model-free.
 
 ## Safety invariants
 
@@ -162,4 +192,7 @@ revision and highest proven level.
   explicitly through the service manager.
 - Background monitors, health checks, cron jobs, recovery probes, and scheduled timers MUST NEVER invoke live LLM inference endpoints or pass `--live` flags. Telemetry, quota status, and provider health must always be read passively from local cached files (`quota-cache.json`, logs, response headers). Live probes are permitted ONLY upon explicit, manual user invocation.
 
-Use test-first development for router behavior. Live bot changes, daemon launch, service installation and credential changes require an explicit deployment task.
+Use test-first development for router behavior. Live bot changes, new service
+installation and credential changes require an explicit deployment task;
+routine deployment of a released revision follows
+[Autonomous upkeep](#autonomous-upkeep).

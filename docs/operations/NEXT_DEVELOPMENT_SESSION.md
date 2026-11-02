@@ -299,9 +299,11 @@ in the [stabilization plan](STABILIZATION_PLAN.md); do not repeat completed stag
 The owner authorized repository implementation, offline tests and delegated
 work. The primary development agent may merge ready PRs under the standing
 [review and merge policy](../../AGENTS.md#review-merge-and-scope), without asking
-for each PR. Live-state changes, credentials, service restarts, deployment, tags
-and branch deletion still require separately scoped authorization. Prepare concrete
-checks/artifacts before requesting those live actions. Private handoff claims
+for each PR. Routine upkeep, including deployment of a released revision with a
+rehearsed rollback, service restarts and merged-branch deletion, follows
+[ADR 0087](../decisions/0087-autonomous-project-upkeep.md) without a request.
+Credentials, backup restores and the other steps it reserves still require the
+owner. Prepare concrete checks/artifacts before requesting those. Private handoff claims
 are pointers to recheck, never facts to copy into Git.
 
 The owner accepted initial no-progress thresholds of **300 seconds** for an

@@ -108,3 +108,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0082: Claude subscription route](0082-claude-subscription-route.md) — explicit `auth_route`, native subscription token without CPA, optional fixed account per project without pools or switching, `developer` excluded; installed acceptance pending.
 
 - [0083: Durable Claude corrections](0083-durable-claude-corrections.md) — opt-in streamed text, durable input ownership and same/next result boundaries; source candidate.
+
+- [0087: Autonomous project upkeep](0087-autonomous-project-upkeep.md) — agents close superseded PRs, merge green Dependabot updates, deploy released revisions with a rehearsed rollback and settle stale state without asking, then report; backup restores, credentials, permanent deletion and trust changes stay with the owner.
