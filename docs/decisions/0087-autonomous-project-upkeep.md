@@ -15,18 +15,18 @@ restarts and branch deletion behind separate approval. Nothing told an agent to
 close a superseded pull request or to resolve stale Hub state. So each session
 either asked for approval one action at a time or left the upkeep for later.
 
-The debt then grew in predictable ways:
+Upkeep that waits for the owner fails in predictable ways:
 
-- open pull requests whose work was already merged in another form or
-  superseded;
-- unresolved uncertain jobs and stale delivery records, which later blocked
-  the idle check of an unrelated service change;
-- dependency updates waiting with green checks;
-- a release whose forward migration had no prepared compatible rollback, so the
-  only way back would have been a backup restore that loses later work.
+- pull requests whose work is already merged in another form, or superseded,
+  stay open and hide the ones that matter;
+- unresolved uncertain jobs and stale delivery records can block the idle
+  check of an unrelated service change;
+- dependency updates wait with green checks;
+- a release with a forward migration but no prepared compatible rollback
+  leaves a backup restore, which loses later work, as the only way back.
 
-Asking was not safer. It only made the owner the bottleneck, and the debt then
-created its own risk.
+Asking is not safer. It only makes the owner the bottleneck, and the debt then
+creates its own risk.
 
 ## Decision
 
