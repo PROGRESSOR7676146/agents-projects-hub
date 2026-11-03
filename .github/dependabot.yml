@@ -4,7 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # ADR 0087: green updates merge without review, so wait a week first.
+    # ADR 0087: eligible dependency-only updates may merge without independent
+    # model review; all other gates remain. Wait a week first.
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
@@ -15,7 +16,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # ADR 0087: green updates merge without review, so wait a week first.
+    # ADR 0087: eligible dependency-only updates may merge without independent
+    # model review; all other gates remain. Wait a week first.
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5

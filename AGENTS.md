@@ -158,13 +158,15 @@ ask for approval one action at a time.
 
 - **Agents do on their own:** close pull requests that are merged in another
   form or superseded; merge green Dependabot updates; fix and rebase their own
-  pull requests; deploy a released revision and restart services for it, and
-  roll back on a failed check; delete branches whose commits are in `main`;
+  pull requests; deploy the newest release forward and restart services for
+  it, and roll back on a failed check; delete branches whose commits are in
+  `main`;
   remove clean merged worktrees; settle stale uncertain jobs and deliveries
   through supported Hub commands; keep the handoff and plans current.
 - **The owner keeps:** restoring data from a backup, and any step whose only
   way back is a backup restore; credentials and accounts, such as
-  `claude setup-token`; permanent deletion of data or unmerged work; rewriting
+  `claude setup-token`; steps that need `sudo`; permanent deletion of data or
+  unmerged work; rewriting
   shared history or moving tags; changing trust, security profiles or project
   registration; enabling default-off features; live acceptance and live
   probes; approval answers; product decisions and scope changes. When unsure
@@ -172,7 +174,9 @@ ask for approval one action at a time.
   recommendation.
 - **Always:** back up before changing state, keep a verified rollback that
   needs no backup restore, and send one report per session with the exact
-  revision, the rollback pointer and what is left for the owner.
+  revision, the rollback pointer and what is left for the owner. A refusal by
+  the permission layer, a sandbox or a gate is a stop, never something to work
+  around.
 
 This grants nothing to Hub-hosted provider turns, Hermes cards or background
 timers, which stay model-free.

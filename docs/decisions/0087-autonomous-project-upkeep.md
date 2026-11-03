@@ -15,13 +15,13 @@ restarts and branch deletion behind separate approval. Nothing told an agent to
 close a superseded pull request or to resolve stale Hub state. So each session
 either asked for approval one action at a time or left the upkeep for later.
 
-By 2026-11-02 the debt had become visible:
+The debt then grew in predictable ways:
 
-- 82 open pull requests, almost all of them already merged in another form or
+- open pull requests whose work was already merged in another form or
   superseded;
-- 76 unresolved uncertain Codex jobs and 12 stale delivery records, which
-  blocked the idle check for an unrelated service switch;
-- two Dependabot pull requests waiting with green checks;
+- unresolved uncertain jobs and stale delivery records, which later blocked
+  the idle check of an unrelated service change;
+- dependency updates waiting with green checks;
 - a release whose forward migration had no prepared compatible rollback, so the
   only way back would have been a backup restore that loses later work.
 
@@ -40,9 +40,9 @@ This decision covers development and administrative agent sessions, the
 trusted helpers of [ADR 0072](0072-trusted-personal-installation.md). It does
 not give authority to Hub-hosted provider turns, Hermes incident cards or
 background timers. Background automation stays model-free. "Automatic" means
-that every assigned session performs the upkeep. It may also use a
-deterministic platform mechanism, such as GitHub auto-merge that waits for the
-required checks. It never means a scheduler that starts model turns.
+that every assigned session performs the upkeep. It never means a scheduler
+that starts model turns, and no platform automation merges or deploys on its
+own.
 
 ### What agents do on their own
 
@@ -56,19 +56,24 @@ required checks. It never means a scheduler that starts model turns.
    report.
 2. **Dependabot.** Merge a Dependabot pull request when every exact-head hosted
    check is green and the diff changes only dependency declarations, lock files
-   or pinned action versions. The agent may enable auto-merge instead. A version
-   bump has no authored source, so it needs no independent model review. For a
+   or pinned action versions. Merge it like any other pull request: recheck the
+   head and base right before merging and pin the expected head. Do not enable
+   auto-merge, which could merge a later head nobody checked. A version bump
+   has no authored source, so it needs no independent model review. For a
    major version bump of a runtime dependency (`[project].dependencies`), the
    agent first reads the upstream release notes for breaking changes. Any pull
    request that also changes authored code follows the ordinary review rule.
    Dependabot holds new version updates for seven days, so a release that
    upstream pulls soon after publishing does not reach `main` automatically.
    Security updates are not delayed.
-3. **Releases, deployment and rollback.** Deploy a released revision to the
-   existing installation, and restart its services through the service manager
-   for that purpose, when all of these hold:
-   - the revision is an immutable release tag on `main`, and its exact-head
-     hosted checks are green;
+3. **Releases, deployment and rollback.** The deployment target is the newest
+   release tag on `main`, and deployment only moves forward from the release
+   the installation runs. An older release is installed only as a recorded
+   rollback. Deploy the target to the existing installation, and restart its
+   services through the service manager for that purpose, when all of these
+   hold:
+   - its exact-head hosted checks are green;
+   - it is not recorded as a failed target (see below);
    - a consistent backup of the state was taken before the change, and is kept;
    - a compatible runtime rollback artifact exists, and its rollback was
      rehearsed on a copy of the populated state
@@ -84,10 +89,16 @@ required checks. It never means a scheduler that starts model turns.
    ([REQ-OPS-009](../product/PERSISTENCE_AND_RECOVERY.md)). If it does not, or
    any check fails, the agent rolls back to the rehearsed artifact, confirms
    that every component reports the rollback revision, and reports both
-   results. The same idle rule allows restarting a failed component to recover
-   it. `pkill` stays forbidden.
-4. **Branches and worktrees.** Delete a branch whose head is reachable from
-   `main` or from a retained tag, so no commit is lost. Remove a worktree only
+   results. It records the release as a failed target in the private handoff,
+   and later sessions do not deploy it again until a newer release or a
+   recorded fix addresses the cause. If the rollback itself cannot be verified,
+   the agent stops every further change, preserves the evidence and tells the
+   owner at once instead of waiting for the session report. The same idle rule
+   allows restarting a failed component to recover it. `pkill` stays forbidden.
+4. **Branches and worktrees.** Delete a branch only when its head is reachable
+   from `main`, so no commit is lost. Never delete the default branch, a
+   protected or release branch, a recorded long-lived branch, or a branch with
+   an open pull request or an active session. Remove a worktree only
    after inspecting its tracked, staged and untracked state
    ([maintenance policy](../product/MAINTENANCE.md#19-maintenance-and-change-policy)),
    and only when it is clean and merged.
@@ -96,8 +107,10 @@ required checks. It never means a scheduler that starts model turns.
    command and the conservative `acknowledged` classification; `superseded`
    and `externally_completed` need concrete evidence. Settle stale unknown
    deliveries without resending them, through the supported dispositions in
-   [queue recovery](../operations/QUEUE_RECOVERY.md). Reset the sessions of
-   acceptance, test or canary projects through supported commands. Never edit
+   [queue recovery](../operations/QUEUE_RECOVERY.md). Reset the session of an
+   acceptance, test or canary project through supported commands only when it
+   is verifiably idle: no queued or running job, no local writer, and no other
+   session working with it. Otherwise leave it and list it. Never edit
    SQLite, delete state files, replay a job or resend a message. Leave a
    session bound to a topic the owner uses, and list it in the report.
 6. **Records.** After any state change, update the private handoff and, where
@@ -110,6 +123,9 @@ required checks. It never means a scheduler that starts model turns.
   a step.
 - Credentials and accounts: `claude setup-token`, provider login, token or bot
   token rotation, allowlists, and enabling paid or extra usage.
+- Steps that need elevated privileges, such as a `sudo` install of a
+  root-owned runtime. The agent prepares and checks everything else and asks
+  for that one step.
 - Permanently deleting data: databases, backups, session histories, project
   roots, unmerged branches or commits. Also rewriting shared history,
   force-pushing `main` and moving an existing tag.
@@ -127,6 +143,8 @@ reserved, asks the owner once and recommends an option.
 ### Always
 
 - Take a backup before changing state and keep a verified way back.
+- Treat a refusal by the permission layer, a sandbox or a gate as a stop. Report
+  it and ask; never look for a way around it.
 - Report afterwards, once per session, not once per action. The report says
   what was done, which revision runs, where the rollback pointer is, and what
   is left for the owner. It goes to the channel where the owner gave the task.
@@ -144,8 +162,8 @@ reserved, asks the owner once and recommends an option.
   are in `main`, and a deployment always has a rehearsed rollback and a kept
   backup.
 - Merging Dependabot updates without a model review accepts some supply-chain
-  risk. Exact-head CI, the seven-day cooldown and release notes for major
-  runtime bumps limit it.
+  risk. Exact-head CI, the pinned-head merge, the seven-day cooldown and
+  release notes for major runtime bumps limit it.
 - Unchanged: owner-pressed incident analysis ([ADR 0084](0084-impact-classified-incidents-and-owner-paging.md)),
   the owner-confirmed plan of the planned stack updater (REQ-OPS-015, whose Hub
   releases keep their own procedure), every human approval boundary and every
