@@ -329,6 +329,12 @@ class BootStartTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             service.refuse_native_clients(self.manifest, proc)
 
+    def test_hidden_executable_of_the_user_manager_does_not_block(self):
+        proc = self.proc([b"/usr/lib/systemd/systemd", b"--user"], [b"(sd-pam)"])
+        with patch.object(service.os, "readlink", side_effect=PermissionError):
+            service.refuse_existing_servers(proc)
+            service.refuse_native_clients(self.manifest, proc)
+
     def test_boot_start_requires_lingering(self):
         linger = self.root / "linger"
         linger.mkdir()
@@ -387,6 +393,8 @@ class BootStartTests(unittest.TestCase):
             "agents-projects-hub@.service",
             "agents-projects-hub-worker@.service",
             "agents-projects-hub-codex-worker@.service",
+            "tlive.service",
+            "tlive.service.d/30-external-codex.conf",
         ):
             text = (root / "systemd" / consumer).read_text()
             self.assertIn("After=agents-projects-hub-codex-app-server.service", text)

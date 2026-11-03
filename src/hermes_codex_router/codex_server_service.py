@@ -95,8 +95,10 @@ def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
             argv = (path / "cmdline").read_bytes().split(b"\0")
             try:
                 executable = os.fsencode(os.readlink(path / "exe"))
-            except FileNotFoundError:
-                executable = b""  # Kernel thread or exited after cmdline.
+            except (FileNotFoundError, PermissionError):
+                # Kernel threads and non-dumpable processes (systemd --user,
+                # sd-pam) hide exe; their readable argv still decides.
+                executable = b""
             found.append((argv, executable))
         except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
