@@ -79,7 +79,7 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         raise AssertionError("namespace job must select Python 3.12")
     if setup_uv != {"uses": "astral-sh/setup-uv@v7"}:
         raise AssertionError("namespace job must install uv")
-    if setup_node != {"uses": "actions/setup-node@v6", "with": {"node-version": "22"}}:
+    if setup_node != {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}}:
         raise AssertionError("namespace job must select Node 22")
     expected_tools = (
         "sudo apt-get update\n"

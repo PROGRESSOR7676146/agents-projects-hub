@@ -11,6 +11,8 @@ and releases use semantic versioning while the public API is still evolving.
   jobs and deliveries. Backup restores, credentials, permanent deletion and
   trust changes stay with the owner (ADR 0087). Dependabot holds version
   updates for seven days.
+- Dependency maintenance: pyasn1 0.6.5 (release lock regenerated) and
+  `actions/setup-node` v7 in CI.
 - Codex server startup can verify an exact owner-resolved completion directly
   from private native history, preserving the active session and unknown-job
   history without replay or database changes.
