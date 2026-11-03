@@ -75,6 +75,9 @@ _ENTRIES = {
     "codex_config_proxy_unavailable": _runbook(
         "Configured local Codex proxy is unavailable", impact="blocking"
     ),
+    "codex_app_server_unavailable": _runbook(
+        "External Codex app-server is not listening", second=_RESTORE
+    ),
     "hermes_recovery_unavailable": _runbook("Independent Hermes channel is unavailable"),
     "tlive_approval_surface_unconfirmed": _runbook(
         "Remote permission card delivery is unconfirmed", second=_AUDIT, impact="awaiting_owner"

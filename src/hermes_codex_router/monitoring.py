@@ -215,6 +215,26 @@ def _project_incidents(
     }
 
 
+def _doctor_check(checks: list[object], name: str) -> dict[str, object] | None:
+    return next(
+        (item for item in checks if isinstance(item, dict) and item.get("name") == name), None
+    )
+
+
+def _doctor_ok(checks: list[object], name: str) -> bool | None:
+    check = _doctor_check(checks, name)
+    return None if check is None else bool(check.get("ok"))
+
+
+def _codex_listener(checks: list[object]) -> tuple[str, bool] | None:
+    """Return (listener state, stdio fallback) from the doctor's codex_socket check."""
+    check = _doctor_check(checks, "codex_socket")
+    if check is None:
+        return None
+    # The detail is "<listener state>: <path>"; a non-required socket means a fallback.
+    return str(check.get("detail", "")).split(":", 1)[0], not check.get("required")
+
+
 def _run_monitor_once(
     config: HubConfig,
     state: HubState,
@@ -308,14 +328,8 @@ def _run_monitor_once(
             telegram_access=access,
             hermes_telegram=hermes_telegram,
             runtime_health=runtime_health,
-            codex_config_proxy_ok=next(
-                (
-                    bool(check.get("ok"))
-                    for check in doctor_checks
-                    if isinstance(check, dict) and check.get("name") == "codex_config_proxy"
-                ),
-                None,
-            ),
+            codex_config_proxy_ok=_doctor_ok(doctor_checks, "codex_config_proxy"),
+            codex_listener=_codex_listener(doctor_checks),
         )
         approval_surface = None
         if config.recovery_plane.enabled and config.recovery_plane.tlive_config_path is not None:

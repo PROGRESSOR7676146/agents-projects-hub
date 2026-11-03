@@ -23,65 +23,61 @@ assert it.
 
 ## Decision
 
-1. **A separate opt-in boot unit.**
-   `agents-projects-hub-codex-app-server-boot.service` runs
-   `codex_server_service boot` and has `WantedBy=default.target`. It keeps
-   `Restart=no`, `KillMode=mixed`, `SendSIGKILL=no` and `UMask=0077`. The
-   existing manual unit and `plan`/`run` stay unchanged. Enabling the boot
-   unit is a deliberate installation step, and only one of the two units may be
-   enabled.
-2. **Clients closed by ordering plus inventory, not by assertion.**
-   - The boot unit is ordered `Before=` tlive, the Controller, and every Hub
-     worker unit.
-   - The `boot` action inventories every same-UID process through host `/proc`.
-     It refuses when any process executes the pinned Codex binary or the pinned
-     tlive daemon, or carries an `app-server` argument. An unreadable process
-     refuses, as `refuse_existing_servers` already does.
-3. **First start of this boot only.**
-   - Before exec, `boot` creates a marker in `$XDG_RUNTIME_DIR` (a tmpfs the
-     system clears on reboot), with `O_EXCL` and mode 0600. The marker records
-     `/proc/sys/kernel/random/boot_id`.
-   - An existing marker refuses the start. A crash or stop later in the same
-     boot therefore still needs the explicit manual `plan` + `run`, as ADR 0073
-     requires.
-4. **Every other ADR 0073 gate stays as it is.**
-   - `boot` calls the same `prepare` checks: artifact pins, the clean immutable
-     Hub release pin, the existing-socket refusal, the existing-server refusal,
-     and the exact idle state, including unsettled controls and local writers.
-   - It never deletes a socket, kills a process, migrates state or repairs
-     anything.
-   - A stale socket left by an unclean shutdown still refuses the start.
-     Handling it stays the owner's documented incident procedure.
-5. **A refusal changes nothing compared with today.** If `boot` refuses:
-   - the unit is left failed;
-   - Codex workers keep their existing stdio fallback;
-   - the existing monitor reports the missing server or tlive attachment once.
+The work proceeds in three phases. Phase 1 is implemented. Phases 2 and 3
+need the owner's acceptance of this ADR, because phase 2 amends REQ-OPS-005.
 
-   The refusal does not retry, does not start anything else and does not
-   block the other Hub units.
+1. **Phase 1: see the outage (implemented).**
+   - The doctor's `codex_socket` check now passes only when kernel `SOCK_DIAG`
+     evidence shows a listening stream socket bound to the current filesystem
+     inode. A socket file left by a crash or reboot no longer passes.
+   - The monitor raises `codex_app_server_unavailable` once per episode. It is
+     a warning when a stdio fallback exists and an error otherwise.
+   - The check never connects, deletes or starts anything.
+2. **Phase 2: a narrow rule for leftovers of a previous boot.** Today every
+   reboot leaves the socket path behind, so any boot start would refuse.
+   - A reviewed cleanup may remove only the exact manifest socket path, its link
+     and its lock file. It applies only when all of the following hold:
+     - the path's change time is earlier than the current boot time;
+     - kernel evidence shows no listener;
+     - a connect attempt fails with `ECONNREFUSED`;
+     - the same-UID inventory finds no Codex server or client.
+   - It uses the descriptor-relative removal of the existing stale-socket
+     runbook. Anything else still refuses.
+   - This amends REQ-OPS-005 for that one case.
+3. **Phase 3: one owning unit, two authorization modes.**
+   - The existing app-server unit gains a `boot` mode next to the manual
+     receipt mode. A second competing unit is not added.
+   - One lock serializes both modes.
+   - `boot` proves closed clients by `Before=` ordering and a host `/proc`
+     inventory, not by assertion.
+   - `boot` records the boot ID in an `O_EXCL` marker under
+     `$XDG_RUNTIME_DIR`. Any existing marker refuses, so a later crash in the
+     same boot still needs the manual `plan` + `run`.
+   - Clients wait on a readiness barrier: the listener is verified by
+     `SOCK_DIAG` custody of the started process before tlive or Codex workers
+     start.
+   - Every ADR 0073 gate stays: artifact and release pins, existing-server
+     refusal, and exact idle state.
+4. **Refusal keeps Codex unavailable, not substituted.**
+   - When a start is refused for ownership or unknown work, the workers do not
+     fall back to a stdio writer on the same root.
+   - The unit stays failed, and the phase 1 alert tells the owner.
+   - Nothing retries, kills or repairs.
 
 ## Consequences
 
-- After a clean reboot with no unknown Codex work, the server comes back
-  without the owner.
-- Every case the manual procedure would refuse is still refused. The owner
-  sees the refusal through the existing alert path and resolves it with the
-  current runbook.
-- REQ-OPS-005 is unchanged: no socket deletion, no killing, and refusal on
-  active or unknown work, unsettled controls, unowned servers or sockets, and
-  mismatched artifacts.
-- This ADR adds no Telegram, provider or LLM call, no replay, and no new
-  authority.
+- Phase 1 alone already removes the silent case: after a reboot the owner
+  learns that Codex and tlive approval are down.
+- After phases 2 and 3, a clean reboot with no unknown Codex work brings the
+  server back without the owner. Every case the manual procedure refuses is
+  still refused and alerted.
+- No Telegram, provider or LLM call, no replay and no new authority is added.
 
 ## Open questions before acceptance
 
-- **Clean shutdown.** Does Codex unlink its listening socket on SIGTERM? If it
-  does not, every reboot leaves a socket path behind. The boot start would
-  then always refuse, and the value of this ADR depends on a separate,
-  explicitly reviewed rule for stale sockets from earlier boots, for example:
-  socket ctime earlier than the current boot time, `connect()` refused, and no
-  same-UID server. That rule would change REQ-OPS-005, so it is out of scope
-  here.
-- **Login timing.** When lingering is disabled, the user manager starts at
-  login, not at boot. The marker and ordering still hold. "Boot" then means
-  the first user-manager start.
+- **Codex socket lifecycle.** Which files Codex 0.166 leaves after a SIGTERM or
+  a reboot (socket, link, lock), and whether a supported setting avoids them.
+  Phase 2 removes exactly that set and nothing else.
+- **Login timing.** Without lingering, the user manager starts at login, not at
+  boot. The marker and ordering still hold. "Boot" then means the first
+  user-manager start.

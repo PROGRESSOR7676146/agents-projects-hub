@@ -26,6 +26,7 @@ from .release_identity import CURRENT_RELEASE
 from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import resolve_topic_execution_root
+from .unix_socket_diag import query_listener, require_vfs
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,14 +42,39 @@ def _command(name: str, *, required: bool = True) -> Check:
     return Check(f"command:{name}", found is not None, found or "not found", required)
 
 
-def _socket_check(path: Path, *, required: bool = True) -> Check:
-    if not path.exists():
-        return Check("codex_socket", False, f"missing: {path}", required)
+# A socket file survives a crash or reboot, so existence is not availability.
+CODEX_LISTENER_FAILURES = frozenset({"dangling", "not_socket", "no_listener", "unreadable"})
+
+
+def codex_listener_state(path: Path) -> str:
+    """Classify the Codex app-server socket without connecting to it.
+
+    Kernel SOCK_DIAG evidence must name a listening stream socket bound to the
+    current filesystem inode. ``unverified`` means the platform cannot provide
+    that evidence; it neither proves nor refutes a listener.
+    """
+    if not os.path.lexists(path):
+        return "missing"
     try:
-        mode = path.stat().st_mode
-    except OSError as exc:
-        return Check("codex_socket", False, str(exc), required)
-    return Check("codex_socket", stat.S_ISSOCK(mode), str(path), required)
+        info = path.stat()
+    except FileNotFoundError:
+        return "dangling"
+    except OSError:
+        return "unreadable"
+    if not stat.S_ISSOCK(info.st_mode):
+        return "not_socket"
+    try:
+        require_vfs(query_listener(path.resolve()), info)
+    except ValueError:
+        return "no_listener"
+    except (AttributeError, OSError):
+        return "unverified"
+    return "listening"
+
+
+def _socket_check(path: Path, *, required: bool = True) -> Check:
+    state = codex_listener_state(path)
+    return Check("codex_socket", state in {"listening", "unverified"}, f"{state}: {path}", required)
 
 
 def _service_check(

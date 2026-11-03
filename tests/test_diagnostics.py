@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -8,10 +10,14 @@ from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
+from hermes_codex_router import diagnostics
 from hermes_codex_router.diagnostics import (
     _service_check,
+    _socket_check,
     _telegram_contract_checks,
+    codex_listener_state,
     run_doctor,
 )
 from hermes_codex_router.hub_config import HubConfig, TerminalSettings
@@ -132,6 +138,52 @@ class DiagnosticsTests(unittest.TestCase):
             checks[1].detail,
             "agent=opencode status=satellite provider_bound=no acknowledged=v0",
         )
+
+
+class CodexListenerStateTests(unittest.TestCase):
+    """A leftover socket file after a crash or reboot is not a running server."""
+
+    def test_classifies_path_without_connecting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "codex.sock"
+            self.assertEqual(codex_listener_state(path), "missing")
+            os.symlink(root / "previous-boot.sock", path)
+            self.assertEqual(codex_listener_state(path), "dangling")
+            path.unlink()
+            path.write_text("", encoding="utf-8")
+            self.assertEqual(codex_listener_state(path), "not_socket")
+            path.unlink()
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(str(path))
+                if codex_listener_state(path) == "unverified":
+                    self.skipTest("kernel Unix socket diagnostics unavailable")
+                self.assertEqual(codex_listener_state(path), "no_listener")
+                server.listen()
+                self.assertEqual(codex_listener_state(path), "listening")
+                alias = root / "alias.sock"
+                os.symlink(path, alias)
+                self.assertEqual(codex_listener_state(alias), "listening")
+            # Closed listener: the stale file remains, exactly as after a reboot.
+            self.assertEqual(codex_listener_state(path), "no_listener")
+            check = _socket_check(path, required=False)
+            self.assertEqual(
+                (check.ok, check.detail, check.required), (False, f"no_listener: {path}", False)
+            )
+
+    def test_missing_kernel_evidence_is_unverified_not_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "codex.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(str(path))
+                server.listen()
+                with patch.object(diagnostics, "query_listener", side_effect=OSError):
+                    self.assertEqual(codex_listener_state(path), "unverified")
+                    self.assertTrue(_socket_check(path).ok)
+                with patch.object(
+                    diagnostics, "query_listener", side_effect=ValueError("ambiguous")
+                ):
+                    self.assertEqual(codex_listener_state(path), "no_listener")
 
 
 if __name__ == "__main__":

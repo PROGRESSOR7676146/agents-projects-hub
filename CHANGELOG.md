@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The monitor now reports `codex_app_server_unavailable` when the external
+  Codex app-server is not listening, for example after a reboot. A socket file
+  left behind by a crash or reboot no longer passes the doctor's `codex_socket`
+  check. The check reads passive kernel socket evidence and never connects,
+  deletes or starts anything.
 - Agents now do routine upkeep without asking and report it afterwards:
   closing superseded pull requests, merging green Dependabot updates,
   deploying released revisions with a rehearsed rollback, and settling stale
