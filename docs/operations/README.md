@@ -25,6 +25,8 @@ Operational truth is split by purpose:
 - Incremental maintenance refactoring sequence and package boundaries:
   [`REFACTORING_PLAN.md`](REFACTORING_PLAN.md).
 - Complete validation gate: `python scripts/validate.py`.
+- Routine upkeep that agents do without asking, and what stays with the
+  owner: [`UPKEEP.md`](UPKEEP.md), [ADR 0087](../decisions/0087-autonomous-project-upkeep.md).
 - Saved Codex session connection and deployment-local acceptance:
   [`SESSION_CONNECT.md`](SESSION_CONNECT.md).
 - Project/group onboarding, private setup and live acceptance:
