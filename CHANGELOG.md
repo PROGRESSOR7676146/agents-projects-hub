@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-03
+
 - The external Codex app-server can start by itself after a reboot. Enabling
   its unit lets the first start attempt of each boot prove closed clients
   itself and remove only the previous boot's dangling socket link. All other
