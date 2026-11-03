@@ -335,6 +335,14 @@ class BootStartTests(unittest.TestCase):
             service.refuse_existing_servers(proc)
             service.refuse_native_clients(self.manifest, proc)
 
+    def test_any_other_hidden_executable_fails_closed(self):
+        proc = self.proc([b"worker"])
+        with (
+            patch.object(service.os, "readlink", side_effect=PermissionError),
+            self.assertRaises(ValueError),
+        ):
+            service.refuse_native_clients(self.manifest, proc)
+
     def test_boot_start_requires_lingering(self):
         linger = self.root / "linger"
         linger.mkdir()
