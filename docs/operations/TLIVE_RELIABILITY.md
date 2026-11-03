@@ -351,18 +351,22 @@ first start attempt of each boot authorize itself without a receipt
 - records a marker in `$XDG_RUNTIME_DIR` (cleared on reboot) before any check,
   so it is spent even when the start is refused. Every later start in the same
   boot needs a fresh `plan` receipt as above;
-- proves closed clients itself: no same-UID process may run the pinned Codex
-  binary or tlive daemon, or carry an `app-server` argument;
+- requires user lingering, so the runtime directory lives for the whole boot;
+- proves closed clients itself and fails closed: no same-UID process may run
+  any Codex or tlive installation (by executable, program or script name), name
+  a pinned artifact, or carry an `app-server` argument;
 - removes only an owned link at the exact manifest socket path whose target is
   gone and which predates the current boot. The real socket lived on a
   filesystem the reboot cleared. A socket, a regular file, a live link or a
   link from this boot stays, and the pins refuse the start;
+- removes that link only after the static manifest and pin checks pass;
 - then passes the same pins, release pin, server refusal and exact idle state
   as a manual start.
 
-The unit is ordered before the Controller and tlive. Its `ready` step waits
-for kernel listener evidence, never a client connection, so clients start only
-after the server listens. A refusal leaves the unit failed and the external
+The Controller, the Hub workers, the Codex bot and tlive order themselves
+`After=` the unit, without depending on it. Its `ready` step waits for kernel
+listener evidence, never a client connection, so they start only after the
+server listens. A refusal leaves the unit failed and the external
 server down, with no retry; the monitor's `codex_app_server_unavailable` alert reports it, and
 recovery follows the manual procedure.
 

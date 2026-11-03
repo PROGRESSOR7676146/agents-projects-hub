@@ -272,6 +272,9 @@ class BootStartTests(unittest.TestCase):
         for argv in (
             [b"node", b"/home/example/tlive/daemon.mjs"],
             [b"/home/example/bin/codex", b"resume"],
+            [b"/opt/example/other-install/codex", b"resume"],
+            [b"node", b"/home/example/.npm/bin/codex.js"],
+            [b"node", b"/home/example/tlive/bin/tlive"],
         ):
             with self.subTest(argv=argv), tempfile.TemporaryDirectory() as directory:
                 self.root = Path(directory)
@@ -299,10 +302,14 @@ class BootStartTests(unittest.TestCase):
             patch.object(service, "boot_identity", return_value=("boot-a", 1.0)),
             patch.object(service, "refuse_native_clients") as clients,
             patch.object(service, "refuse_existing_servers") as servers,
+            patch.object(service, "require_lingering") as lingering,
+            patch.object(service, "verify_manifest", return_value=self.socket) as static,
             patch.object(service, "remove_previous_boot_link") as cleanup,
             patch.object(service, "prepare") as prepare,
         ):
             service.authorize_start(self.manifest, None, self.runtime)
+            lingering.assert_called_once_with()
+            static.assert_called_once_with(self.manifest)
             clients.assert_called_once_with(self.manifest)
             servers.assert_called_once_with()
             cleanup.assert_called_once_with(self.socket, 1.0)
@@ -315,6 +322,33 @@ class BootStartTests(unittest.TestCase):
             self.assertEqual(
                 (clients.call_count, cleanup.call_count, prepare.call_count), (1, 1, 2)
             )
+
+    def test_native_codex_binary_is_found_by_executable(self):
+        proc = self.proc([b"app"])
+        (proc / "10000000" / "exe").symlink_to("/opt/example/codex-x86_64-unknown-linux-musl")
+        with self.assertRaises(ValueError):
+            service.refuse_native_clients(self.manifest, proc)
+
+    def test_boot_start_requires_lingering(self):
+        linger = self.root / "linger"
+        linger.mkdir()
+        with self.assertRaises(ValueError):
+            service.require_lingering(linger)
+        (linger / service.pwd.getpwuid(os.getuid()).pw_name).touch()
+        service.require_lingering(linger)
+
+    def test_cleanup_runs_only_after_static_manifest_validation(self):
+        with (
+            patch.object(service, "boot_identity", return_value=("boot-a", 1.0)),
+            patch.object(service, "require_lingering"),
+            patch.object(service, "refuse_native_clients"),
+            patch.object(service, "refuse_existing_servers"),
+            patch.object(service, "verify_manifest", side_effect=ValueError("pin mismatch")),
+            patch.object(service, "remove_previous_boot_link") as cleanup,
+            self.assertRaises(ValueError),
+        ):
+            service.authorize_start(self.manifest, None, self.runtime)
+        cleanup.assert_not_called()
 
     def test_refused_first_start_still_consumes_the_boot(self):
         with (
@@ -347,6 +381,15 @@ class BootStartTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         unit = (root / "systemd/agents-projects-hub-codex-app-server.service").read_text()
         self.assertIn("WantedBy=default.target", unit)
-        self.assertIn("Before=agents-projects-hub.service", unit)
+        self.assertNotIn("Before=", unit)
+        for consumer in (
+            "agents-projects-hub.service",
+            "agents-projects-hub@.service",
+            "agents-projects-hub-worker@.service",
+            "agents-projects-hub-codex-worker@.service",
+        ):
+            text = (root / "systemd" / consumer).read_text()
+            self.assertIn("After=agents-projects-hub-codex-app-server.service", text)
+            self.assertNotIn("Wants=agents-projects-hub-codex-app-server", text)
         self.assertIn("codex_server_service ready", unit)
         self.assertIn("Restart=no", unit)

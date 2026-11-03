@@ -2,8 +2,8 @@
 Description=Independently owned pinned Codex app-server (fresh receipt or first start of a boot)
 After=network-online.target
 Wants=network-online.target
-# Clients start only after the server is ready (ADR 0088).
-Before=agents-projects-hub.service tlive.service
+# Clients order themselves After= this unit, so they start only after the
+# ready step below (ADR 0088).
 
 [Service]
 Type=simple

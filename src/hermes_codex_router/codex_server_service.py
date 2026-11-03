@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import pwd
 import sqlite3
 import stat
 import sys
@@ -46,7 +47,8 @@ def digest(value: dict) -> str:
     ).hexdigest()
 
 
-def verify_pins(manifest: dict) -> None:
+def verify_manifest(manifest: dict) -> Path:
+    """Static pins and home/socket relation; returns the expected socket path."""
     if manifest.get("version") != 1:
         raise ValueError("unsupported service manifest")
     for name in ("codex_binary", "tlive_daemon"):
@@ -70,14 +72,19 @@ def verify_pins(manifest: dict) -> None:
     expected = home / "app-server-control" / "app-server-control.sock"
     if manifest["socket_path"] != str(expected):
         raise ValueError("Codex socket and home mismatch")
+    return expected
+
+
+def verify_pins(manifest: dict) -> None:
+    expected = verify_manifest(manifest)
     if os.path.lexists(expected):
         raise ValueError("existing socket or path requires separate ownership reconciliation")
     if expected.parent.exists():
         _private_directory(expected.parent)
 
 
-def _same_uid_argv(proc: Path) -> list[list[bytes]]:
-    """Argument vectors of all same-UID processes; unreadable custody refuses."""
+def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
+    """(argv, executable) of all other same-UID processes; unreadable custody refuses."""
     found = []
     for path in proc.iterdir():
         if not path.name.isdigit() or int(path.name) == os.getpid():
@@ -85,7 +92,12 @@ def _same_uid_argv(proc: Path) -> list[list[bytes]]:
         try:
             if path.stat().st_uid != os.getuid():
                 continue
-            found.append((path / "cmdline").read_bytes().split(b"\0"))
+            argv = (path / "cmdline").read_bytes().split(b"\0")
+            try:
+                executable = os.fsencode(os.readlink(path / "exe"))
+            except FileNotFoundError:
+                executable = b""  # Kernel thread or exited after cmdline.
+            found.append((argv, executable))
         except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
         except OSError:
@@ -95,16 +107,24 @@ def _same_uid_argv(proc: Path) -> list[list[bytes]]:
 
 def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
     """Conservative same-UID process inventory; unreadable custody refuses start."""
-    for argv in _same_uid_argv(proc):
+    for argv, _ in _same_uid_processes(proc):
         if b"app-server" in argv:
             raise ValueError("existing app-server requires separate ownership reconciliation")
 
 
 def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
-    """Prove closed clients without an operator: no pinned Codex or tlive runs."""
+    """Prove closed clients without an operator; fail closed on any Codex or tlive.
+
+    Any installation counts, not only the pinned one: a process whose
+    executable, program or script name starts with ``codex`` or contains
+    ``tlive`` refuses, as does any argument naming a pinned artifact.
+    """
     pinned = {os.fsencode(manifest[name]["path"]) for name in ("codex_binary", "tlive_daemon")}
-    for argv in _same_uid_argv(proc):
-        if pinned.intersection(argv):
+    for argv, executable in _same_uid_processes(proc):
+        names = [os.path.basename(item).lower() for item in (executable, *argv[:2]) if item]
+        if pinned.intersection(argv) or any(
+            name.startswith(b"codex") or b"tlive" in name for name in names
+        ):
             raise ValueError("a native Codex or tlive client is running")
 
 
@@ -115,6 +135,12 @@ def boot_identity(proc: Path = Path("/proc")) -> tuple[str, float]:
         if line.startswith("btime "):
             return boot, float(line.split()[1])
     raise ValueError("boot time unavailable")
+
+
+def require_lingering(linger_dir: Path = Path("/var/lib/systemd/linger")) -> None:
+    """Without lingering the runtime directory dies at logout, not at reboot."""
+    if not (linger_dir / pwd.getpwuid(os.getuid()).pw_name).exists():
+        raise ValueError("boot start requires user lingering")
 
 
 def claim_first_start(runtime_dir: Path, boot: str) -> bool:
@@ -316,9 +342,10 @@ def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> 
     if not _receipt_valid(manifest, receipt):
         if not first:
             raise ValueError("a fresh start receipt is required after the first start of a boot")
+        require_lingering()
         refuse_native_clients(manifest)
         refuse_existing_servers()
-        remove_previous_boot_link(Path(manifest["socket_path"]), booted_at)
+        remove_previous_boot_link(verify_manifest(manifest), booted_at)
     prepare(manifest, clients_closed=True)
 
 

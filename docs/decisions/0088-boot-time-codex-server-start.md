@@ -58,9 +58,12 @@ shipped first; phases 2 and 3 complete it.
      `O_EXCL` marker under `$XDG_RUNTIME_DIR` records the attempt before any
      check, so a refused or crashed first start, and every later start in that
      boot, needs the manual `plan` + `run`.
-   - That attempt proves closed clients itself. No same-UID process may run
-     the pinned Codex binary or tlive daemon, or carry an `app-server`
-     argument. The unit is also ordered before the Controller and tlive.
+   - That attempt requires user lingering and proves closed clients itself,
+     failing closed: no same-UID process may run any Codex or tlive
+     installation, name a pinned artifact or carry an `app-server` argument.
+     The link removal follows the static manifest and pin checks.
+   - Every Codex consumer unit (Controller, workers, Codex bot, tlive) is
+     ordered `After=` the server unit, without depending on it.
    - Both modes then pass every ADR 0073 gate: artifact and release pins,
      existing-server refusal and exact idle state.
    - A `ready` step waits for kernel listener evidence, without connecting,
@@ -80,7 +83,6 @@ shipped first; phases 2 and 3 complete it.
 
 ## Limits
 
-- **Login timing.** Without lingering, the user manager starts at login, not at
-  boot, and `$XDG_RUNTIME_DIR` is cleared at the last logout. "First start of a
-  boot" then means the first start after the user manager comes up. The user
-  manager stops the server at logout too, so no server outlives the marker.
+- **Lingering.** Without lingering, `$XDG_RUNTIME_DIR` is cleared at the last
+  logout, so "first start of a boot" would mean "first start after login". The
+  boot mode therefore refuses without lingering; the manual receipt still works.
