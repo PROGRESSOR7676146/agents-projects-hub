@@ -1,6 +1,6 @@
 # ADR 0088: Boot-time external Codex server start
 
-Status: proposed
+Status: accepted
 Date: 2026-11-03
 Owner: repository owner
 Amends: [ADR 0073](0073-tlive-approval-evidence-and-server-custody.md) (no automatic start)
@@ -23,7 +23,8 @@ assert it.
 
 ## Decision
 
-The owner chose to automate the start after a reboot (2026-11-03). Phase 1
+The owner chose to automate the start after a reboot and accepted the narrow
+link cleanup (2026-11-03). Phase 1
 shipped first; phases 2 and 3 complete it.
 
 1. **Phase 1: see the outage.**
