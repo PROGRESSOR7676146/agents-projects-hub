@@ -1,5 +1,6 @@
 [Unit]
 Description=Prepare private Codex daemon socket bind source
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

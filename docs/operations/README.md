@@ -120,7 +120,10 @@ Operational truth is split by purpose:
   `BindPaths` line in the shipped templates; without it the Hub silently runs
   Codex on the stdio fallback and the monitor cannot refresh the model catalog.
   Start the shared app-server before the Hub units, and restart the Hub units
-  after the daemon recreates that directory (for example after a reboot).
+  after the daemon recreates that directory (for example after a reboot). The
+  `agents-projects-hub-codex-socket-dir.service` oneshot prepares that directory
+  again on every dependent start and has no start rate limit, so several quick
+  restarts do not leave it failed.
 - The Codex multi-auth integration is retired
   ([ADR 0047](../decisions/0047-retire-codex-multi-auth.md)). Delete its keys
   from the Hub configuration before upgrading; removing a leftover helper,

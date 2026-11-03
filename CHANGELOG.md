@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Quick successive Hub restarts no longer leave the Codex socket directory
+  unit failed with `start-limit-hit`. It still prepares the directory on every
+  dependent start.
+
 ## [0.11.0] - 2026-11-03
 
 - The external Codex app-server can start by itself after a reboot. Enabling
