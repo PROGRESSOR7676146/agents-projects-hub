@@ -18,6 +18,9 @@ from .delivery_control_predicates import result_ready_control_reconciled
 from .release_identity import CURRENT_RELEASE
 from .state_connection import connect_existing
 from .state_errors import StateError
+from .unix_socket_diag import IncompleteEvidence, has_listener_for
+
+BOOT_MARKER = "agents-projects-hub-codex-start"
 
 
 def private_json(path: Path) -> dict:
@@ -70,31 +73,135 @@ def verify_pins(manifest: dict) -> None:
     if os.path.lexists(expected):
         raise ValueError("existing socket or path requires separate ownership reconciliation")
     if expected.parent.exists():
-        info = expected.parent.lstat()
-        if (
-            expected.parent.resolve() != expected.parent
-            or not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_mode & 0o077
-        ):
-            raise ValueError("unsafe control directory")
+        _private_directory(expected.parent)
 
 
-def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
-    """Conservative same-UID process inventory; unreadable custody refuses start."""
+def _same_uid_argv(proc: Path) -> list[list[bytes]]:
+    """Argument vectors of all same-UID processes; unreadable custody refuses."""
+    found = []
     for path in proc.iterdir():
-        if not path.name.isdigit():
+        if not path.name.isdigit() or int(path.name) == os.getpid():
             continue
         try:
             if path.stat().st_uid != os.getuid():
                 continue
-            argv = (path / "cmdline").read_bytes().split(b"\0")
-            if b"app-server" in argv:
-                raise ValueError("existing app-server requires separate ownership reconciliation")
+            found.append((path / "cmdline").read_bytes().split(b"\0"))
         except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
         except OSError:
             raise ValueError("process custody unavailable") from None
+    return found
+
+
+def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
+    """Conservative same-UID process inventory; unreadable custody refuses start."""
+    for argv in _same_uid_argv(proc):
+        if b"app-server" in argv:
+            raise ValueError("existing app-server requires separate ownership reconciliation")
+
+
+def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
+    """Prove closed clients without an operator: no pinned Codex or tlive runs."""
+    pinned = {os.fsencode(manifest[name]["path"]) for name in ("codex_binary", "tlive_daemon")}
+    for argv in _same_uid_argv(proc):
+        if pinned.intersection(argv):
+            raise ValueError("a native Codex or tlive client is running")
+
+
+def boot_identity(proc: Path = Path("/proc")) -> tuple[str, float]:
+    """Return (boot ID, boot time in epoch seconds) from the kernel."""
+    boot = (proc / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    for line in (proc / "stat").read_text(encoding="ascii").splitlines():
+        if line.startswith("btime "):
+            return boot, float(line.split()[1])
+    raise ValueError("boot time unavailable")
+
+
+def claim_first_start(runtime_dir: Path, boot: str) -> bool:
+    """Record a start attempt in this boot; True only for the first attempt.
+
+    The marker lives in the per-user runtime directory, which the system
+    clears on reboot. It is consumed by the attempt, not by success, so a
+    refused or crashed first start needs the explicit plan + run.
+    """
+    info = runtime_dir.lstat()
+    if (
+        not runtime_dir.is_absolute()
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise ValueError("unsafe runtime directory")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    try:
+        fd = os.open(runtime_dir / BOOT_MARKER, flags, 0o600)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="ascii") as marker:
+        marker.write(boot + "\n")
+    return True
+
+
+def _private_directory(path: Path) -> tuple[int, int]:
+    info = path.lstat()
+    if (
+        path.resolve() != path
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise ValueError("unsafe control directory")
+    return info.st_dev, info.st_ino
+
+
+def remove_previous_boot_link(socket_path: Path, booted_at: float) -> bool:
+    """Remove only an owned dangling link that predates this boot.
+
+    The real socket lives on a filesystem the reboot cleared; its link in the
+    Codex home survives and would block every start. A socket, a regular file,
+    a link with a live target or a link from this boot is left alone, and the
+    normal pins then refuse it. Returns whether the link was removed.
+    """
+    try:
+        info = socket_path.lstat()
+    except FileNotFoundError:
+        return False
+    if (
+        not stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_ctime >= booted_at
+        or os.path.exists(socket_path)
+    ):
+        return False
+    parent = _private_directory(socket_path.parent)
+    fd = os.open(socket_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        current = os.stat(socket_path.name, dir_fd=fd, follow_symlinks=False)
+        if (
+            (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != parent
+            or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)
+            or not stat.S_ISLNK(current.st_mode)
+        ):
+            raise ValueError("control path changed during cleanup")
+        os.unlink(socket_path.name, dir_fd=fd)
+    finally:
+        os.close(fd)
+    return True
+
+
+def wait_ready(manifest: dict, *, timeout_seconds: float = 60.0) -> None:
+    """Return once a kernel listener serves the manifest socket; never connect."""
+    path = Path(manifest["socket_path"])
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            info = path.stat()
+            if stat.S_ISSOCK(info.st_mode) and has_listener_for(info):
+                return
+        except (FileNotFoundError, IncompleteEvidence):
+            pass
+        time.sleep(0.2)
+    raise ValueError("Codex app-server did not become ready")
 
 
 def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
@@ -187,15 +294,46 @@ def check_receipt(manifest: dict, receipt: dict, *, now: float | None = None) ->
         raise ValueError("stale or mismatched start receipt")
 
 
+def _receipt_valid(manifest: dict, receipt: Path | None) -> bool:
+    if receipt is None:
+        return False
+    try:
+        check_receipt(manifest, private_json(receipt))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return True
+
+
+def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> None:
+    """Authorize by a fresh operator receipt, or as the first start of this boot.
+
+    Without a valid receipt, only the first attempt of a boot may start, and
+    only after proving closed clients itself. Both modes then pass the same
+    pins, server refusal and exact idle state.
+    """
+    boot, booted_at = boot_identity()
+    first = claim_first_start(runtime_dir, boot)
+    if not _receipt_valid(manifest, receipt):
+        if not first:
+            raise ValueError("a fresh start receipt is required after the first start of a boot")
+        refuse_native_clients(manifest)
+        refuse_existing_servers()
+        remove_previous_boot_link(Path(manifest["socket_path"]), booted_at)
+    prepare(manifest, clients_closed=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "run"))
+    parser.add_argument("action", choices=("plan", "run", "ready"))
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--assert-native-clients-closed", action="store_true")
     args = parser.parse_args(argv)
     try:
         manifest = private_json(args.manifest)
+        if args.action == "ready":
+            wait_ready(manifest)
+            return 0
         if not CURRENT_RELEASE.clean_tree or CURRENT_RELEASE.git_sha != manifest["hub_git_sha"]:
             raise ValueError("immutable Hub release pin mismatch")
         if args.action == "plan":
@@ -206,10 +344,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        if args.receipt is None:
-            raise ValueError("start receipt required")
-        check_receipt(manifest, private_json(args.receipt))
-        prepare(manifest, clients_closed=True)
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            raise ValueError("per-user runtime directory unavailable")
+        authorize_start(manifest, args.receipt, Path(runtime))
         os.environ["CODEX_HOME"] = manifest["codex_home"]
         binary = manifest["codex_binary"]["path"]
         os.execv(binary, [binary, "app-server", "--listen", "unix://"])
