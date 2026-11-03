@@ -577,7 +577,8 @@ acceptance.
   check, switch, rollback) that Hermes runs only on the owner's explicit
   command, as a separate unit, with a watchdog for Hermes' own updates. Stages:
   the tool and a private stack manifest; the drift check; Hermes integration;
-  the watchdog.
+  the watchdog. Stage 1, the tool, is implemented and tested offline
+  ([runbook](STACK_UPDATE.md)); no deployment uses it yet.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 - Silent queue and execution waits: schema-37 repository implementation is
   under validation; [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md)
