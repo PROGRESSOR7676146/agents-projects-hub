@@ -38,6 +38,7 @@ live acceptance.
 - [Hermes incident notices and dismiss](operations/HERMES_INCIDENT_NOTICES.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
+- [Routine upkeep sweep](operations/UPKEEP.md)
 - [Hub restart with independent outcome delivery](operations/HUB_RESTART.ru.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Worker operations drain preparation](operations/WORKER_DRAIN_PREPARATION.md)

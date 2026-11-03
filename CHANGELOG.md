@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Agents now do routine upkeep without asking and report it afterwards:
+  closing superseded pull requests, merging green Dependabot updates,
+  deploying released revisions with a rehearsed rollback, and settling stale
+  jobs and deliveries. Backup restores, credentials, permanent deletion and
+  trust changes stay with the owner (ADR 0087). Dependabot holds version
+  updates for seven days.
 - Add `stack-update`, a standard-library tool that plans, stages, checks,
   switches and rolls back external stack components from one exact plan
   bound to published digests and current links, with automatic link
