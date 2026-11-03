@@ -350,8 +350,10 @@ an explicit fresh **plan + start**; there is no automatic restart. Preserve the
 incident, exact old boot/PID/start-tick/cgroup identities and uncertainty privately.
 
 The monitor raises `codex_app_server_unavailable` once per episode when the
-configured socket has no verified kernel listener: a stale socket file, a
-dangling link, a non-socket path, or (without a stdio fallback) no path at all.
+configured socket has no kernel listener: a stale socket file, a dangling link,
+or a non-socket path. A fully removed path alerts too when the external server
+is expected, that is without a stdio fallback or with tlive configured.
+Incomplete kernel evidence reports `unverified` and raises nothing.
 It reads kernel `SOCK_DIAG` evidence only; it never connects, deletes or starts
 anything. With a stdio fallback the alert is a warning, because Hub keeps
 working while tlive cannot attach.

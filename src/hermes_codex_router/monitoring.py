@@ -226,13 +226,20 @@ def _doctor_ok(checks: list[object], name: str) -> bool | None:
     return None if check is None else bool(check.get("ok"))
 
 
-def _codex_listener(checks: list[object]) -> tuple[str, bool] | None:
-    """Return (listener state, stdio fallback) from the doctor's codex_socket check."""
+def _codex_listener(config: HubConfig, checks: list[object]) -> tuple[str, bool, bool] | None:
+    """Return (listener state, stdio fallback, external server expected).
+
+    Without a stdio fallback, or with attach-only tlive configured, the external
+    server is expected, so even a fully removed socket path is an outage.
+    """
     check = _doctor_check(checks, "codex_socket")
     if check is None:
         return None
-    # The detail is "<listener state>: <path>"; a non-required socket means a fallback.
-    return str(check.get("detail", "")).split(":", 1)[0], not check.get("required")
+    has_fallback = config.codex_stdio_executable is not None
+    tlive = config.recovery_plane.enabled and config.recovery_plane.tlive_config_path is not None
+    # The doctor detail is "<listener state>: <path>".
+    state = str(check.get("detail", "")).split(":", 1)[0]
+    return state, has_fallback, not has_fallback or tlive
 
 
 def _run_monitor_once(
@@ -329,7 +336,7 @@ def _run_monitor_once(
             hermes_telegram=hermes_telegram,
             runtime_health=runtime_health,
             codex_config_proxy_ok=_doctor_ok(doctor_checks, "codex_config_proxy"),
-            codex_listener=_codex_listener(doctor_checks),
+            codex_listener=_codex_listener(config, doctor_checks),
         )
         approval_surface = None
         if config.recovery_plane.enabled and config.recovery_plane.tlive_config_path is not None:

@@ -220,16 +220,17 @@ def check_codex_session_bloat(
     return tuple(alerts)
 
 
-def _codex_listener_alert(codex_listener: tuple[str, bool] | None) -> OperationalAlert | None:
-    """Alert on (listener state, stdio fallback configured).
+def _codex_listener_alert(codex_listener: tuple[str, bool, bool] | None) -> OperationalAlert | None:
+    """Alert on (listener state, stdio fallback configured, external server expected).
 
-    A missing path with a fallback is an ordinary stdio-only installation.
+    A missing path alerts only when configuration expects an external server;
+    any leftover path is evidence of one.
     """
     if codex_listener is None:
         return None
-    listener_state, has_fallback = codex_listener
+    listener_state, has_fallback, expected = codex_listener
     if listener_state not in CODEX_LISTENER_FAILURES and (
-        listener_state != "missing" or has_fallback
+        listener_state != "missing" or not expected
     ):
         return None
     return OperationalAlert(
@@ -252,7 +253,7 @@ def evaluate_operational_alerts(
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
     codex_config_proxy_ok: bool | None = None,
-    codex_listener: tuple[str, bool] | None = None,
+    codex_listener: tuple[str, bool, bool] | None = None,
     now: datetime | None = None,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:

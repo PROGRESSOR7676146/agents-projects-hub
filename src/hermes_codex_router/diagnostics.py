@@ -26,7 +26,7 @@ from .release_identity import CURRENT_RELEASE
 from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import resolve_topic_execution_root
-from .unix_socket_diag import query_listener, require_vfs
+from .unix_socket_diag import IncompleteEvidence, has_listener_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +49,11 @@ CODEX_LISTENER_FAILURES = frozenset({"dangling", "not_socket", "no_listener", "u
 def codex_listener_state(path: Path) -> str:
     """Classify the Codex app-server socket without connecting to it.
 
-    Kernel SOCK_DIAG evidence must name a listening stream socket bound to the
-    current filesystem inode. ``unverified`` means the platform cannot provide
-    that evidence; it neither proves nor refutes a listener.
+    Kernel SOCK_DIAG evidence must show a listening stream socket on the
+    current filesystem inode. ``unverified`` means the evidence is incomplete
+    or unavailable on this platform; it neither proves nor refutes a listener.
+    Hub units share one network namespace; a listener in another namespace is
+    invisible here.
     """
     if not os.path.lexists(path):
         return "missing"
@@ -64,12 +66,13 @@ def codex_listener_state(path: Path) -> str:
     if not stat.S_ISSOCK(info.st_mode):
         return "not_socket"
     try:
-        require_vfs(query_listener(path.resolve()), info)
-    except ValueError:
-        return "no_listener"
-    except (AttributeError, OSError):
+        listening = has_listener_for(info)
+        after = path.stat()
+    except (AttributeError, OSError, IncompleteEvidence):
         return "unverified"
-    return "listening"
+    if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino):
+        return "unverified"
+    return "listening" if listening else "no_listener"
 
 
 def _socket_check(path: Path, *, required: bool = True) -> Check:

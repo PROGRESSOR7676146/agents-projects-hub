@@ -27,11 +27,16 @@ The work proceeds in three phases. Phase 1 is implemented. Phases 2 and 3
 need the owner's acceptance of this ADR, because phase 2 amends REQ-OPS-005.
 
 1. **Phase 1: see the outage (implemented).**
-   - The doctor's `codex_socket` check now passes only when kernel `SOCK_DIAG`
-     evidence shows a listening stream socket bound to the current filesystem
-     inode. A socket file left by a crash or reboot no longer passes.
-   - The monitor raises `codex_app_server_unavailable` once per episode. It is
-     a warning when a stdio fallback exists and an error otherwise.
+   - The doctor's `codex_socket` check fails when the kernel `SOCK_DIAG` dump
+     shows no listening stream socket on the current filesystem inode. A socket
+     file left by a crash or reboot no longer passes. When that evidence is
+     incomplete or unavailable, the state is `unverified` and the check keeps
+     its previous pass.
+   - The monitor raises `codex_app_server_unavailable` once per episode for a
+     leftover path without a listener. A fully removed path alerts too when
+     configuration expects the external server: there is no stdio fallback, or
+     tlive is configured. The alert is a warning with a stdio fallback and an
+     error otherwise.
    - The check never connects, deletes or starts anything.
 2. **Phase 2: a narrow rule for leftovers of a previous boot.** Today every
    reboot leaves the socket path behind, so any boot start would refuse.

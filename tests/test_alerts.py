@@ -277,8 +277,8 @@ class OperationalAlertTests(unittest.TestCase):
                 self.assertTrue(state.claim_alert_transition(f"{key}:operations"))
             state.close()
 
-    def test_codex_app_server_alert_distinguishes_outage_from_stdio_only(self) -> None:
-        def codes(listener: tuple[str, bool]) -> list[tuple[str, str]]:
+    def test_codex_app_server_alert_follows_configured_expectation(self) -> None:
+        def codes(listener: tuple[str, bool, bool]) -> list[tuple[str, str]]:
             return [
                 (alert.code, alert.severity)
                 for alert in evaluate_operational_alerts(
@@ -290,31 +290,45 @@ class OperationalAlertTests(unittest.TestCase):
 
         unavailable = "codex_app_server_unavailable"
         for state in ("dangling", "not_socket", "no_listener", "unreadable"):
-            self.assertEqual(codes((state, True)), [(unavailable, "warning")])
-            self.assertEqual(codes((state, False)), [(unavailable, "error")])
-        self.assertEqual(codes(("missing", False)), [(unavailable, "error")])
-        for state in ("listening", "unverified"):
-            self.assertEqual(codes((state, False)), [])
+            for expected in (True, False):
+                self.assertEqual(codes((state, True, expected)), [(unavailable, "warning")])
+                self.assertEqual(codes((state, False, expected)), [(unavailable, "error")])
+        # A fully removed path is still an outage when the server is expected.
+        self.assertEqual(codes(("missing", True, True)), [(unavailable, "warning")])
+        self.assertEqual(codes(("missing", False, True)), [(unavailable, "error")])
         # A stdio-only installation never had an external server path.
-        self.assertEqual(codes(("missing", True)), [])
+        self.assertEqual(codes(("missing", True, False)), [])
+        for state in ("listening", "unverified"):
+            self.assertEqual(codes((state, False, True)), [])
 
-    def test_monitor_reads_codex_listener_from_doctor_check(self) -> None:
-        with TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
-            doctor = {
-                "ok": True,
-                "checks": [
-                    {
-                        "name": "codex_socket",
-                        "ok": False,
-                        "detail": "no_listener: /home/example/.codex/codex.sock",
-                        "required": False,
-                    }
-                ],
-            }
-            with patch("hermes_codex_router.monitoring.evaluate_operational_alerts") as evaluate:
-                evaluate.side_effect = RuntimeError("stop after evaluation")
+    def test_monitor_derives_codex_expectation_from_configuration(self) -> None:
+        doctor = {
+            "ok": True,
+            "checks": [
+                {
+                    "name": "codex_socket",
+                    "ok": False,
+                    "detail": "missing: /home/example/.codex/codex.sock",
+                    "required": False,
+                }
+            ],
+        }
+        stdio = Path("/home/example/bin/codex")
+        tlive = Path("/home/example/.tlive/config.env")
+        cases = (
+            ((stdio, False, None), ("missing", True, False)),
+            ((stdio, True, tlive), ("missing", True, True)),
+            ((None, False, None), ("missing", False, True)),
+        )
+        for (executable, enabled, tlive_path), expected in cases:
+            config = Mock()
+            config.codex_stdio_executable = executable
+            config.recovery_plane.enabled = enabled
+            config.recovery_plane.tlive_config_path = tlive_path
+            with TemporaryDirectory() as directory:
+                state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
                 with (
+                    patch("hermes_codex_router.monitoring.evaluate_operational_alerts") as evaluate,
                     patch("hermes_codex_router.monitoring.run_doctor", return_value=doctor),
                     patch("hermes_codex_router.monitoring.refresh_provider_catalogs"),
                     patch("hermes_codex_router.monitoring._hermes_health", return_value=None),
@@ -322,16 +336,12 @@ class OperationalAlertTests(unittest.TestCase):
                     patch("hermes_codex_router.monitoring.project_runtime_health"),
                     self.assertRaises(RuntimeError),
                 ):
+                    evaluate.side_effect = RuntimeError("stop after evaluation")
                     _run_monitor_once(
-                        Mock(),
-                        state,
-                        None,
-                        notify=False,
-                        repair=False,
-                        cooldown_seconds=0,
+                        config, state, None, notify=False, repair=False, cooldown_seconds=0
                     )
-            self.assertEqual(evaluate.call_args.kwargs["codex_listener"], ("no_listener", True))
-            state.close()
+                self.assertEqual(evaluate.call_args.kwargs["codex_listener"], expected)
+                state.close()
 
     def test_unreachable_configured_codex_proxy_alert_is_edge_triggered(self) -> None:
         alerts = evaluate_operational_alerts(

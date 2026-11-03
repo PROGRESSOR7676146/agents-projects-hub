@@ -23,6 +23,7 @@ from hermes_codex_router.diagnostics import (
 from hermes_codex_router.hub_config import HubConfig, TerminalSettings
 from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.state import HubState, TelegramContractProvenance
+from hermes_codex_router.unix_socket_diag import IncompleteEvidence
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -171,19 +172,47 @@ class CodexListenerStateTests(unittest.TestCase):
                 (check.ok, check.detail, check.required), (False, f"no_listener: {path}", False)
             )
 
-    def test_missing_kernel_evidence_is_unverified_not_failure(self) -> None:
+    def test_incomplete_or_unavailable_evidence_is_unverified_not_outage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "codex.sock"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
                 server.bind(str(path))
                 server.listen()
-                with patch.object(diagnostics, "query_listener", side_effect=OSError):
+                for error in (OSError(), IncompleteEvidence("interrupted dump")):
+                    with patch.object(diagnostics, "has_listener_for", side_effect=error):
+                        self.assertEqual(codex_listener_state(path), "unverified")
+                        self.assertTrue(_socket_check(path).ok)
+
+    def test_listener_is_found_by_inode_through_a_symlinked_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real"
+            real.mkdir()
+            os.symlink(real, root / "alias")
+            bound = root / "alias" / "codex.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                # The kernel records the alias name, not the canonical path.
+                server.bind(str(bound))
+                server.listen()
+                state = codex_listener_state(real / "codex.sock")
+                if state == "unverified":
+                    self.skipTest("kernel Unix socket diagnostics unavailable")
+                self.assertEqual(state, "listening")
+
+    def test_replaced_socket_during_observation_is_unverified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "codex.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(str(path))
+
+                def replace_path(_: os.stat_result) -> bool:
+                    path.unlink()
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as other:
+                        other.bind(str(path))
+                    return True
+
+                with patch.object(diagnostics, "has_listener_for", side_effect=replace_path):
                     self.assertEqual(codex_listener_state(path), "unverified")
-                    self.assertTrue(_socket_check(path).ok)
-                with patch.object(
-                    diagnostics, "query_listener", side_effect=ValueError("ambiguous")
-                ):
-                    self.assertEqual(codex_listener_state(path), "no_listener")
 
 
 if __name__ == "__main__":
