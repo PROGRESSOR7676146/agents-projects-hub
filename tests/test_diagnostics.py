@@ -23,7 +23,7 @@ from hermes_codex_router.diagnostics import (
 from hermes_codex_router.hub_config import HubConfig, TerminalSettings
 from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.state import HubState, TelegramContractProvenance
-from hermes_codex_router.unix_socket_diag import IncompleteEvidence
+from hermes_codex_router.unix_socket_diag import IncompleteEvidence, has_listener_for
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -198,6 +198,18 @@ class CodexListenerStateTests(unittest.TestCase):
                 if state == "unverified":
                     self.skipTest("kernel Unix socket diagnostics unavailable")
                 self.assertEqual(state, "listening")
+
+    def test_inode_beyond_32_bits_matches_the_kernel_truncated_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "codex.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(str(path))
+                server.listen()
+                real = path.stat()
+                if codex_listener_state(path) == "unverified":
+                    self.skipTest("kernel Unix socket diagnostics unavailable")
+                wide = os.stat_result((real.st_mode, real.st_ino + (1 << 32), *tuple(real)[2:]))
+                self.assertTrue(has_listener_for(wide))
 
     def test_replaced_socket_during_observation_is_unverified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

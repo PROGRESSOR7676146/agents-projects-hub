@@ -126,7 +126,8 @@ def has_listener_for(info: os.stat_result) -> bool:
     ``IncompleteEvidence`` instead of reporting absence.
     """
     major, minor = os.major(info.st_dev), os.minor(info.st_dev)
-    identity = struct.pack("=II", info.st_ino, (major << 20) | minor)
+    # unix_diag_vfs carries a 32-bit inode; 64-bit filesystems are truncated by the kernel.
+    identity = struct.pack("=II", info.st_ino & 0xFFFFFFFF, ((major << 20) | minor) & 0xFFFFFFFF)
     try:
         payloads = _dump_unix_sockets()
     except ValueError as exc:
