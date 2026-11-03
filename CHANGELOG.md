@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The external Codex app-server can start by itself after a reboot. Enabling
+  its unit lets the first start attempt of each boot prove closed clients
+  itself and remove only the previous boot's dangling socket link. All other
+  start gates stay, and clients wait until the server listens. A refusal
+  starts nothing else and is reported by the monitor (ADR 0088).
 - The monitor now reports `codex_app_server_unavailable` when the external
   Codex app-server is not listening, for example after a reboot. A socket file
   left behind by a crash or reboot no longer passes the doctor's `codex_socket`

@@ -104,8 +104,9 @@ private exact-source, backup and rollback receipts outside Git.
    an existing public directory/socket. For a manual daemon launch, explicitly
    use umask 077 too. Unsafe permissions must remain unknown to `read_snapshot`,
    never be waived. Align every client with the same explicit Codex HOME/socket.
-   The service intentionally has no automatic restart or install target;
-   tlive neither starts nor stops it.
+   The service intentionally has no automatic restart, and tlive neither
+   starts nor stops it. Its install target is opt-in; see
+   [Opt-in start at boot](#opt-in-start-at-boot).
 5. With old clients still quiesced, generate an exact start receipt from the
    installed clean Hub runtime and save stdout privately with umask 077:
 
@@ -341,12 +342,42 @@ candidate and compatible rollback before release/deploy authorization; reference
 its digest in the plan. This is a standard preparation step, not permission to
 rewrite an existing signed capsule or run external host-backup infrastructure.
 
+### Opt-in start at boot
+
+`systemctl --user enable agents-projects-hub-codex-app-server.service` lets the
+first start attempt of each boot authorize itself without a receipt
+([ADR 0088](../decisions/0088-boot-time-codex-server-start.md)). That attempt:
+
+- records a marker in `$XDG_RUNTIME_DIR` (cleared on reboot) before any check,
+  so it is spent even when the start is refused. Every later start in the same
+  boot needs a fresh `plan` receipt as above;
+- requires user lingering, so the runtime directory lives for the whole boot;
+- proves closed clients itself and fails closed: no same-UID process may run
+  any Codex or tlive installation (by executable, program or script name), name
+  a pinned artifact, or carry an `app-server` argument;
+- removes only an owned link at the exact manifest socket path whose target is
+  gone and which predates the current boot. The real socket lived on a
+  filesystem the reboot cleared. A socket, a regular file, a live link or a
+  link from this boot stays, and the pins refuse the start;
+- removes that link only after the static manifest and pin checks pass;
+- then passes the same pins, release pin, server refusal and exact idle state
+  as a manual start.
+
+The Controller, the Hub workers, the Codex bot and tlive order themselves
+`After=` the unit, without depending on it. Its `ready` step waits for kernel
+listener evidence, never a client connection, so they start only after the
+server listens. A refusal leaves the unit failed and the external
+server down, with no retry; the monitor's `codex_app_server_unavailable` alert reports it, and
+recovery follows the manual procedure.
+
 ## Stale socket after unclean shutdown
 
 This is explicit local incident work by the installation owner (or an explicitly
 assigned trusted recovery operator), outside `plan`/`run`. The guard never deletes
 or kills. After **every reboot**, the external server remains unavailable until
-an explicit fresh **plan + start**; there is no automatic restart. Preserve the
+an explicit fresh **plan + start**, unless the
+[opt-in start at boot](#opt-in-start-at-boot) succeeds; there is no automatic
+restart. Preserve the
 incident, exact old boot/PID/start-tick/cgroup identities and uncertainty privately.
 
 The monitor raises `codex_app_server_unavailable` once per episode when the

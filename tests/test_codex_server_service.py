@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -180,22 +182,14 @@ class CodexServerServiceTests(unittest.TestCase):
     def test_run_uses_only_exact_pinned_argv_and_rechecks_release(self):
         from types import SimpleNamespace
 
-        receipt = dict(
-            version=1,
-            manifest_sha256=service.digest(self.manifest),
-            created_at=100,
-            expires_at=160,
-            native_clients_closed=True,
-        )
         with (
-            patch.object(service, "private_json", side_effect=[self.manifest, receipt]),
+            patch.object(service, "private_json", return_value=self.manifest),
             patch.object(
                 service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=True, git_sha="a" * 40)
             ),
-            patch.object(service, "check_receipt") as check,
-            patch.object(service, "prepare") as prepare,
+            patch.object(service, "authorize_start") as authorize,
             patch.object(service.os, "execv") as execute,
-            patch.dict(service.os.environ, {}, clear=False),
+            patch.dict(service.os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False),
         ):
             self.assertEqual(
                 service.main(
@@ -209,8 +203,9 @@ class CodexServerServiceTests(unittest.TestCase):
                 ),
                 0,
             )
-            check.assert_called_once_with(self.manifest, receipt)
-            prepare.assert_called_once_with(self.manifest, clients_closed=True)
+            authorize.assert_called_once_with(
+                self.manifest, Path("/tmp/example-receipt"), Path("/run/user/1000")
+            )
             binary = self.manifest["codex_binary"]["path"]
             execute.assert_called_once_with(binary, [binary, "app-server", "--listen", "unix://"])
         with (
@@ -233,3 +228,184 @@ class CodexServerServiceTests(unittest.TestCase):
                 1,
             )
             execute.assert_not_called()
+
+
+class BootStartTests(unittest.TestCase):
+    """ADR 0088: the first start of a boot may prove closed clients itself."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.runtime = self.root / "runtime"
+        self.runtime.mkdir(mode=0o700)
+        control = self.root / "home" / "app-server-control"
+        control.mkdir(parents=True, mode=0o700)
+        self.socket = control / "app-server-control.sock"
+        self.manifest = dict(
+            socket_path=str(self.socket),
+            codex_binary=dict(path="/home/example/bin/codex"),
+            tlive_daemon=dict(path="/home/example/tlive/daemon.mjs"),
+        )
+
+    def proc(self, *argvs: list[bytes]) -> Path:
+        proc = self.root / "proc"
+        proc.mkdir(exist_ok=True)
+        for pid, argv in enumerate(argvs, start=10_000_000):
+            entry = proc / str(pid)
+            entry.mkdir()
+            (entry / "cmdline").write_bytes(b"\0".join(argv))
+        return proc
+
+    def test_marker_allows_only_the_first_attempt_of_a_boot(self):
+        self.assertTrue(service.claim_first_start(self.runtime, "boot-a"))
+        self.assertFalse(service.claim_first_start(self.runtime, "boot-a"))
+        marker = self.runtime / service.BOOT_MARKER
+        self.assertEqual(marker.read_text(encoding="ascii"), "boot-a\n")
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+        self.runtime.chmod(0o755)
+        with self.assertRaises(ValueError):
+            service.claim_first_start(self.runtime, "boot-a")
+
+    def test_native_clients_and_servers_refuse_without_an_operator(self):
+        service.refuse_native_clients(self.manifest, self.proc([b"/usr/bin/bash"]))
+        for argv in (
+            [b"node", b"/home/example/tlive/daemon.mjs"],
+            [b"/home/example/bin/codex", b"resume"],
+            [b"/opt/example/other-install/codex", b"resume"],
+            [b"node", b"/home/example/.npm/bin/codex.js"],
+            [b"node", b"/home/example/tlive/bin/tlive"],
+        ):
+            with self.subTest(argv=argv), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                with self.assertRaises(ValueError):
+                    service.refuse_native_clients(self.manifest, self.proc(argv))
+
+    def test_only_an_owned_dangling_link_from_an_earlier_boot_is_removed(self):
+        now = 2_000_000_000.0
+        self.assertFalse(service.remove_previous_boot_link(self.socket, now))
+        self.socket.symlink_to(self.root / "cleared-at-reboot.sock")
+        self.assertFalse(service.remove_previous_boot_link(self.socket, booted_at=0.0))
+        self.assertTrue(service.remove_previous_boot_link(self.socket, now))
+        self.assertFalse(os.path.lexists(self.socket))
+        live = self.root / "live-target"
+        live.write_text("", encoding="utf-8")
+        self.socket.symlink_to(live)
+        self.assertFalse(service.remove_previous_boot_link(self.socket, now))
+        self.socket.unlink()
+        self.socket.write_text("", encoding="utf-8")
+        self.assertFalse(service.remove_previous_boot_link(self.socket, now))
+        self.assertTrue(self.socket.exists())
+
+    def test_without_a_receipt_only_the_first_start_proves_clients_itself(self):
+        with (
+            patch.object(service, "boot_identity", return_value=("boot-a", 1.0)),
+            patch.object(service, "refuse_native_clients") as clients,
+            patch.object(service, "refuse_existing_servers") as servers,
+            patch.object(service, "require_lingering") as lingering,
+            patch.object(service, "verify_manifest", return_value=self.socket) as static,
+            patch.object(service, "remove_previous_boot_link") as cleanup,
+            patch.object(service, "prepare") as prepare,
+        ):
+            service.authorize_start(self.manifest, None, self.runtime)
+            lingering.assert_called_once_with()
+            static.assert_called_once_with(self.manifest)
+            clients.assert_called_once_with(self.manifest)
+            servers.assert_called_once_with()
+            cleanup.assert_called_once_with(self.socket, 1.0)
+            prepare.assert_called_once_with(self.manifest, clients_closed=True)
+            with self.assertRaises(ValueError):
+                service.authorize_start(self.manifest, self.root / "absent-receipt", self.runtime)
+            self.assertEqual(prepare.call_count, 1)
+            with patch.object(service, "_receipt_valid", return_value=True):
+                service.authorize_start(self.manifest, self.root / "receipt", self.runtime)
+            self.assertEqual(
+                (clients.call_count, cleanup.call_count, prepare.call_count), (1, 1, 2)
+            )
+
+    def test_native_codex_binary_is_found_by_executable(self):
+        proc = self.proc([b"app"])
+        (proc / "10000000" / "exe").symlink_to("/opt/example/codex-x86_64-unknown-linux-musl")
+        with self.assertRaises(ValueError):
+            service.refuse_native_clients(self.manifest, proc)
+
+    def test_hidden_executable_of_the_user_manager_does_not_block(self):
+        proc = self.proc([b"/usr/lib/systemd/systemd", b"--user"], [b"(sd-pam)"])
+        with patch.object(service.os, "readlink", side_effect=PermissionError):
+            service.refuse_existing_servers(proc)
+            service.refuse_native_clients(self.manifest, proc)
+
+    def test_any_other_hidden_executable_fails_closed(self):
+        proc = self.proc([b"worker"])
+        with (
+            patch.object(service.os, "readlink", side_effect=PermissionError),
+            self.assertRaises(ValueError),
+        ):
+            service.refuse_native_clients(self.manifest, proc)
+
+    def test_boot_start_requires_lingering(self):
+        linger = self.root / "linger"
+        linger.mkdir()
+        with self.assertRaises(ValueError):
+            service.require_lingering(linger)
+        (linger / service.pwd.getpwuid(os.getuid()).pw_name).touch()
+        service.require_lingering(linger)
+
+    def test_cleanup_runs_only_after_static_manifest_validation(self):
+        with (
+            patch.object(service, "boot_identity", return_value=("boot-a", 1.0)),
+            patch.object(service, "require_lingering"),
+            patch.object(service, "refuse_native_clients"),
+            patch.object(service, "refuse_existing_servers"),
+            patch.object(service, "verify_manifest", side_effect=ValueError("pin mismatch")),
+            patch.object(service, "remove_previous_boot_link") as cleanup,
+            self.assertRaises(ValueError),
+        ):
+            service.authorize_start(self.manifest, None, self.runtime)
+        cleanup.assert_not_called()
+
+    def test_refused_first_start_still_consumes_the_boot(self):
+        with (
+            patch.object(service, "boot_identity", return_value=("boot-a", 1.0)),
+            patch.object(service, "refuse_native_clients", side_effect=ValueError("client")),
+            self.assertRaises(ValueError),
+        ):
+            service.authorize_start(self.manifest, None, self.runtime)
+        self.assertTrue((self.runtime / service.BOOT_MARKER).exists())
+
+    def test_boot_identity_reads_kernel_files(self):
+        proc = self.root / "proc"
+        (proc / "sys/kernel/random").mkdir(parents=True)
+        (proc / "sys/kernel/random/boot_id").write_text("boot-a\n", encoding="ascii")
+        (proc / "stat").write_text("cpu 1 2 3\nbtime 1700000000\n", encoding="ascii")
+        self.assertEqual(service.boot_identity(proc), ("boot-a", 1_700_000_000.0))
+
+    def test_readiness_waits_for_a_kernel_listener_without_connecting(self):
+        manifest = dict(socket_path=str(self.root / "s.sock"))
+        with self.assertRaises(ValueError):
+            service.wait_ready(manifest, timeout_seconds=0.3)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(manifest["socket_path"])
+            server.listen()
+            with patch.object(service, "has_listener_for", return_value=True) as listener:
+                service.wait_ready(manifest, timeout_seconds=1)
+            listener.assert_called_once()
+
+    def test_unit_is_opt_in_ordered_and_waits_for_readiness(self):
+        root = Path(__file__).resolve().parents[1]
+        unit = (root / "systemd/agents-projects-hub-codex-app-server.service").read_text()
+        self.assertIn("WantedBy=default.target", unit)
+        self.assertNotIn("Before=", unit)
+        for consumer in (
+            "agents-projects-hub.service",
+            "agents-projects-hub@.service",
+            "agents-projects-hub-worker@.service",
+            "agents-projects-hub-codex-worker@.service",
+            "tlive.service",
+            "tlive.service.d/30-external-codex.conf",
+        ):
+            text = (root / "systemd" / consumer).read_text()
+            self.assertIn("After=agents-projects-hub-codex-app-server.service", text)
+            self.assertNotIn("Wants=agents-projects-hub-codex-app-server", text)
+        self.assertIn("codex_server_service ready", unit)
+        self.assertIn("Restart=no", unit)

@@ -4,6 +4,8 @@ After=network-online.target
 Wants=network-online.target
 Wants=agents-projects-hub-codex-socket-dir.service
 After=agents-projects-hub-codex-socket-dir.service
+# Start after an enabled external Codex app-server is ready (ADR 0088); no dependency.
+After=agents-projects-hub-codex-app-server.service
 
 [Service]
 Type=simple

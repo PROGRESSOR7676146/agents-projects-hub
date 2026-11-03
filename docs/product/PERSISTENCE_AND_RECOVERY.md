@@ -33,6 +33,11 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
   - Attach-only tlive MUST never spawn/stop the server; migration/start MUST refuse active/unknown
     work, unsettled controls, unowned servers/sockets or mismatched artifacts without killing
     processes or deleting sockets.
+  - An opt-in boot start MAY replace the operator receipt only for the first start attempt of
+    a boot, after its own same-UID inventory finds no server or native client. It MAY remove
+    only an owned link at the exact manifest socket path whose target is gone and which
+    predates the current boot; it MUST NOT remove sockets, regular files or live links, and a
+    refusal MUST NOT retry, repair or start anything else (ADR 0088).
   - Exact owner closure for an archived session's uncertain job and effective full-control delivery
     consent MAY remove only their own admission blockers; they MUST NOT prove execution/delivery or
     release other senders/writers.

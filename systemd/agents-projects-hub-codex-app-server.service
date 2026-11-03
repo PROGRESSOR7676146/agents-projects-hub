@@ -1,12 +1,17 @@
 [Unit]
-Description=Independently owned pinned Codex app-server (explicit start receipt)
+Description=Independently owned pinned Codex app-server (fresh receipt or first start of a boot)
 After=network-online.target
 Wants=network-online.target
+# Clients order themselves After= this unit, so they start only after the
+# ready step below (ADR 0088).
 
 [Service]
 Type=simple
 EnvironmentFile=-%h/.config/agents-projects-hub/environment
 ExecStart=%h/.local/share/agents-projects-hub/venv/bin/python -m hermes_codex_router.codex_server_service run --manifest %h/.config/agents-projects-hub/codex-server.json --receipt %h/.config/agents-projects-hub/codex-server-start.json
+# Readiness barrier: kernel listener evidence, never a client connection.
+ExecStartPost=%h/.local/share/agents-projects-hub/venv/bin/python -m hermes_codex_router.codex_server_service ready --manifest %h/.config/agents-projects-hub/codex-server.json
+TimeoutStartSec=90
 Restart=no
 KillMode=mixed
 SendSIGKILL=no
@@ -15,3 +20,7 @@ UMask=0077
 NoNewPrivileges=true
 # Keep the owning socket visible to existing private-tmp clients.
 PrivateTmp=false
+
+# Opt-in: `systemctl --user enable` starts it once per boot (ADR 0088).
+[Install]
+WantedBy=default.target

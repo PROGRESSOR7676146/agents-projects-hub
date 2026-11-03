@@ -1,6 +1,6 @@
 # ADR 0088: Boot-time external Codex server start
 
-Status: proposed
+Status: accepted
 Date: 2026-11-03
 Owner: repository owner
 Amends: [ADR 0073](0073-tlive-approval-evidence-and-server-custody.md) (no automatic start)
@@ -23,10 +23,11 @@ assert it.
 
 ## Decision
 
-The work proceeds in three phases. Phase 1 is implemented. Phases 2 and 3
-need the owner's acceptance of this ADR, because phase 2 amends REQ-OPS-005.
+The owner chose to automate the start after a reboot and accepted the narrow
+link cleanup (2026-11-03). Phase 1
+shipped first; phases 2 and 3 complete it.
 
-1. **Phase 1: see the outage (implemented).**
+1. **Phase 1: see the outage.**
    - The doctor's `codex_socket` check fails when the kernel `SOCK_DIAG` dump
      shows no listening stream socket on the current filesystem inode. A socket
      file left by a crash or reboot no longer passes. When that evidence is
@@ -37,37 +38,40 @@ need the owner's acceptance of this ADR, because phase 2 amends REQ-OPS-005.
      configuration expects the external server: there is no stdio fallback, or
      tlive is configured. The alert is a warning with a stdio fallback and an
      error otherwise.
-   - The check never connects, deletes or starts anything.
-2. **Phase 2: a narrow rule for leftovers of a previous boot.** Today every
-   reboot leaves the socket path behind, so any boot start would refuse.
-   - A reviewed cleanup may remove only the exact manifest socket path, its link
-     and its lock file. It applies only when all of the following hold:
-     - the path's change time is earlier than the current boot time;
-     - kernel evidence shows no listener;
-     - a connect attempt fails with `ECONNREFUSED`;
-     - the same-UID inventory finds no Codex server or client.
-   - It uses the descriptor-relative removal of the existing stale-socket
-     runbook. Anything else still refuses.
-   - This amends REQ-OPS-005 for that one case.
+2. **Phase 2: the previous boot's link.** Codex 0.166 keeps the real socket in
+   a private directory under `/tmp` and links to it from the manifest socket
+   path in the Codex home. A reboot clears the socket and leaves the link, so
+   every start would refuse.
+   - The first start attempt of a boot may remove that link, and only that
+     link, when all of the following hold:
+     - it is owned;
+     - its target is gone;
+     - its change time predates the current boot;
+     - the same-UID inventory finds no server or native client.
+   - The removal is descriptor-relative and rechecks the link's identity.
+   - Sockets, regular files, live links and links from this boot stay, and the
+     pins then refuse the start. This amends REQ-OPS-005 for that one case.
 3. **Phase 3: one owning unit, two authorization modes.**
-   - The existing app-server unit gains a `boot` mode next to the manual
-     receipt mode. A second competing unit is not added.
-   - One lock serializes both modes.
-   - `boot` proves closed clients by `Before=` ordering and a host `/proc`
-     inventory, not by assertion.
-   - `boot` records the boot ID in an `O_EXCL` marker under
-     `$XDG_RUNTIME_DIR`. Any existing marker refuses, so a later crash in the
-     same boot still needs the manual `plan` + `run`.
-   - Clients wait on a readiness barrier: the listener is verified by
-     `SOCK_DIAG` custody of the started process before tlive or Codex workers
-     start.
-   - Every ADR 0073 gate stays: artifact and release pins, existing-server
-     refusal, and exact idle state.
-4. **Refusal keeps Codex unavailable, not substituted.**
-   - When a start is refused for ownership or unknown work, the workers do not
-     fall back to a stdio writer on the same root.
-   - The unit stays failed, and the phase 1 alert tells the owner.
-   - Nothing retries, kills or repairs.
+   - The existing app-server unit gains an opt-in `[Install]` target. A second
+     competing unit is not added; systemd serializes starts of the one unit.
+   - A fresh operator receipt authorizes any start, as before.
+   - Without one, only the first start attempt of a boot may proceed. An
+     `O_EXCL` marker under `$XDG_RUNTIME_DIR` records the attempt before any
+     check, so a refused or crashed first start, and every later start in that
+     boot, needs the manual `plan` + `run`.
+   - That attempt requires user lingering and proves closed clients itself,
+     failing closed: no same-UID process may run any Codex or tlive
+     installation, name a pinned artifact or carry an `app-server` argument.
+     The link removal follows the static manifest and pin checks.
+   - Every Codex consumer unit (Controller, workers, Codex bot, tlive) is
+     ordered `After=` the server unit, without depending on it.
+   - Both modes then pass every ADR 0073 gate: artifact and release pins,
+     existing-server refusal and exact idle state.
+   - A `ready` step waits for kernel listener evidence, without connecting,
+     before ordered clients start.
+4. **A refusal starts nothing else.** The unit stays failed, nothing retries,
+   kills or repairs, and the phase 1 alert tells the owner. Keeping Codex
+   workers off their stdio fallback after a refusal is not part of this ADR.
 
 ## Consequences
 
@@ -78,11 +82,8 @@ need the owner's acceptance of this ADR, because phase 2 amends REQ-OPS-005.
   still refused and alerted.
 - No Telegram, provider or LLM call, no replay and no new authority is added.
 
-## Open questions before acceptance
+## Limits
 
-- **Codex socket lifecycle.** Which files Codex 0.166 leaves after a SIGTERM or
-  a reboot (socket, link, lock), and whether a supported setting avoids them.
-  Phase 2 removes exactly that set and nothing else.
-- **Login timing.** Without lingering, the user manager starts at login, not at
-  boot. The marker and ordering still hold. "Boot" then means the first
-  user-manager start.
+- **Lingering.** Without lingering, `$XDG_RUNTIME_DIR` is cleared at the last
+  logout, so "first start of a boot" would mean "first start after login". The
+  boot mode therefore refuses without lingering; the manual receipt still works.
