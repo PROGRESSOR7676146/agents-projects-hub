@@ -110,3 +110,4 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0083: Durable Claude corrections](0083-durable-claude-corrections.md) — opt-in streamed text, durable input ownership and same/next result boundaries; source candidate.
 
 - [0087: Autonomous project upkeep](0087-autonomous-project-upkeep.md) — agents close superseded PRs, merge green Dependabot updates, deploy released revisions with a rehearsed rollback and settle stale state without asking, then report; backup restores, credentials, permanent deletion and trust changes stay with the owner.
+- [0088: Boot-time external Codex server start](0088-boot-time-codex-server-start.md) — proposed: the monitor alerts when the external Codex app-server is not listening (implemented); a narrow previous-boot cleanup and a boot mode of the one owning unit need owner acceptance.

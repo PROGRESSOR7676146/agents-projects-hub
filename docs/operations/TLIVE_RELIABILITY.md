@@ -349,6 +349,15 @@ or kills. After **every reboot**, the external server remains unavailable until
 an explicit fresh **plan + start**; there is no automatic restart. Preserve the
 incident, exact old boot/PID/start-tick/cgroup identities and uncertainty privately.
 
+The monitor raises `codex_app_server_unavailable` once per episode when the
+configured socket has no kernel listener: a stale socket file, a dangling link,
+or a non-socket path. A fully removed path alerts too when the external server
+is expected, that is without a stdio fallback or with tlive configured.
+Incomplete kernel evidence reports `unverified` and raises nothing.
+It reads kernel `SOCK_DIAG` evidence only; it never connects, deletes or starts
+anything. With a stdio fallback the alert is a warning, because Hub keeps
+working while tlive cannot attach.
+
 1. Close Codex admission and quiesce all client/worker/control owners using the
    [drain and cleanup boundaries](WORKER_DRAIN_PREPARATION.md#explicit-local-candidate-workflow).
    Stop the exact owning units through the service manager in separately authorized work.

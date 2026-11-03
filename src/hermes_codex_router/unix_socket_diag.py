@@ -54,12 +54,15 @@ def require_vfs(listener: Listener, info: os.stat_result) -> None:
         raise ValueError("listener does not match current filesystem socket")
 
 
-def query_listener(path: Path) -> Listener:
-    """Read one complete, bounded kernel dump in the caller's network namespace."""
+def _dump_unix_sockets() -> list[bytes]:
+    """Read one complete, bounded kernel dump in the caller's network namespace.
+
+    Any incomplete, interrupted or non-kernel answer raises ``ValueError``.
+    """
     sequence = int.from_bytes(os.urandom(4), "little")
     request = struct.pack("=BBHIIIII", socket.AF_UNIX, 0, 0, 1 << 10, 0, 3, 0xFFFFFFFF, 0xFFFFFFFF)
     header = struct.pack("=IHHII", 16 + len(request), 20, 0x301, sequence, 0)
-    matches = []
+    payloads: list[bytes] = []
     deadline = time.monotonic() + 2
     budget = 4 * 1024 * 1024
     with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 4) as channel:
@@ -90,11 +93,60 @@ def query_listener(path: Path) -> Listener:
                 if kind == 3:
                     if payload and (len(payload) < 4 or struct.unpack_from("=i", payload)[0]):
                         raise ValueError("failed diagnostic dump")
-                    if offset != len(data) or len(matches) != 1:
-                        raise ValueError("missing or ambiguous Unix stream listener")
-                    return matches[0]
+                    if offset != len(data):
+                        raise ValueError("trailing data after diagnostic dump")
+                    return payloads
                 if kind != 20:
                     raise ValueError("failed or unexpected diagnostic message")
-                listener = parse_listener(payload, path)
-                if listener is not None:
-                    matches.append(listener)
+                payloads.append(payload)
+
+
+def query_listener(path: Path) -> Listener:
+    """Return the one stream listener bound to exactly this kernel pathname."""
+    matches = [
+        listener
+        for listener in (parse_listener(payload, path) for payload in _dump_unix_sockets())
+        if listener is not None
+    ]
+    if len(matches) != 1:
+        raise ValueError("missing or ambiguous Unix stream listener")
+    return matches[0]
+
+
+class IncompleteEvidence(Exception):
+    """The kernel dump could not be read completely; absence is not proven."""
+
+
+def has_listener_for(info: os.stat_result) -> bool:
+    """Whether a stream listener is bound to this filesystem socket inode.
+
+    Matching by device and inode instead of by bind name also finds a server
+    that bound through a symlinked parent or a bind-mount alias. Only the
+    caller's network namespace is visible; any incomplete dump raises
+    ``IncompleteEvidence`` instead of reporting absence.
+    """
+    major, minor = os.major(info.st_dev), os.minor(info.st_dev)
+    # unix_diag_vfs carries a 32-bit inode; 64-bit filesystems are truncated by the kernel.
+    identity = struct.pack("=II", info.st_ino & 0xFFFFFFFF, ((major << 20) | minor) & 0xFFFFFFFF)
+    try:
+        payloads = _dump_unix_sockets()
+    except ValueError as exc:
+        raise IncompleteEvidence(str(exc)) from exc
+    for payload in payloads:
+        if len(payload) < 16:
+            raise IncompleteEvidence("truncated Unix diagnostic")
+        _, kind, state = struct.unpack_from("=BBB", payload)
+        offset = 16
+        while offset + 4 <= len(payload):
+            length, tag = struct.unpack_from("=HH", payload, offset)
+            if length < 4 or offset + length > len(payload):
+                raise IncompleteEvidence("invalid diagnostic attribute")
+            if (
+                tag == 1
+                and payload[offset + 4 : offset + length] == identity
+                and kind == socket.SOCK_STREAM
+                and state == 10
+            ):
+                return True
+            offset += (length + 3) & ~3
+    return False

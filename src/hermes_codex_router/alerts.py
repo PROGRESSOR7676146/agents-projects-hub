@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .diagnostic_log import survived
+from .diagnostics import CODEX_LISTENER_FAILURES
 from .incident_runbooks import RUNTIME_COMPONENTS, RUNTIME_FAILURE_STATUSES
 from .operational_alert import OperationalAlert
 from .reliability_alerts import evaluate_reliability_alerts
@@ -219,6 +220,30 @@ def check_codex_session_bloat(
     return tuple(alerts)
 
 
+def _codex_listener_alert(codex_listener: tuple[str, bool, bool] | None) -> OperationalAlert | None:
+    """Alert on (listener state, stdio fallback configured, external server expected).
+
+    A missing path alerts only when configuration expects an external server;
+    any leftover path is evidence of one.
+    """
+    if codex_listener is None:
+        return None
+    listener_state, has_fallback, expected = codex_listener
+    if listener_state not in CODEX_LISTENER_FAILURES and (
+        listener_state != "missing" or not expected
+    ):
+        return None
+    return OperationalAlert(
+        "codex:app-server",
+        "codex_app_server_unavailable",
+        "warning" if has_fallback else "error",
+        f"The external Codex app-server is not listening ({listener_state}); "
+        "tlive cannot attach"
+        + (" and Hub uses the stdio fallback" if has_fallback else "")
+        + ". Start it only through a fresh reviewed plan; never remove the socket by hand.",
+    )
+
+
 def evaluate_operational_alerts(
     *,
     state_snapshot: Mapping[str, object],
@@ -228,6 +253,7 @@ def evaluate_operational_alerts(
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
     codex_config_proxy_ok: bool | None = None,
+    codex_listener: tuple[str, bool, bool] | None = None,
     now: datetime | None = None,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
@@ -246,6 +272,9 @@ def evaluate_operational_alerts(
                 "inspect the managed app-server before changing provider bindings.",
             )
         )
+    listener_alert = _codex_listener_alert(codex_listener)
+    if listener_alert is not None:
+        alerts.append(listener_alert)
     if runtime_health is not None:
         deployment_revision = runtime_health.get("deployment_revision")
         if isinstance(deployment_revision, Mapping):

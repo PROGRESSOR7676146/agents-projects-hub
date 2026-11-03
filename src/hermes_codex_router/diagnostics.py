@@ -26,6 +26,7 @@ from .release_identity import CURRENT_RELEASE
 from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import resolve_topic_execution_root
+from .unix_socket_diag import IncompleteEvidence, has_listener_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,14 +42,42 @@ def _command(name: str, *, required: bool = True) -> Check:
     return Check(f"command:{name}", found is not None, found or "not found", required)
 
 
-def _socket_check(path: Path, *, required: bool = True) -> Check:
-    if not path.exists():
-        return Check("codex_socket", False, f"missing: {path}", required)
+# A socket file survives a crash or reboot, so existence is not availability.
+CODEX_LISTENER_FAILURES = frozenset({"dangling", "not_socket", "no_listener", "unreadable"})
+
+
+def codex_listener_state(path: Path) -> str:
+    """Classify the Codex app-server socket without connecting to it.
+
+    Kernel SOCK_DIAG evidence must show a listening stream socket on the
+    current filesystem inode. ``unverified`` means the evidence is incomplete
+    or unavailable on this platform; it neither proves nor refutes a listener.
+    Hub units share one network namespace; a listener in another namespace is
+    invisible here.
+    """
+    if not os.path.lexists(path):
+        return "missing"
     try:
-        mode = path.stat().st_mode
-    except OSError as exc:
-        return Check("codex_socket", False, str(exc), required)
-    return Check("codex_socket", stat.S_ISSOCK(mode), str(path), required)
+        info = path.stat()
+    except FileNotFoundError:
+        return "dangling"
+    except OSError:
+        return "unreadable"
+    if not stat.S_ISSOCK(info.st_mode):
+        return "not_socket"
+    try:
+        listening = has_listener_for(info)
+        after = path.stat()
+    except (AttributeError, OSError, IncompleteEvidence):
+        return "unverified"
+    if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino):
+        return "unverified"
+    return "listening" if listening else "no_listener"
+
+
+def _socket_check(path: Path, *, required: bool = True) -> Check:
+    state = codex_listener_state(path)
+    return Check("codex_socket", state in {"listening", "unverified"}, f"{state}: {path}", required)
 
 
 def _service_check(
