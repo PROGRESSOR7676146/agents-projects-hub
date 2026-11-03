@@ -76,6 +76,11 @@ class SystemdTopologyTests(unittest.TestCase):
         prepare = self.unit("agents-projects-hub-codex-socket-dir.service")
         self.assertIn("Type=oneshot", prepare)
         self.assertIn("prepare-codex-socket-dir", prepare)
+        # Every dependent start, including the monitor timer, re-runs this idempotent
+        # oneshot so a removed bind source is recreated; the start rate limit must not
+        # turn quick successive restarts into a failed unit.
+        self.assertIn("StartLimitIntervalSec=0", prepare)
+        self.assertNotIn("RemainAfterExit=yes", prepare)
         for name in (
             "agents-projects-hub.service",
             "agents-projects-hub-worker@.service",
