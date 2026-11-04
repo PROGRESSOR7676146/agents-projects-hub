@@ -366,13 +366,15 @@ first start attempt of each boot authorize itself without a receipt
 The Controller, the Hub workers, the Codex bot and tlive order themselves
 `After=` the unit, without depending on it. Its `ready` step waits for kernel
 listener evidence, never a client connection, so they start only after the
-server listens. That wait runs beside the start gates, which hash the pinned
-artifacts once each, so it allows minutes for a loaded boot and ends at once
-when the start is refused. A refusal leaves the unit failed and the external
+server listens. That wait runs beside the start gates, so its readiness
+budget is minutes, not seconds, for a loaded boot. It normally ends as soon as
+a refused start exits, but it does not bound the start job: the unit's
+`TimeoutStartSec` must stay above that budget, also in deployment drop-ins. A refusal leaves the unit failed and the external
 server down, with no retry; the monitor's `codex_app_server_unavailable` alert reports it, and
 recovery follows the manual procedure. The unit's journal line
 `external Codex start refused: <reason>` names the refused gate and, for a
-process check, only the offending PID or program name.
+process check, only the offending PID; a readiness timeout reads
+`external Codex readiness failed: <reason>`.
 
 ## Stale socket after unclean shutdown
 

@@ -22,10 +22,9 @@ from .state_errors import StateError
 from .unix_socket_diag import IncompleteEvidence, has_listener_for
 
 BOOT_MARKER = "agents-projects-hub-codex-start"
-# Readiness is bounded by the unit's TimeoutStartSec; this only stops a
-# forgotten manual run. A loaded boot needs minutes, not one (ADR 0088).
+# A readiness budget, not a bound on the start job: the unit's TimeoutStartSec
+# must exceed it, and a loaded boot can need minutes, not one (ADR 0088).
 READY_TIMEOUT_SECONDS = 270.0
-_verified_artifacts: dict[tuple[str, int, int, int, int, int], str] = {}
 
 
 def private_json(path: Path) -> dict:
@@ -51,13 +50,10 @@ def digest(value: dict) -> str:
     ).hexdigest()
 
 
-def _artifact_sha256(path: Path, info: os.stat_result) -> str:
-    """Stream the hash once per unchanged file and process; the Codex binary is large."""
-    key = (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-    if key not in _verified_artifacts:
-        with path.open("rb") as stream:
-            _verified_artifacts[key] = hashlib.file_digest(stream, "sha256").hexdigest()
-    return _verified_artifacts[key]
+def _artifact_sha256(path: Path) -> str:
+    """Stream the hash; the pinned Codex binary is hundreds of megabytes."""
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def verify_manifest(manifest: dict) -> Path:
@@ -73,7 +69,7 @@ def verify_manifest(manifest: dict) -> Path:
             or path.resolve() != path
             or not stat.S_ISREG(info.st_mode)
             or info.st_mode & 0o222
-            or _artifact_sha256(path, info) != pin["sha256"]
+            or _artifact_sha256(path) != pin["sha256"]
         ):
             raise ValueError(f"service artifact pin mismatch: {name}")
     home = Path(manifest["codex_home"])
@@ -88,16 +84,17 @@ def verify_manifest(manifest: dict) -> Path:
     return expected
 
 
-def verify_pins(manifest: dict) -> None:
-    expected = verify_manifest(manifest)
+def verify_pins(manifest: dict, verified: Path | None = None) -> None:
+    """``verified`` is the result of a verify_manifest already run in this start."""
+    expected = verify_manifest(manifest) if verified is None else verified
     if os.path.lexists(expected):
         raise ValueError("existing socket or path requires separate ownership reconciliation")
     if expected.parent.exists():
         _private_directory(expected.parent)
 
 
-def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
-    """(argv, executable) of all other same-UID processes; unreadable custody refuses."""
+def _same_uid_processes(proc: Path) -> list[tuple[str, list[bytes], bytes]]:
+    """(pid, argv, executable) of other same-UID processes; unreadable custody refuses."""
     found = []
     for path in proc.iterdir():
         if not path.name.isdigit() or int(path.name) == os.getpid():
@@ -117,7 +114,7 @@ def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
                 ):
                     raise
                 executable = b""
-            found.append((argv, executable))
+            found.append((path.name, argv, executable))
         except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
         except OSError:
@@ -125,17 +122,13 @@ def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
     return found
 
 
-def _label(argv: list[bytes]) -> str:
-    """Program name only, for the refusal reason; never arguments or environment."""
-    return os.fsdecode(os.path.basename(argv[0]))[:64] if argv and argv[0] else "unnamed"
-
-
 def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
     """Conservative same-UID process inventory; unreadable custody refuses start."""
-    for argv, _ in _same_uid_processes(proc):
+    # Refusals name only the PID: process titles are writable, unredacted data.
+    for pid, argv, _ in _same_uid_processes(proc):
         if b"app-server" in argv:
             raise ValueError(
-                f"existing app-server requires separate ownership reconciliation: {_label(argv)}"
+                f"existing app-server requires separate ownership reconciliation: pid {pid}"
             )
 
 
@@ -147,12 +140,12 @@ def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
     ``tlive`` refuses, as does any argument naming a pinned artifact.
     """
     pinned = {os.fsencode(manifest[name]["path"]) for name in ("codex_binary", "tlive_daemon")}
-    for argv, executable in _same_uid_processes(proc):
+    for pid, argv, executable in _same_uid_processes(proc):
         names = [os.path.basename(item).lower() for item in (executable, *argv[:2]) if item]
         if pinned.intersection(argv) or any(
             name.startswith(b"codex") or b"tlive" in name for name in names
         ):
-            raise ValueError(f"a native Codex or tlive client is running: {_label(argv)}")
+            raise ValueError(f"a native Codex or tlive client is running: pid {pid}")
 
 
 def boot_identity(proc: Path = Path("/proc")) -> tuple[str, float]:
@@ -333,10 +326,12 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
         db.close()
 
 
-def prepare(manifest: dict, *, clients_closed: bool, now: float | None = None) -> dict:
+def prepare(
+    manifest: dict, *, clients_closed: bool, now: float | None = None, verified: Path | None = None
+) -> dict:
     if not clients_closed:
         raise ValueError("explicit closed-native-clients assertion required")
-    verify_pins(manifest)
+    verify_pins(manifest, verified)
     refuse_existing_servers()
     require_idle_state(Path(manifest["state_path"]), codex_home=Path(manifest["codex_home"]))
     timestamp = time.time() if now is None else now
@@ -387,14 +382,17 @@ def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> 
     """
     boot, booted_at = boot_identity()
     first = claim_first_start(runtime_dir, boot)
+    verified = None
     if not _receipt_valid(manifest, receipt):
         if not first:
             raise ValueError("a fresh start receipt is required after the first start of a boot")
         require_lingering()
         refuse_native_clients(manifest)
         refuse_existing_servers()
-        remove_previous_boot_link(verify_manifest(manifest), booted_at)
-    prepare(manifest, clients_closed=True)
+        # Hash the pins once per start: the same verification gates the cleanup and prepare.
+        verified = verify_manifest(manifest)
+        remove_previous_boot_link(verified, booted_at)
+    prepare(manifest, clients_closed=True, verified=verified)
 
 
 def refusal_reason(exc: BaseException) -> str:

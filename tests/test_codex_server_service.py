@@ -72,18 +72,17 @@ class CodexServerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pin mismatch"):
             service.verify_pins(self.manifest)
 
-    def test_pinned_artifacts_are_hashed_once_per_process(self):
-        service._verified_artifacts.clear()
-        with patch.object(service.hashlib, "file_digest", wraps=hashlib.file_digest) as hashed:
-            service.verify_manifest(self.manifest)
-            service.verify_pins(self.manifest)
-        self.assertEqual(hashed.call_count, 2)  # One per artifact, not per check.
+    def test_prepare_reuses_a_verification_from_the_same_start(self):
+        expected = service.verify_manifest(self.manifest)
+        with patch.object(service, "verify_manifest") as again:
+            service.verify_pins(self.manifest, expected)
+        again.assert_not_called()
         binary = Path(self.manifest["codex_binary"]["path"])
         binary.chmod(0o700)
         binary.write_bytes(b"replaced binary")
         binary.chmod(0o500)
         with self.assertRaisesRegex(ValueError, "pin mismatch: codex_binary"):
-            service.verify_manifest(self.manifest)
+            service.verify_pins(self.manifest)
 
     def test_active_uncertain_work_and_unsettled_controls_refuse_start(self):
         from tests import test_codex_turn_controls as fixtures
@@ -328,7 +327,9 @@ class BootStartTests(unittest.TestCase):
             clients.assert_called_once_with(self.manifest)
             servers.assert_called_once_with()
             cleanup.assert_called_once_with(self.socket, 1.0)
-            prepare.assert_called_once_with(self.manifest, clients_closed=True)
+            prepare.assert_called_once_with(
+                self.manifest, clients_closed=True, verified=self.socket
+            )
             with self.assertRaises(ValueError):
                 service.authorize_start(self.manifest, self.root / "absent-receipt", self.runtime)
             self.assertEqual(prepare.call_count, 1)
@@ -366,9 +367,15 @@ class BootStartTests(unittest.TestCase):
         ):
             service.refuse_native_clients(self.manifest, proc)
         shutil.rmtree(proc)
-        native = self.proc([b"/opt/example/codex", b"app-server"])
-        with self.assertRaisesRegex(ValueError, "client is running: codex$"):
-            service.refuse_native_clients(self.manifest, native)
+        native = self.proc([b"codex --token=EXAMPLE-SECRET\nforged line", b"app-server"])
+        for check in (
+            lambda: service.refuse_native_clients(self.manifest, native),
+            lambda: service.refuse_existing_servers(native),
+        ):
+            with self.assertRaises(ValueError) as refused:
+                check()
+            self.assertTrue(str(refused.exception).endswith(": pid 10000000"))
+            self.assertNotIn("EXAMPLE-SECRET", str(refused.exception))
 
     def test_main_reports_the_specific_refusal_reason(self):
         import contextlib
@@ -376,8 +383,8 @@ class BootStartTests(unittest.TestCase):
 
         reasons = (
             (
-                ValueError("a native Codex or tlive client is running: codex"),
-                "client is running: codex",
+                ValueError("a native Codex or tlive client is running: pid 42"),
+                "client is running: pid 42",
             ),
             (
                 PermissionError(13, "denied", "/home/example/linger"),
