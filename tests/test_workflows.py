@@ -174,7 +174,7 @@ def _assert_validation_contract(workflows: Path) -> None:
         if required not in commands:
             raise AssertionError("tlive gate must verify, patch, build and run regressions")
     _assert_required_execution(validate_job)
-    if validate_job.get("runs-on") != "ubuntu-latest":
+    if validate_job.get("runs-on") != "ubuntu-24.04":
         raise AssertionError("validation job runner changed")
     strategy = validate_job.get("strategy")
     if not isinstance(strategy, dict) or strategy.get("fail-fast") is not False:

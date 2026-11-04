@@ -9,6 +9,9 @@ and releases use semantic versioning while the public API is still evolving.
   that systemd is starting at the same moment briefly hides its executable.
   Such a process is checked again for up to two seconds, and refuses only if
   it stays unreadable. The refusal names the error.
+- CI runs the validation matrix and coverage on Ubuntu 24.04 instead of
+  `ubuntu-latest`, which moved to 26.04 with symlinked coreutils that the
+  namespace test fixtures refuse.
 
 ## [0.11.1] - 2026-11-04
 
