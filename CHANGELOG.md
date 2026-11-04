@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-04
+
 - The boot-time Codex app-server start reads a same-UID process again when
   reading its executable is denied, until a two-second deadline shared by the
   whole scan. A boot start was refused once by such a denial, from a process
