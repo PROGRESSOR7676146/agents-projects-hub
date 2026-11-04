@@ -368,7 +368,9 @@ The Controller, the Hub workers, the Codex bot and tlive order themselves
 listener evidence, never a client connection, so they start only after the
 server listens. A refusal leaves the unit failed and the external
 server down, with no retry; the monitor's `codex_app_server_unavailable` alert reports it, and
-recovery follows the manual procedure.
+recovery follows the manual procedure. The unit's journal line
+`external Codex start refused: <reason>` names the refused gate and, for a
+process check, only the offending PID or program name.
 
 ## Stale socket after unclean shutdown
 

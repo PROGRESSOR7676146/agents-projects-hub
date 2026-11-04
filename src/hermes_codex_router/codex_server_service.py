@@ -62,7 +62,7 @@ def verify_manifest(manifest: dict) -> Path:
             or info.st_mode & 0o222
             or hashlib.sha256(path.read_bytes()).hexdigest() != pin["sha256"]
         ):
-            raise ValueError("service artifact pin mismatch")
+            raise ValueError(f"service artifact pin mismatch: {name}")
     home = Path(manifest["codex_home"])
     if not home.is_absolute() or home.resolve() != home or not home.is_dir():
         raise ValueError("invalid Codex home")
@@ -108,15 +108,22 @@ def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
         except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
         except OSError:
-            raise ValueError("process custody unavailable") from None
+            raise ValueError(f"process custody unavailable: pid {path.name}") from None
     return found
+
+
+def _label(argv: list[bytes]) -> str:
+    """Program name only, for the refusal reason; never arguments or environment."""
+    return os.fsdecode(os.path.basename(argv[0]))[:64] if argv and argv[0] else "unnamed"
 
 
 def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
     """Conservative same-UID process inventory; unreadable custody refuses start."""
     for argv, _ in _same_uid_processes(proc):
         if b"app-server" in argv:
-            raise ValueError("existing app-server requires separate ownership reconciliation")
+            raise ValueError(
+                f"existing app-server requires separate ownership reconciliation: {_label(argv)}"
+            )
 
 
 def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
@@ -132,7 +139,7 @@ def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
         if pinned.intersection(argv) or any(
             name.startswith(b"codex") or b"tlive" in name for name in names
         ):
-            raise ValueError("a native Codex or tlive client is running")
+            raise ValueError(f"a native Codex or tlive client is running: {_label(argv)}")
 
 
 def boot_identity(proc: Path = Path("/proc")) -> tuple[str, float]:
@@ -265,12 +272,16 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
             "SELECT 1 FROM agent_sessions WHERE agent_id='codex' AND writer_mode!='telegram' "
             "AND status IN ('active','satellite') LIMIT 1"
         ).fetchone()
-        if controls or writers:
-            raise ValueError("active or unknown Codex work blocks service start")
+        if controls:
+            raise ValueError("active or unknown Codex work blocks service start: turn control")
+        if writers:
+            raise ValueError("active or unknown Codex work blocks service start: native writer")
         completions: dict[tuple[str, str], frozenset[str]] = {}
         for job in busy:
             if codex_home is None or job["status"] != "indeterminate":
-                raise ValueError("active or unknown Codex work blocks service start")
+                raise ValueError(
+                    f"active or unknown Codex work blocks service start: {job['status']} job"
+                )
             checkpoint = db.execute(
                 "SELECT c.provider_thread_id,c.provider_turn_id,c.project_root "
                 "FROM provider_jobs j JOIN provider_execution_checkpoints c USING(job_id) "
@@ -282,12 +293,16 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
                 (job["job_id"],),
             ).fetchone()
             if checkpoint is None or not checkpoint["provider_turn_id"]:
-                raise ValueError("active or unknown Codex work blocks service start")
+                raise ValueError(
+                    "active or unknown Codex work blocks service start: indeterminate job"
+                )
             key = checkpoint["provider_thread_id"], checkpoint["project_root"]
             if key not in completions:
                 completions[key] = completed_rollout_turns(codex_home, *key)
             if checkpoint["provider_turn_id"] not in completions[key]:
-                raise ValueError("active or unknown Codex work blocks service start")
+                raise ValueError(
+                    "active or unknown Codex work blocks service start: indeterminate job"
+                )
     finally:
         db.close()
 
@@ -356,6 +371,15 @@ def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> 
     prepare(manifest, clients_closed=True)
 
 
+def refusal_reason(exc: BaseException) -> str:
+    if isinstance(exc, OSError):
+        detail = os.strerror(exc.errno) if exc.errno else type(exc).__name__
+        return f"{detail}: {exc.filename}" if exc.filename else detail
+    if isinstance(exc, KeyError):
+        return f"missing manifest field {exc.args[0] if exc.args else ''}"
+    return str(exc) or type(exc).__name__
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("plan", "run", "ready"))
@@ -385,11 +409,9 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["CODEX_HOME"] = manifest["codex_home"]
         binary = manifest["codex_binary"]["path"]
         os.execv(binary, [binary, "app-server", "--listen", "unix://"])
-    except (OSError, ValueError, KeyError, TypeError, StateError):
-        print(
-            "external Codex start refused; inspect pins, custody and exact idle evidence",
-            file=sys.stderr,
-        )
+    except (OSError, ValueError, KeyError, TypeError, StateError) as exc:
+        # The journal is the only record of a refused boot start: name the gate.
+        print(f"external Codex start refused: {refusal_reason(exc)}", file=sys.stderr)
         return 1
     return 0
 

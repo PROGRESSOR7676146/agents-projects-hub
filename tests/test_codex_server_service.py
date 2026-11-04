@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import socket
 import tempfile
 import unittest
@@ -342,6 +343,44 @@ class BootStartTests(unittest.TestCase):
             self.assertRaises(ValueError),
         ):
             service.refuse_native_clients(self.manifest, proc)
+
+    def test_refusal_names_the_hidden_process_and_reaches_the_journal(self):
+        proc = self.proc([b"/usr/bin/example-agent"])
+        with (
+            patch.object(service.os, "readlink", side_effect=PermissionError),
+            self.assertRaisesRegex(ValueError, "custody unavailable: pid 10000000"),
+        ):
+            service.refuse_native_clients(self.manifest, proc)
+        shutil.rmtree(proc)
+        native = self.proc([b"/opt/example/codex", b"app-server"])
+        with self.assertRaisesRegex(ValueError, "client is running: codex$"):
+            service.refuse_native_clients(self.manifest, native)
+
+    def test_main_reports_the_specific_refusal_reason(self):
+        import contextlib
+        import io
+
+        reasons = (
+            (
+                ValueError("a native Codex or tlive client is running: codex"),
+                "client is running: codex",
+            ),
+            (
+                PermissionError(13, "denied", "/home/example/linger"),
+                "Permission denied: /home/example/linger",
+            ),
+            (KeyError("hub_git_sha"), "missing manifest field hub_git_sha"),
+        )
+        for error, expected in reasons:
+            stderr = io.StringIO()
+            with (
+                self.subTest(expected=expected),
+                patch.object(service, "private_json", side_effect=error),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self.assertEqual(service.main(["run", "--manifest", "/tmp/example-manifest"]), 1)
+            self.assertTrue(stderr.getvalue().startswith("external Codex start refused: "))
+            self.assertTrue(stderr.getvalue().endswith(f"{expected}\n"))
 
     def test_boot_start_requires_lingering(self):
         linger = self.root / "linger"

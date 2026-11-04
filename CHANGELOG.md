@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- A refused external Codex app-server start now names the refused gate in
+  its journal line, for example the hidden process or the kind of unsettled
+  work, instead of one generic message.
 - Quick successive Hub restarts no longer leave the Codex socket directory
   unit failed with `start-limit-hit`. It still prepares the directory on every
   dependent start.
