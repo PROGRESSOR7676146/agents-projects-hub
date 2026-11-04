@@ -22,6 +22,10 @@ from .state_errors import StateError
 from .unix_socket_diag import IncompleteEvidence, has_listener_for
 
 BOOT_MARKER = "agents-projects-hub-codex-start"
+# Readiness is bounded by the unit's TimeoutStartSec; this only stops a
+# forgotten manual run. A loaded boot needs minutes, not one (ADR 0088).
+READY_TIMEOUT_SECONDS = 270.0
+_verified_artifacts: dict[tuple[str, int, int, int, int, int], str] = {}
 
 
 def private_json(path: Path) -> dict:
@@ -47,6 +51,15 @@ def digest(value: dict) -> str:
     ).hexdigest()
 
 
+def _artifact_sha256(path: Path, info: os.stat_result) -> str:
+    """Stream the hash once per unchanged file and process; the Codex binary is large."""
+    key = (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    if key not in _verified_artifacts:
+        with path.open("rb") as stream:
+            _verified_artifacts[key] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return _verified_artifacts[key]
+
+
 def verify_manifest(manifest: dict) -> Path:
     """Static pins and home/socket relation; returns the expected socket path."""
     if manifest.get("version") != 1:
@@ -60,7 +73,7 @@ def verify_manifest(manifest: dict) -> Path:
             or path.resolve() != path
             or not stat.S_ISREG(info.st_mode)
             or info.st_mode & 0o222
-            or hashlib.sha256(path.read_bytes()).hexdigest() != pin["sha256"]
+            or _artifact_sha256(path, info) != pin["sha256"]
         ):
             raise ValueError(f"service artifact pin mismatch: {name}")
     home = Path(manifest["codex_home"])
@@ -229,11 +242,24 @@ def remove_previous_boot_link(socket_path: Path, booted_at: float) -> bool:
     return True
 
 
-def wait_ready(manifest: dict, *, timeout_seconds: float = 60.0) -> None:
-    """Return once a kernel listener serves the manifest socket; never connect."""
+def wait_ready(
+    manifest: dict,
+    *,
+    timeout_seconds: float = READY_TIMEOUT_SECONDS,
+    main_pid: int | None = None,
+    proc: Path = Path("/proc"),
+) -> None:
+    """Return once a kernel listener serves the manifest socket; never connect.
+
+    The wait covers the start gates as well as Codex itself, because systemd
+    runs this beside the main process. A main process that already exited
+    (a refused start) ends the wait at once.
+    """
     path = Path(manifest["socket_path"])
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        if main_pid is not None and not (proc / str(main_pid)).exists():
+            raise ValueError("Codex app-server exited before it listened")
         try:
             info = path.stat()
             if stat.S_ISSOCK(info.st_mode) and has_listener_for(info):
@@ -390,7 +416,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = private_json(args.manifest)
         if args.action == "ready":
-            wait_ready(manifest)
+            pid = os.environ.get("MAINPID", "")
+            wait_ready(manifest, main_pid=int(pid) if pid.isdigit() else None)
             return 0
         if not CURRENT_RELEASE.clean_tree or CURRENT_RELEASE.git_sha != manifest["hub_git_sha"]:
             raise ValueError("immutable Hub release pin mismatch")
@@ -411,7 +438,8 @@ def main(argv: list[str] | None = None) -> int:
         os.execv(binary, [binary, "app-server", "--listen", "unix://"])
     except (OSError, ValueError, KeyError, TypeError, StateError) as exc:
         # The journal is the only record of a refused boot start: name the gate.
-        print(f"external Codex start refused: {refusal_reason(exc)}", file=sys.stderr)
+        outcome = "readiness failed" if args.action == "ready" else "start refused"
+        print(f"external Codex {outcome}: {refusal_reason(exc)}", file=sys.stderr)
         return 1
     return 0
 

@@ -366,7 +366,9 @@ first start attempt of each boot authorize itself without a receipt
 The Controller, the Hub workers, the Codex bot and tlive order themselves
 `After=` the unit, without depending on it. Its `ready` step waits for kernel
 listener evidence, never a client connection, so they start only after the
-server listens. A refusal leaves the unit failed and the external
+server listens. That wait runs beside the start gates, which hash the pinned
+artifacts once each, so it allows minutes for a loaded boot and ends at once
+when the start is refused. A refusal leaves the unit failed and the external
 server down, with no retry; the monitor's `codex_app_server_unavailable` alert reports it, and
 recovery follows the manual procedure. The unit's journal line
 `external Codex start refused: <reason>` names the refused gate and, for a

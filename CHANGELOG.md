@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The boot-time Codex app-server start no longer fails on a slow, loaded
+  boot. Readiness now waits up to 270 seconds instead of 60 and ends at once
+  when the start is refused, and the pinned binary is hashed once, streamed,
+  instead of twice in memory. A readiness timeout is no longer reported as a
+  refused start.
 - A refused external Codex app-server start now names the refused gate in
   its journal line, for example the hidden process or the kind of unsettled
   work, instead of one generic message.

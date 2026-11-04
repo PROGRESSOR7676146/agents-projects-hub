@@ -10,8 +10,10 @@ Type=simple
 EnvironmentFile=-%h/.config/agents-projects-hub/environment
 ExecStart=%h/.local/share/agents-projects-hub/venv/bin/python -m hermes_codex_router.codex_server_service run --manifest %h/.config/agents-projects-hub/codex-server.json --receipt %h/.config/agents-projects-hub/codex-server-start.json
 # Readiness barrier: kernel listener evidence, never a client connection.
+# It runs beside the start gates, which hash the pinned binary; a loaded boot
+# can take minutes. It fails at once when the main process exits.
 ExecStartPost=%h/.local/share/agents-projects-hub/venv/bin/python -m hermes_codex_router.codex_server_service ready --manifest %h/.config/agents-projects-hub/codex-server.json
-TimeoutStartSec=90
+TimeoutStartSec=300
 Restart=no
 KillMode=mixed
 SendSIGKILL=no
