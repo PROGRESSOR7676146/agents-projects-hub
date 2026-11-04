@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -25,6 +26,8 @@ BOOT_MARKER = "agents-projects-hub-codex-start"
 # A readiness budget, not a bound on the start job: the unit's TimeoutStartSec
 # must exceed it, and a loaded boot can need minutes, not one (ADR 0088).
 READY_TIMEOUT_SECONDS = 270.0
+# How long a process may hide its executable, as during fork-to-exec, before it refuses.
+CUSTODY_SETTLE_SECONDS = 2.0
 
 
 def private_json(path: Path) -> dict:
@@ -93,6 +96,41 @@ def verify_pins(manifest: dict, verified: Path | None = None) -> None:
         _private_directory(expected.parent)
 
 
+def _user_manager(argv: list[bytes]) -> bool:
+    return argv[:1] == [b"(sd-pam)"] or (
+        bool(argv) and os.path.basename(argv[0]) == b"systemd" and b"--user" in argv
+    )
+
+
+def _read_process(path: Path) -> tuple[list[bytes], bytes] | None:
+    """(argv, executable) of a same-UID process, or None when it is not one.
+
+    A process caught between the service manager's fork and its exec can hide
+    its executable for a moment; only one that stays unreadable for
+    CUSTODY_SETTLE_SECONDS refuses. A vanished process is proven absence.
+    """
+    deadline = time.monotonic() + CUSTODY_SETTLE_SECONDS
+    while True:
+        argv: list[bytes] = []
+        try:
+            if path.stat().st_uid != os.getuid():
+                return None
+            argv = (path / "cmdline").read_bytes().split(b"\0")
+            try:
+                return argv, os.fsencode(os.readlink(path / "exe"))
+            except FileNotFoundError:
+                return argv, b""  # Kernel thread or exited after cmdline.
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        except PermissionError:
+            # Only the non-dumpable per-user manager may hide its executable for good.
+            if _user_manager(argv):
+                return argv, b""
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
 def _same_uid_processes(proc: Path) -> list[tuple[str, list[bytes], bytes]]:
     """(pid, argv, executable) of other same-UID processes; unreadable custody refuses."""
     found = []
@@ -100,25 +138,12 @@ def _same_uid_processes(proc: Path) -> list[tuple[str, list[bytes], bytes]]:
         if not path.name.isdigit() or int(path.name) == os.getpid():
             continue
         try:
-            if path.stat().st_uid != os.getuid():
-                continue
-            argv = (path / "cmdline").read_bytes().split(b"\0")
-            try:
-                executable = os.fsencode(os.readlink(path / "exe"))
-            except FileNotFoundError:
-                executable = b""  # Kernel thread or exited after cmdline.
-            except PermissionError:
-                # Only the non-dumpable per-user manager may hide its executable.
-                if argv[:1] != [b"(sd-pam)"] and not (
-                    os.path.basename(argv[0]) == b"systemd" and b"--user" in argv
-                ):
-                    raise
-                executable = b""
-            found.append((path.name, argv, executable))
-        except (FileNotFoundError, ProcessLookupError):
-            continue  # Proven process disappearance, not an unreadable live process.
-        except OSError:
-            raise ValueError(f"process custody unavailable: pid {path.name}") from None
+            process = _read_process(path)
+        except OSError as exc:
+            reason = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+            raise ValueError(f"process custody unavailable: pid {path.name} ({reason})") from None
+        if process is not None:
+            found.append((path.name, *process))
     return found
 
 

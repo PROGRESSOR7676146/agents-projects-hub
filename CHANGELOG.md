@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The boot-time Codex app-server start no longer refuses because a service
+  that systemd is starting at the same moment briefly hides its executable.
+  Such a process is checked again for up to two seconds, and refuses only if
+  it stays unreadable. The refusal names the error.
+
 ## [0.11.1] - 2026-11-04
 
 - The boot-time Codex app-server start allows a slow, loaded boot. Its

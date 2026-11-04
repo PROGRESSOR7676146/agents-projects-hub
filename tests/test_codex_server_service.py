@@ -131,7 +131,10 @@ class CodexServerServiceTests(unittest.TestCase):
         service.refuse_existing_servers(root)
         with patch.object(Path, "read_bytes", side_effect=ProcessLookupError("vanished")):
             service.refuse_existing_servers(root)
-        with patch.object(Path, "read_bytes", side_effect=PermissionError("unavailable")):
+        with (
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
+            patch.object(Path, "read_bytes", side_effect=PermissionError("unavailable")),
+        ):
             with self.assertRaisesRegex(ValueError, "custody unavailable"):
                 service.refuse_existing_servers(root)
 
@@ -354,14 +357,27 @@ class BootStartTests(unittest.TestCase):
     def test_any_other_hidden_executable_fails_closed(self):
         proc = self.proc([b"worker"])
         with (
-            patch.object(service.os, "readlink", side_effect=PermissionError),
-            self.assertRaises(ValueError),
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
+            patch.object(service.os, "readlink", side_effect=PermissionError(13, "denied")),
+            self.assertRaisesRegex(ValueError, r"custody unavailable: pid 10000000 \(EACCES\)"),
         ):
+            service.refuse_native_clients(self.manifest, proc)
+
+    def test_executable_hidden_only_between_fork_and_exec_is_rechecked(self):
+        # The service manager names a forked child "(unit)" until it execs.
+        proc = self.proc([b"(example-unit)"])
+        hidden_then_codex = [PermissionError(13, "denied"), "/opt/example/codex"]
+        with patch.object(service.os, "readlink", side_effect=hidden_then_codex):
+            with self.assertRaisesRegex(ValueError, "client is running: pid 10000000"):
+                service.refuse_native_clients(self.manifest, proc)
+        hidden_then_other = [PermissionError(13, "denied"), "/usr/bin/example-agent"]
+        with patch.object(service.os, "readlink", side_effect=hidden_then_other):
             service.refuse_native_clients(self.manifest, proc)
 
     def test_refusal_names_the_hidden_process_and_reaches_the_journal(self):
         proc = self.proc([b"/usr/bin/example-agent"])
         with (
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
             patch.object(service.os, "readlink", side_effect=PermissionError),
             self.assertRaisesRegex(ValueError, "custody unavailable: pid 10000000"),
         ):
