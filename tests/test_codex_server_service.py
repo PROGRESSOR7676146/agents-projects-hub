@@ -131,7 +131,10 @@ class CodexServerServiceTests(unittest.TestCase):
         service.refuse_existing_servers(root)
         with patch.object(Path, "read_bytes", side_effect=ProcessLookupError("vanished")):
             service.refuse_existing_servers(root)
-        with patch.object(Path, "read_bytes", side_effect=PermissionError("unavailable")):
+        with (
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
+            patch.object(Path, "read_bytes", side_effect=PermissionError("unavailable")),
+        ):
             with self.assertRaisesRegex(ValueError, "custody unavailable"):
                 service.refuse_existing_servers(root)
 
@@ -354,14 +357,95 @@ class BootStartTests(unittest.TestCase):
     def test_any_other_hidden_executable_fails_closed(self):
         proc = self.proc([b"worker"])
         with (
-            patch.object(service.os, "readlink", side_effect=PermissionError),
-            self.assertRaises(ValueError),
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
+            patch.object(service.os, "readlink", side_effect=PermissionError(13, "denied")),
+            self.assertRaisesRegex(ValueError, r"custody unavailable: pid 10000000 \(EACCES\)"),
         ):
             service.refuse_native_clients(self.manifest, proc)
+
+    def test_transient_denial_is_rechecked_before_classifying(self):
+        # A mocked retry: one denied read, then a readable executable.
+        proc = self.proc([b"(example-unit)"])
+        hidden_then_codex = [PermissionError(13, "denied"), "/opt/example/codex"]
+        with patch.object(service.os, "readlink", side_effect=hidden_then_codex):
+            with self.assertRaisesRegex(ValueError, "client is running: pid 10000000"):
+                service.refuse_native_clients(self.manifest, proc)
+        hidden_then_other = [PermissionError(13, "denied"), "/usr/bin/example-agent"]
+        with patch.object(service.os, "readlink", side_effect=hidden_then_other):
+            service.refuse_native_clients(self.manifest, proc)
+
+    def test_a_title_changed_during_the_recheck_still_refuses(self):
+        proc = self.proc([b"placeholder"])
+        cases = (
+            (
+                lambda: service.refuse_native_clients(self.manifest, proc),
+                b"/usr/bin/python3\0/opt/example/tlive-daemon.py\0",
+                "client is running: pid 10000000",
+            ),
+            (
+                lambda: service.refuse_existing_servers(proc),
+                b"/opt/example/agent\0app-server\0",
+                "existing app-server requires separate ownership reconciliation: pid 10000000",
+            ),
+        )
+        for check, first_title, refusal in cases:
+            with (
+                self.subTest(refusal=refusal),
+                patch.object(
+                    Path, "read_bytes", side_effect=[first_title, b"example-benign-worker\0"]
+                ),
+                patch.object(
+                    service.os,
+                    "readlink",
+                    side_effect=[PermissionError(13, "denied"), "/usr/bin/example-worker"],
+                ),
+                self.assertRaisesRegex(ValueError, refusal),
+            ):
+                check()
+
+    def test_one_deadline_bounds_the_whole_inventory(self):
+        # Each process is denied for about 0.15 s, within a per-process window
+        # of 0.2 s, so only a deadline shared by the inventory refuses.
+        proc = self.proc(*([b"worker"] for _ in range(5)))
+        denials: dict[str, int] = {}
+
+        def transiently_denied(path):
+            denials[str(path)] = denials.get(str(path), 0) + 1
+            if denials[str(path)] <= 3:
+                raise PermissionError(13, "denied")
+            return "/usr/bin/example-worker"
+
+        started = time.monotonic()
+        with (
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.2),
+            patch.object(service.os, "readlink", side_effect=transiently_denied),
+            self.assertRaisesRegex(ValueError, "custody unavailable"),
+        ):
+            service.refuse_existing_servers(proc)
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_denial_refusal_carries_only_kernel_set_identity(self):
+        proc = self.proc([b"worker"])
+        (proc / "10000000" / "status").write_text(
+            "Name:\texample\nPPid:\t42\nCapPrm:\t0000000800000000\n"
+            "CapEff:\t0000000000000000\nUid:\t1000\t1000\t1000\t1000\n",
+            encoding="ascii",
+        )
+        with (
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
+            patch.object(service.os, "readlink", side_effect=PermissionError(13, "denied")),
+            self.assertRaises(ValueError) as refused,
+        ):
+            service.refuse_native_clients(self.manifest, proc)
+        self.assertEqual(
+            str(refused.exception),
+            "process custody unavailable: pid 10000000 (EACCES, ppid 42, CapPrm 0000000800000000)",
+        )
 
     def test_refusal_names_the_hidden_process_and_reaches_the_journal(self):
         proc = self.proc([b"/usr/bin/example-agent"])
         with (
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
             patch.object(service.os, "readlink", side_effect=PermissionError),
             self.assertRaisesRegex(ValueError, "custody unavailable: pid 10000000"),
         ):

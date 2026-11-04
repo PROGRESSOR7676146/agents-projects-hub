@@ -354,7 +354,13 @@ first start attempt of each boot authorize itself without a receipt
 - requires user lingering, so the runtime directory lives for the whole boot;
 - proves closed clients itself and fails closed: no same-UID process may run
   any Codex or tlive installation (by executable, program or script name), name
-  a pinned artifact, or carry an `app-server` argument;
+  a pinned artifact, or carry an `app-server` argument. A process that denies
+  reading its executable is read again until a deadline of two seconds shared
+  by the whole scan. It refuses if it is still denied, and every title seen
+  while waiting is checked, not only the last. The user manager and
+  `(sd-pam)` are the only permanent exceptions. The refusal names the PID,
+  the error, and the kernel-set parent PID and permitted capabilities, so
+  that the process can be identified afterwards;
 - removes only an owned link at the exact manifest socket path whose target is
   gone and which predates the current boot. The real socket lived on a
   filesystem the reboot cleared. A socket, a regular file, a live link or a

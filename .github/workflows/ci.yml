@@ -18,7 +18,7 @@ jobs:
 
   # Informational trend report; the required gate is the validation matrix.
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7

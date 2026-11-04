@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -25,6 +26,9 @@ BOOT_MARKER = "agents-projects-hub-codex-start"
 # A readiness budget, not a bound on the start job: the unit's TimeoutStartSec
 # must exceed it, and a loaded boot can need minutes, not one (ADR 0088).
 READY_TIMEOUT_SECONDS = 270.0
+# How long one process inventory waits for same-UID processes that deny reading
+# their executable. One such denial of unknown cause refused a boot start (ADR 0088).
+CUSTODY_SETTLE_SECONDS = 2.0
 
 
 def private_json(path: Path) -> dict:
@@ -93,40 +97,87 @@ def verify_pins(manifest: dict, verified: Path | None = None) -> None:
         _private_directory(expected.parent)
 
 
-def _same_uid_processes(proc: Path) -> list[tuple[str, list[bytes], bytes]]:
-    """(pid, argv, executable) of other same-UID processes; unreadable custody refuses."""
+def _user_manager(argv: list[bytes]) -> bool:
+    return argv[:1] == [b"(sd-pam)"] or (
+        bool(argv) and os.path.basename(argv[0]) == b"systemd" and b"--user" in argv
+    )
+
+
+def _read_process(path: Path, deadline: float) -> tuple[list[list[bytes]], bytes] | None:
+    """(every argv observed, executable) of a same-UID process, or None if not one.
+
+    A denied read is retried until the shared deadline, for a transient denial
+    whose cause is not yet identified. A process that is still denied refuses.
+    Every argv seen while retrying is returned, so a title that changes during
+    the wait cannot hide a client. A vanished process is proven absence.
+    """
+    seen: list[list[bytes]] = []
+    while True:
+        argv: list[bytes] = []
+        try:
+            if path.stat().st_uid != os.getuid():
+                return None
+            argv = (path / "cmdline").read_bytes().split(b"\0")
+            if argv not in seen:
+                seen.append(argv)
+            try:
+                return seen, os.fsencode(os.readlink(path / "exe"))
+            except FileNotFoundError:
+                return seen, b""  # Kernel thread or exited after cmdline.
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        except PermissionError:
+            # The per-user manager holds a capability its reader lacks, and
+            # (sd-pam) is non-dumpable: both hide their executable for good.
+            if _user_manager(argv):
+                return seen, b""
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+def _kernel_identity(path: Path) -> str:
+    """Kernel-set PPid and CapPrm of a process, to identify a denial later."""
+    try:
+        status = (path / "status").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return ""
+    fields = dict(line.split(":\t", 1) for line in status.splitlines() if ":\t" in line)
+    found = [
+        f"{label} {value}"
+        for label, key in (("ppid", "PPid"), ("CapPrm", "CapPrm"))
+        if (value := fields.get(key, "").strip()).isalnum()
+    ]
+    return "".join(f", {item}" for item in found)
+
+
+def _same_uid_processes(proc: Path) -> list[tuple[str, list[list[bytes]], bytes]]:
+    """(pid, observed argvs, executable) of other same-UID processes.
+
+    Unreadable custody refuses. One deadline bounds the whole inventory.
+    """
+    deadline = time.monotonic() + CUSTODY_SETTLE_SECONDS
     found = []
     for path in proc.iterdir():
         if not path.name.isdigit() or int(path.name) == os.getpid():
             continue
         try:
-            if path.stat().st_uid != os.getuid():
-                continue
-            argv = (path / "cmdline").read_bytes().split(b"\0")
-            try:
-                executable = os.fsencode(os.readlink(path / "exe"))
-            except FileNotFoundError:
-                executable = b""  # Kernel thread or exited after cmdline.
-            except PermissionError:
-                # Only the non-dumpable per-user manager may hide its executable.
-                if argv[:1] != [b"(sd-pam)"] and not (
-                    os.path.basename(argv[0]) == b"systemd" and b"--user" in argv
-                ):
-                    raise
-                executable = b""
-            found.append((path.name, argv, executable))
-        except (FileNotFoundError, ProcessLookupError):
-            continue  # Proven process disappearance, not an unreadable live process.
-        except OSError:
-            raise ValueError(f"process custody unavailable: pid {path.name}") from None
+            process = _read_process(path, deadline)
+        except OSError as exc:
+            reason = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+            raise ValueError(
+                f"process custody unavailable: pid {path.name} ({reason}{_kernel_identity(path)})"
+            ) from None
+        if process is not None:
+            found.append((path.name, *process))
     return found
 
 
 def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
     """Conservative same-UID process inventory; unreadable custody refuses start."""
     # Refusals name only the PID: process titles are writable, unredacted data.
-    for pid, argv, _ in _same_uid_processes(proc):
-        if b"app-server" in argv:
+    for pid, argvs, _ in _same_uid_processes(proc):
+        if any(b"app-server" in argv for argv in argvs):
             raise ValueError(
                 f"existing app-server requires separate ownership reconciliation: pid {pid}"
             )
@@ -140,9 +191,10 @@ def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
     ``tlive`` refuses, as does any argument naming a pinned artifact.
     """
     pinned = {os.fsencode(manifest[name]["path"]) for name in ("codex_binary", "tlive_daemon")}
-    for pid, argv, executable in _same_uid_processes(proc):
-        names = [os.path.basename(item).lower() for item in (executable, *argv[:2]) if item]
-        if pinned.intersection(argv) or any(
+    for pid, argvs, executable in _same_uid_processes(proc):
+        heads = [item for argv in argvs for item in argv[:2]]
+        names = [os.path.basename(item).lower() for item in (executable, *heads) if item]
+        if any(pinned.intersection(argv) for argv in argvs) or any(
             name.startswith(b"codex") or b"tlive" in name for name in names
         ):
             raise ValueError(f"a native Codex or tlive client is running: pid {pid}")
