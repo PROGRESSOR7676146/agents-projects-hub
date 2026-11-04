@@ -5,10 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
-- The boot-time Codex app-server start no longer refuses because a service
-  that systemd is starting at the same moment briefly hides its executable.
-  Such a process is checked again for up to two seconds, and refuses only if
-  it stays unreadable. The refusal names the error.
+- The boot-time Codex app-server start reads a same-UID process again when
+  reading its executable is denied, until a two-second deadline shared by the
+  whole scan. A boot start was refused once by such a denial, from a process
+  not yet identified. A process that is still denied refuses, and a client
+  title seen at any point refuses too. The refusal now names the error and the
+  process's kernel-set parent PID and permitted capabilities.
 - CI runs the validation matrix and coverage on Ubuntu 24.04 instead of
   `ubuntu-latest`, which moved to 26.04 with symlinked coreutils that the
   namespace test fixtures refuse.
