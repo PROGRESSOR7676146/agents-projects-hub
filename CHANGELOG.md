@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-04
+
 - The boot-time Codex app-server start allows a slow, loaded boot. Its
   readiness budget grows from 60 to 270 seconds under a 300-second start
   timeout, and normally ends as soon as a refused start exits. The pinned
