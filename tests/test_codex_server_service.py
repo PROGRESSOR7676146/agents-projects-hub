@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +70,18 @@ class CodexServerServiceTests(unittest.TestCase):
         path.unlink()  # Test fixture only; production code has no unlink.
         self.manifest["codex_binary"]["sha256"] = "0" * 64
         with self.assertRaisesRegex(ValueError, "pin mismatch"):
+            service.verify_pins(self.manifest)
+
+    def test_prepare_reuses_a_verification_from_the_same_start(self):
+        expected = service.verify_manifest(self.manifest)
+        with patch.object(service, "verify_manifest") as again:
+            service.verify_pins(self.manifest, expected)
+        again.assert_not_called()
+        binary = Path(self.manifest["codex_binary"]["path"])
+        binary.chmod(0o700)
+        binary.write_bytes(b"replaced binary")
+        binary.chmod(0o500)
+        with self.assertRaisesRegex(ValueError, "pin mismatch: codex_binary"):
             service.verify_pins(self.manifest)
 
     def test_active_uncertain_work_and_unsettled_controls_refuse_start(self):
@@ -313,7 +327,9 @@ class BootStartTests(unittest.TestCase):
             clients.assert_called_once_with(self.manifest)
             servers.assert_called_once_with()
             cleanup.assert_called_once_with(self.socket, 1.0)
-            prepare.assert_called_once_with(self.manifest, clients_closed=True)
+            prepare.assert_called_once_with(
+                self.manifest, clients_closed=True, verified=self.socket
+            )
             with self.assertRaises(ValueError):
                 service.authorize_start(self.manifest, self.root / "absent-receipt", self.runtime)
             self.assertEqual(prepare.call_count, 1)
@@ -342,6 +358,50 @@ class BootStartTests(unittest.TestCase):
             self.assertRaises(ValueError),
         ):
             service.refuse_native_clients(self.manifest, proc)
+
+    def test_refusal_names_the_hidden_process_and_reaches_the_journal(self):
+        proc = self.proc([b"/usr/bin/example-agent"])
+        with (
+            patch.object(service.os, "readlink", side_effect=PermissionError),
+            self.assertRaisesRegex(ValueError, "custody unavailable: pid 10000000"),
+        ):
+            service.refuse_native_clients(self.manifest, proc)
+        shutil.rmtree(proc)
+        native = self.proc([b"codex --token=EXAMPLE-SECRET\nforged line", b"app-server"])
+        for check in (
+            lambda: service.refuse_native_clients(self.manifest, native),
+            lambda: service.refuse_existing_servers(native),
+        ):
+            with self.assertRaises(ValueError) as refused:
+                check()
+            self.assertTrue(str(refused.exception).endswith(": pid 10000000"))
+            self.assertNotIn("EXAMPLE-SECRET", str(refused.exception))
+
+    def test_main_reports_the_specific_refusal_reason(self):
+        import contextlib
+        import io
+
+        reasons = (
+            (
+                ValueError("a native Codex or tlive client is running: pid 42"),
+                "client is running: pid 42",
+            ),
+            (
+                PermissionError(13, "denied", "/home/example/linger"),
+                "Permission denied: /home/example/linger",
+            ),
+            (KeyError("hub_git_sha"), "missing manifest field hub_git_sha"),
+        )
+        for error, expected in reasons:
+            stderr = io.StringIO()
+            with (
+                self.subTest(expected=expected),
+                patch.object(service, "private_json", side_effect=error),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self.assertEqual(service.main(["run", "--manifest", "/tmp/example-manifest"]), 1)
+            self.assertTrue(stderr.getvalue().startswith("external Codex start refused: "))
+            self.assertTrue(stderr.getvalue().endswith(f"{expected}\n"))
 
     def test_boot_start_requires_lingering(self):
         linger = self.root / "linger"
@@ -390,6 +450,38 @@ class BootStartTests(unittest.TestCase):
             with patch.object(service, "has_listener_for", return_value=True) as listener:
                 service.wait_ready(manifest, timeout_seconds=1)
             listener.assert_called_once()
+
+    def test_readiness_ends_at_once_when_the_main_process_exited(self):
+        manifest = dict(socket_path=str(self.root / "s.sock"))
+        proc = self.root / "proc"
+        (proc / "4242").mkdir(parents=True)
+        started = time.monotonic()
+        with self.assertRaisesRegex(ValueError, "exited before it listened"):
+            service.wait_ready(manifest, timeout_seconds=30, main_pid=4343, proc=proc)
+        self.assertLess(time.monotonic() - started, 5)
+        with self.assertRaisesRegex(ValueError, "did not become ready"):
+            service.wait_ready(manifest, timeout_seconds=0.3, main_pid=4242, proc=proc)
+
+    def test_ready_failure_is_not_reported_as_a_refused_start(self):
+        import contextlib
+        import io
+
+        stderr = io.StringIO()
+        with (
+            patch.object(service, "private_json", return_value={}),
+            patch.object(service, "wait_ready", side_effect=ValueError("not ready")),
+            patch.dict(service.os.environ, {"MAINPID": "4242"}),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(service.main(["ready", "--manifest", "/tmp/example-manifest"]), 1)
+        self.assertEqual(stderr.getvalue(), "external Codex readiness failed: not ready\n")
+
+    def test_unit_start_timeout_covers_the_readiness_wait(self):
+        root = Path(__file__).resolve().parents[1]
+        unit = (root / "systemd/agents-projects-hub-codex-app-server.service").read_text()
+        timeout = int(unit.split("TimeoutStartSec=", 1)[1].split()[0])
+        self.assertGreater(timeout, service.READY_TIMEOUT_SECONDS)
+        self.assertGreaterEqual(service.READY_TIMEOUT_SECONDS, 240)
 
     def test_unit_is_opt_in_ordered_and_waits_for_readiness(self):
         root = Path(__file__).resolve().parents[1]

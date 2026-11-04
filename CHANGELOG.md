@@ -5,6 +5,15 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The boot-time Codex app-server start allows a slow, loaded boot. Its
+  readiness budget grows from 60 to 270 seconds under a 300-second start
+  timeout, and normally ends as soon as a refused start exits. The pinned
+  binary is hashed once per start, streamed, instead of twice in memory.
+  Deployments must install the new base unit or carry the timeout in their
+  drop-in.
+- A refused external Codex app-server start now names the refused gate in its
+  journal line, with only a PID for a process check. A readiness timeout is
+  reported as such, not as a refused start.
 - Quick successive Hub restarts no longer leave the Codex socket directory
   unit failed with `start-limit-hit`. It still prepares the directory on every
   dependent start.

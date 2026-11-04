@@ -22,6 +22,9 @@ from .state_errors import StateError
 from .unix_socket_diag import IncompleteEvidence, has_listener_for
 
 BOOT_MARKER = "agents-projects-hub-codex-start"
+# A readiness budget, not a bound on the start job: the unit's TimeoutStartSec
+# must exceed it, and a loaded boot can need minutes, not one (ADR 0088).
+READY_TIMEOUT_SECONDS = 270.0
 
 
 def private_json(path: Path) -> dict:
@@ -47,6 +50,12 @@ def digest(value: dict) -> str:
     ).hexdigest()
 
 
+def _artifact_sha256(path: Path) -> str:
+    """Stream the hash; the pinned Codex binary is hundreds of megabytes."""
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def verify_manifest(manifest: dict) -> Path:
     """Static pins and home/socket relation; returns the expected socket path."""
     if manifest.get("version") != 1:
@@ -60,9 +69,9 @@ def verify_manifest(manifest: dict) -> Path:
             or path.resolve() != path
             or not stat.S_ISREG(info.st_mode)
             or info.st_mode & 0o222
-            or hashlib.sha256(path.read_bytes()).hexdigest() != pin["sha256"]
+            or _artifact_sha256(path) != pin["sha256"]
         ):
-            raise ValueError("service artifact pin mismatch")
+            raise ValueError(f"service artifact pin mismatch: {name}")
     home = Path(manifest["codex_home"])
     if not home.is_absolute() or home.resolve() != home or not home.is_dir():
         raise ValueError("invalid Codex home")
@@ -75,16 +84,17 @@ def verify_manifest(manifest: dict) -> Path:
     return expected
 
 
-def verify_pins(manifest: dict) -> None:
-    expected = verify_manifest(manifest)
+def verify_pins(manifest: dict, verified: Path | None = None) -> None:
+    """``verified`` is the result of a verify_manifest already run in this start."""
+    expected = verify_manifest(manifest) if verified is None else verified
     if os.path.lexists(expected):
         raise ValueError("existing socket or path requires separate ownership reconciliation")
     if expected.parent.exists():
         _private_directory(expected.parent)
 
 
-def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
-    """(argv, executable) of all other same-UID processes; unreadable custody refuses."""
+def _same_uid_processes(proc: Path) -> list[tuple[str, list[bytes], bytes]]:
+    """(pid, argv, executable) of other same-UID processes; unreadable custody refuses."""
     found = []
     for path in proc.iterdir():
         if not path.name.isdigit() or int(path.name) == os.getpid():
@@ -104,19 +114,22 @@ def _same_uid_processes(proc: Path) -> list[tuple[list[bytes], bytes]]:
                 ):
                     raise
                 executable = b""
-            found.append((argv, executable))
+            found.append((path.name, argv, executable))
         except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
         except OSError:
-            raise ValueError("process custody unavailable") from None
+            raise ValueError(f"process custody unavailable: pid {path.name}") from None
     return found
 
 
 def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
     """Conservative same-UID process inventory; unreadable custody refuses start."""
-    for argv, _ in _same_uid_processes(proc):
+    # Refusals name only the PID: process titles are writable, unredacted data.
+    for pid, argv, _ in _same_uid_processes(proc):
         if b"app-server" in argv:
-            raise ValueError("existing app-server requires separate ownership reconciliation")
+            raise ValueError(
+                f"existing app-server requires separate ownership reconciliation: pid {pid}"
+            )
 
 
 def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
@@ -127,12 +140,12 @@ def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
     ``tlive`` refuses, as does any argument naming a pinned artifact.
     """
     pinned = {os.fsencode(manifest[name]["path"]) for name in ("codex_binary", "tlive_daemon")}
-    for argv, executable in _same_uid_processes(proc):
+    for pid, argv, executable in _same_uid_processes(proc):
         names = [os.path.basename(item).lower() for item in (executable, *argv[:2]) if item]
         if pinned.intersection(argv) or any(
             name.startswith(b"codex") or b"tlive" in name for name in names
         ):
-            raise ValueError("a native Codex or tlive client is running")
+            raise ValueError(f"a native Codex or tlive client is running: pid {pid}")
 
 
 def boot_identity(proc: Path = Path("/proc")) -> tuple[str, float]:
@@ -222,11 +235,24 @@ def remove_previous_boot_link(socket_path: Path, booted_at: float) -> bool:
     return True
 
 
-def wait_ready(manifest: dict, *, timeout_seconds: float = 60.0) -> None:
-    """Return once a kernel listener serves the manifest socket; never connect."""
+def wait_ready(
+    manifest: dict,
+    *,
+    timeout_seconds: float = READY_TIMEOUT_SECONDS,
+    main_pid: int | None = None,
+    proc: Path = Path("/proc"),
+) -> None:
+    """Return once a kernel listener serves the manifest socket; never connect.
+
+    The wait covers the start gates as well as Codex itself, because systemd
+    runs this beside the main process. A main process that already exited
+    (a refused start) ends the wait at once.
+    """
     path = Path(manifest["socket_path"])
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        if main_pid is not None and not (proc / str(main_pid)).exists():
+            raise ValueError("Codex app-server exited before it listened")
         try:
             info = path.stat()
             if stat.S_ISSOCK(info.st_mode) and has_listener_for(info):
@@ -265,12 +291,16 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
             "SELECT 1 FROM agent_sessions WHERE agent_id='codex' AND writer_mode!='telegram' "
             "AND status IN ('active','satellite') LIMIT 1"
         ).fetchone()
-        if controls or writers:
-            raise ValueError("active or unknown Codex work blocks service start")
+        if controls:
+            raise ValueError("active or unknown Codex work blocks service start: turn control")
+        if writers:
+            raise ValueError("active or unknown Codex work blocks service start: native writer")
         completions: dict[tuple[str, str], frozenset[str]] = {}
         for job in busy:
             if codex_home is None or job["status"] != "indeterminate":
-                raise ValueError("active or unknown Codex work blocks service start")
+                raise ValueError(
+                    f"active or unknown Codex work blocks service start: {job['status']} job"
+                )
             checkpoint = db.execute(
                 "SELECT c.provider_thread_id,c.provider_turn_id,c.project_root "
                 "FROM provider_jobs j JOIN provider_execution_checkpoints c USING(job_id) "
@@ -282,20 +312,26 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
                 (job["job_id"],),
             ).fetchone()
             if checkpoint is None or not checkpoint["provider_turn_id"]:
-                raise ValueError("active or unknown Codex work blocks service start")
+                raise ValueError(
+                    "active or unknown Codex work blocks service start: indeterminate job"
+                )
             key = checkpoint["provider_thread_id"], checkpoint["project_root"]
             if key not in completions:
                 completions[key] = completed_rollout_turns(codex_home, *key)
             if checkpoint["provider_turn_id"] not in completions[key]:
-                raise ValueError("active or unknown Codex work blocks service start")
+                raise ValueError(
+                    "active or unknown Codex work blocks service start: indeterminate job"
+                )
     finally:
         db.close()
 
 
-def prepare(manifest: dict, *, clients_closed: bool, now: float | None = None) -> dict:
+def prepare(
+    manifest: dict, *, clients_closed: bool, now: float | None = None, verified: Path | None = None
+) -> dict:
     if not clients_closed:
         raise ValueError("explicit closed-native-clients assertion required")
-    verify_pins(manifest)
+    verify_pins(manifest, verified)
     refuse_existing_servers()
     require_idle_state(Path(manifest["state_path"]), codex_home=Path(manifest["codex_home"]))
     timestamp = time.time() if now is None else now
@@ -346,14 +382,26 @@ def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> 
     """
     boot, booted_at = boot_identity()
     first = claim_first_start(runtime_dir, boot)
+    verified = None
     if not _receipt_valid(manifest, receipt):
         if not first:
             raise ValueError("a fresh start receipt is required after the first start of a boot")
         require_lingering()
         refuse_native_clients(manifest)
         refuse_existing_servers()
-        remove_previous_boot_link(verify_manifest(manifest), booted_at)
-    prepare(manifest, clients_closed=True)
+        # Hash the pins once per start: the same verification gates the cleanup and prepare.
+        verified = verify_manifest(manifest)
+        remove_previous_boot_link(verified, booted_at)
+    prepare(manifest, clients_closed=True, verified=verified)
+
+
+def refusal_reason(exc: BaseException) -> str:
+    if isinstance(exc, OSError):
+        detail = os.strerror(exc.errno) if exc.errno else type(exc).__name__
+        return f"{detail}: {exc.filename}" if exc.filename else detail
+    if isinstance(exc, KeyError):
+        return f"missing manifest field {exc.args[0] if exc.args else ''}"
+    return str(exc) or type(exc).__name__
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -366,7 +414,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = private_json(args.manifest)
         if args.action == "ready":
-            wait_ready(manifest)
+            pid = os.environ.get("MAINPID", "")
+            wait_ready(manifest, main_pid=int(pid) if pid.isdigit() else None)
             return 0
         if not CURRENT_RELEASE.clean_tree or CURRENT_RELEASE.git_sha != manifest["hub_git_sha"]:
             raise ValueError("immutable Hub release pin mismatch")
@@ -385,11 +434,10 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["CODEX_HOME"] = manifest["codex_home"]
         binary = manifest["codex_binary"]["path"]
         os.execv(binary, [binary, "app-server", "--listen", "unix://"])
-    except (OSError, ValueError, KeyError, TypeError, StateError):
-        print(
-            "external Codex start refused; inspect pins, custody and exact idle evidence",
-            file=sys.stderr,
-        )
+    except (OSError, ValueError, KeyError, TypeError, StateError) as exc:
+        # The journal is the only record of a refused boot start: name the gate.
+        outcome = "readiness failed" if args.action == "ready" else "start refused"
+        print(f"external Codex {outcome}: {refusal_reason(exc)}", file=sys.stderr)
         return 1
     return 0
 
