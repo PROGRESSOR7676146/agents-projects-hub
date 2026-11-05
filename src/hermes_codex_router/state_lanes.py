@@ -22,6 +22,22 @@ class LaneState:
         if not self._connection.in_transaction:
             raise StateError("lane mutation requires a caller-owned transaction")
 
+    def needs_scope_reconciliation(self) -> bool:
+        """Read-only startup check; HubState rechecks candidates under its write lock."""
+        return (
+            self._connection.execute(
+                """SELECT 1 FROM topics
+                   LEFT JOIN worktree_lanes lanes
+                     ON lanes.topic_id = topics.topic_id AND lanes.status = 'active'
+                   WHERE COALESCE(NULLIF(topics.execution_scope, ''),
+                                  'project:' || topics.project_id) = 'project:' || topics.project_id
+                      OR (lanes.worktree_path IS NOT NULL
+                          AND topics.execution_scope IS NOT ('root:' || lanes.worktree_path))
+                   LIMIT 1"""
+            ).fetchone()
+            is not None
+        )
+
     def register_in_transaction(
         self,
         *,

@@ -5,6 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Startup scope reconciliation avoids taking SQLite's writer lock when all
+  topic and active-lane bindings are already current. Required normalization
+  and mismatch checks still run under the existing atomic write transaction.
+- Runtime-event retention deletes only rows outside the retained window instead
+  of checking every retained row for deletion, reducing work under the shared
+  writer lock without changing the 30-day/10,000-row limits.
+
 ## [0.11.2] - 2026-11-04
 
 - The boot-time Codex app-server start reads a same-UID process again when
