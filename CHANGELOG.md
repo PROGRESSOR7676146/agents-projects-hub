@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-11-07
+
 - The Claude `workstation` profile no longer refuses projects with hardlinked
   virtual environments, special files or more than 100,000 entries, matching
   Codex. Bind aliases with the session HOME are still refused (ADR 0091).
