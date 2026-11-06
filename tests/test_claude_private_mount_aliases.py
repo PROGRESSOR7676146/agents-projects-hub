@@ -298,6 +298,20 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
                 with self.launch():
                     self.fail("private path replacement escaped its pinned identity")
 
+    def test_session_home_bind_alias_of_the_project_is_refused_without_a_tree_scan(self) -> None:
+        # Workstation skips the project walk, so mount coordinates alone must
+        # still refuse a HOME that exposes project files under another name.
+        workstation = dataclasses.replace(self.config, profile="workstation")
+        for config in (self.config, workstation):
+            for origin in (self.project / "subtree", self.project.parent):
+                with self.subTest(profile=config.profile, origin=origin):
+                    with self.alias(self.home, origin):
+                        with self.assertRaisesRegex(
+                            sandbox.FileToolSandboxError, "session-home tree mount roles overlap"
+                        ):
+                            with self.wrap(config):
+                                self.fail("project alias became a session HOME")
+
     def test_independent_bind_coordinate_on_same_filesystem_is_allowed(self) -> None:
         with self.alias(self.project, self.base / "independent"):
             with self.wrap():

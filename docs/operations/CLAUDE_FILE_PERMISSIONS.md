@@ -134,7 +134,8 @@ Paths are fictional and must be explicit canonical sources. The worker also
 excludes Hub state, registry, bot token files, the transport key file, tlive home and tlive
 socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
-hardlinks/special files in writable trees and nested mounts. Multiply linked
+hardlinks/special files in writable trees and nested mounts; in `workstation`
+the project is not scanned for hardlinks or special files (see below). Multiply linked
 regular runtime/hook files are also refused: readonly exposure is still a
 confidentiality boundary. Runtime distributions containing hardlinks require
 narrower compatible sources; immutability alone does not waive this check. Runtime and hook
@@ -152,8 +153,9 @@ its remote URL. To repair an existing clone, replace each multiply linked file u
 `.git/objects` with a copy of itself (copy to a temporary name in the same directory,
 keep its mode, then rename it over the original) and rerun `git fsck`. The writable-tree
 scan also refuses a tree with more than 100,000 entries, hidden `.hub/work` included;
-keep dependency, build and tool caches such as uv caches or `__pycache__` trees
-outside the project. Missing isolation or
+for `editor` and `developer`, keep dependency, build and tool caches such as uv caches
+or `__pycache__` trees outside the project. These hardlink, special-file and size
+rules do not apply to the `workstation` project. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
 
 For the optional developer candidate, add `"profile": "developer"` to that
@@ -174,9 +176,16 @@ stays visible, so resolvers and Docker sockets work as for other agents; the
 permission socket is at `/tmp/hub-permission.sock`, and
 foreground Bash runs without a card. Nested user namespaces work, so the
 commit gate runs inside it; modules that launch the real root-owned runtime
-skip there and run in CI and on the host. The host root is shown, not trust-scanned,
-so the filesystem checks below apply to the writable and runtime mounts only.
-See [ADR 0081](../decisions/0081-claude-workstation-host-view.md).
+skip there and run in CI and on the host. The host root, the project and its
+linked-worktree Git directories are shown, not trust-scanned: hardlinked
+virtual environments, sockets, FIFOs and trees of any size work there as for
+Codex. A write through a hardlink changes every name of that file, including
+names outside the project. The session HOME and runtime mounts keep their
+scans, and a bind alias between the project and the session HOME is refused.
+The filesystem checks below still apply to the project, session HOME, Git,
+runtime and toolchain sources; the read-only host root stays outside them. See
+[ADR 0081](../decisions/0081-claude-workstation-host-view.md) and
+[ADR 0091](../decisions/0091-workstation-project-not-trust-scanned.md).
 
 All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
 NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;

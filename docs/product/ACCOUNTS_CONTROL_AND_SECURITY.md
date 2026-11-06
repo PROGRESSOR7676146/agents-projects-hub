@@ -230,6 +230,9 @@ refuse before inference; exact-session failure MUST NOT create a replacement.
     supplementary-group access; this accepts trusted-host risk, not isolation.
   - Its persistent writes MUST stay within project, admitted Git metadata and session HOME; private
     paths MUST NOT overlap writable/trusted mounts and inherited read-only mounts MUST stay locked.
+  - Workstation MUST admit hardlinks, special files and large trees in the project and admitted Git
+    metadata without a per-entry scan, as for Codex; a write through a hardlink can reach a file
+    outside the project. Bind aliases between writable sources and session HOME MUST still refuse.
   - Workstation preauthorizes validated Bash with current binding/stop checks and single-use journal
     entries, without fabricated human receipts or wait notices; push/deploy/service changes remain
     owner decisions by policy.

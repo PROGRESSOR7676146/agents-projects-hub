@@ -321,13 +321,14 @@ by empty readonly mount, incoming/staging available.
 [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
 
 Workstation source/live-pending: host readonly, writes project/admitted Git/session
-HOME at host path. Missing `.hub/work` created then readonly, not hidden. Namespace
+HOME at host path. Missing `.hub/work` created, readonly, not hidden. Namespace
 `/dev/proc/tmp`, host `/run` readonly preserves resolver/host sockets incl Docker/
 supplementary groups; host `/tmp` sockets absent. Permission socket
-`/tmp/hub-permission.sock`. Nested user namespaces/writable proc user maps permit
+`/tmp/hub-permission.sock`. Nested userns/writable proc user maps permit
 commit gates with inherited mounts locked readonly. Each Bash validates fields/
 bindings/stop and single-use Allow journal, without human receipt/wait.
-[ADR 0081](../decisions/0081-claude-workstation-host-view.md).
+[ADR 0081](../decisions/0081-claude-workstation-host-view.md),
+[0091](../decisions/0091-workstation-project-not-trust-scanned.md).
 
 Trust: worker/tlive receipt base; same-UID/admin can read keys/state, forge symmetric
 receipts, interfere. Unconfined Codex/OpenCode/Antigravity/native Hermes share this

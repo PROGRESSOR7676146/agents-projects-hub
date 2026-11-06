@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -11,7 +12,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from hermes_codex_router import process_namespace as namespace
 from hermes_codex_router.process_namespace import (
     NamespaceError,
     NamespaceRuntime,
@@ -254,6 +257,69 @@ class HostViewWitnessTests(unittest.TestCase):
             # A missing operational directory is created first, then guarded.
             self.assertTrue((project / ".hub" / "work").is_dir())
             self.assertFalse((project / ".hub" / "work" / "new-file").exists())
+
+    def test_workstation_project_is_shown_not_trust_scanned(self) -> None:
+        # Like Codex workspace-write, a real checkout with hardlinked
+        # dependencies, FIFOs or many entries admits; confined profiles do not.
+        for case in ("hardlink", "fifo", "large"):
+            for host_view in (True, False):
+                with self.subTest(case=case, host_view=host_view):
+                    config, project, outside = self._validation_config(host_view)
+                    if case == "hardlink":
+                        (outside / "cache.py").write_text("shared", encoding="utf-8")
+                        os.link(outside / "cache.py", project / "venv.py")
+                    elif case == "fifo":
+                        os.mkfifo(project / "pipe")
+                    else:
+                        for index in range(4):
+                            (project / f"file-{index}").write_text("x", encoding="utf-8")
+                    with patch.object(namespace, "_MAX_WRITABLE_ENTRIES", 3):
+                        if host_view:
+                            self._validate(config)
+                        else:
+                            with self.assertRaises(NamespaceError):
+                                self._validate(config)
+
+    def test_workstation_still_scans_the_session_home(self) -> None:
+        config, _, outside = self._validation_config(True)
+        (outside / "token").write_text("fictional", encoding="utf-8")
+        os.link(outside / "token", config.session_home / "token")
+        with self.assertRaisesRegex(NamespaceError, "hardlink"):
+            self._validate(config)
+
+    def _validation_config(self, host_view: bool) -> tuple[ProcessNamespaceConfig, Path, Path]:
+        bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
+        require_namespace_runtime(self, bwrap)
+        python, roots = _python_runtime()
+        if not all(path.exists() for path in roots):
+            namespace_unavailable(self, "system Python runtime fixture unavailable")
+        base = Path(tempfile.mkdtemp(prefix="example-scan-", dir=Path.home()))
+        self.addCleanup(shutil.rmtree, base, True)
+        project, outside, home = (base / name for name in ("project", "outside", "home"))
+        for path in (project, outside, home):
+            path.mkdir(mode=0o700)
+        (project / ".git").mkdir()
+        (project / ".git" / "HEAD").write_text("fictional-head", encoding="utf-8")
+        try:
+            runtime = NamespaceRuntime(bwrap, python, roots)
+        except NamespaceError:
+            namespace_unavailable(self, "system runtime is not immutable to worker")
+        config = ProcessNamespaceConfig(
+            runtime,
+            project,
+            home,
+            (base / "authority",),
+            project_access="read-write",
+            network="shared",
+            host_view=host_view,
+        )
+        return config, project, outside
+
+    @staticmethod
+    def _validate(config: ProcessNamespaceConfig) -> None:
+        python = str(config.runtime.executable)
+        with config.wrap((python, "-c", "pass"), {}, config.project_root):
+            pass  # Validation only; nothing is launched.
 
     def test_host_view_requires_a_writable_project(self) -> None:
         with self.assertRaisesRegex(NamespaceError, "writable project"):
