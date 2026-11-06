@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import delivery_control_cli, delivery_hold_cli
+from . import delivery_control_cli, delivery_hold_cli, installed_backup_cli
 from .acceptance_actor import (
     AcceptanceActorError,
     load_acceptance_actor_config,
@@ -38,6 +38,7 @@ from .indeterminate_audit import (
     classify_indeterminate_jobs,
     write_private_indeterminate_report,
 )
+from .installed_backup import backup_installation
 from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
@@ -166,6 +167,7 @@ def _parser() -> argparse.ArgumentParser:
         "release-manifest", help="create or verify an immutable deployment manifest"
     )
     manifest_commands = release_manifest.add_subparsers(dest="manifest_command", required=True)
+    installed_backup_cli.add_manifest_parsers(manifest_commands)
     manifest_create = manifest_commands.add_parser("create")
     manifest_create.add_argument("manifest", type=Path)
     manifest_create.add_argument("--active-artifact", required=True, type=Path)
@@ -191,6 +193,7 @@ def _parser() -> argparse.ArgumentParser:
     backup = commands.add_parser("backup", help="create an SQLite-consistent state backup")
     backup.add_argument("state", type=Path)
     backup.add_argument("destination", nargs="?", type=Path)
+    backup.add_argument("--installed-manifest", type=Path)
 
     monitor = commands.add_parser("monitor", help="evaluate operational alerts once")
     monitor.add_argument("config", type=Path)
@@ -683,6 +686,9 @@ def _release_info_command(args: argparse.Namespace) -> int:
 
 
 def _release_manifest_command(args: argparse.Namespace) -> int:
+    if args.manifest_command in {"installed", "inspect-backup"}:
+        _print({"ok": True, **installed_backup_cli.inspect_command(args)})
+        return 0
     if args.manifest_command == "create":
         manifest = create_deployment_manifest(
             args.manifest,
@@ -716,6 +722,18 @@ def _migrate_command(args: argparse.Namespace) -> int:
 
 
 def _backup_command(args: argparse.Namespace) -> int:
+    if args.installed_manifest is not None:
+        if args.destination is None:
+            raise ValueError("installed backup requires an exclusive destination directory")
+        _print(
+            {
+                "ok": True,
+                **backup_installation(
+                    args.installed_manifest, args.destination, state_path=args.state
+                ),
+            }
+        )
+        return 0
     destination = backup_database(args.state, args.destination)
     _print({"ok": True, "backup_path": str(destination)})
     return 0

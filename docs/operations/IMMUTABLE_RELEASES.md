@@ -100,6 +100,10 @@ Manifest verification proves artifact identity and schema compatibility only.
 It does not prove queue drain, service convergence, Telegram behavior, or a
 live rollout.
 
+The [installed backup input](INSTALLED_BACKUP.md) extends these entries with
+passive installed-file/process readback and exclusive SQLite snapshots. It does
+not turn a preactivation manifest into proof of successful installation.
+
 ## Reproducible runtime dependencies
 
 `requirements-release.lock` is the hash-locked runtime plus `e2e` dependency

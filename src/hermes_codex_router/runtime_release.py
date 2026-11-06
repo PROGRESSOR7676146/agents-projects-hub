@@ -127,6 +127,29 @@ def release_digest(root: Path) -> str:
     The standalone updater implements this format without importing Hub.
     """
     _ancestors(root)
+    return _tree_digest(root)
+
+
+def installed_runtime_digest(root: Path) -> str:
+    """Inspect an already installed sealed user/root-owned runtime, without writes.
+
+    This does not relax UserRuntimeRelease's user-owned direct-child contract.
+    The installed release procedure separately binds the digest to provenance.
+    """
+    _canonical(root)
+    _require(root.is_dir(), "installed runtime must be a directory")
+    for path in (root, *root.parents):
+        info = path.stat()
+        sticky = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+        _require(
+            info.st_uid in {0, os.geteuid()} and (not info.st_mode & 0o022 or sticky),
+            "installed runtime has unsafe ancestors",
+        )
+        _no_acl(path)
+    return _tree_digest(root)
+
+
+def _tree_digest(root: Path) -> str:
     result = hashlib.sha256()
     for path in _entries(root):
         info = path.lstat()

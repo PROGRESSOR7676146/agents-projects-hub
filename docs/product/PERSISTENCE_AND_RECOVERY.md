@@ -69,6 +69,16 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
   artifacts, configuration, consistent backup and target schema; both executables MUST support
   retained state and use the candidate's hash-locked dependencies. Manifest preparation/checking
   MUST remain read-only, without migration, services or provider calls.
+  - A native versioned installed backup description MUST bind supported configured consumers to
+    accepted artifact provenance and verified installed bytes, distinguishing installed files,
+    observed process identities and schema compatibility from runtime acceptance. Unknown inputs
+    MUST refuse without replacing old operations. Schema-compatible mixed backup consumers MUST
+    remain visible without forcing convergence or changing independent component ownership.
+  - Installed snapshots MUST retain original intent and uncertain outcomes, use bounded consistent
+    native backup and support read-only original-result inspection without replay. Captured and
+    uncaptured recovery scope MUST be explicit; archive/storage/scheduling ownership stays external.
+    The first source slice does not complete installation publication or foreign-state-consumer
+    compatibility integration (ADR 0090).
 - **REQ-OPS-011 (Implemented as an offline dry-run):** Release acceptance MUST rehearse candidate
   migration and distinct compatible runtime rollback entirely under temporary state, proving queued,
   outbox and uncertain work unchanged. It MUST NOT access deployment state, providers, Telegram or

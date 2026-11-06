@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add a native installed-deployment backup input with artifact-bound passive
+  readback, visible mixed revisions and retained inspectable SQLite snapshots.
+  Installation publication and full recovery adoption remain pending.
+
 - Development validation reports flushed per-module progress in completion
   order. Optional Linux low-load mode caps parallelism at two and lowers CPU
   and I/O priorities for the validator and its children, preserving all gates.

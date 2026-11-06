@@ -141,6 +141,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                     for name in (
                         "__init__.py",
                         "migrations.py",
+                        "database_backup.py",
                         "migration_sql.py",
                         "models.py",
                         "registry.py",
