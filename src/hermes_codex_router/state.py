@@ -579,17 +579,17 @@ class HubState:
         return self._topic(row)
 
     def reconcile_legacy_execution_scopes(self, project_roots: Mapping[str, Path]) -> int:
-        """Atomically replace trusted legacy project scopes with canonical roots.
-
-        The mapping is supplied only by the locally loaded registry.  Active
-        worktree bindings are evidence of a distinct lane and are never
-        rewritten by this compatibility pass.
-        """
+        """Normalize trusted legacy scopes without rewriting active worktree lanes."""
         canonical = {
             _bounded(project_id, name="project id", maximum=48): "root:"
             + _bounded(str(root.resolve()), name="execution root", maximum=4096)
             for project_id, root in project_roots.items()
         }
+        if (
+            not self._connection.in_transaction
+            and not self._lane_state.needs_scope_reconciliation()
+        ):
+            return 0
         changed = 0
         with self._immediate_transaction():
             rows = self._connection.execute(
@@ -2754,9 +2754,9 @@ class HubState:
             )
             self._connection.execute(
                 """DELETE FROM runtime_events
-                   WHERE event_id NOT IN (
+                   WHERE event_id IN (
                      SELECT event_id FROM runtime_events
-                     ORDER BY created_at DESC, event_id DESC LIMIT ?
+                     ORDER BY created_at DESC, event_id DESC LIMIT -1 OFFSET ?
                    )""",
                 (RUNTIME_EVENT_MAX_COUNT,),
             )
