@@ -182,7 +182,8 @@ virtual environments, sockets, FIFOs and trees of any size work there as for
 Codex. A write through a hardlink changes every name of that file, including
 names outside the project. The session HOME and runtime mounts keep their
 scans, and a bind alias between the project and the session HOME is refused.
-The filesystem checks below still apply to every mount source. See
+The filesystem checks below still apply to the project, session HOME, Git,
+runtime and toolchain sources; the read-only host root stays outside them. See
 [ADR 0081](../decisions/0081-claude-workstation-host-view.md) and
 [ADR 0091](../decisions/0091-workstation-project-not-trust-scanned.md).
 
