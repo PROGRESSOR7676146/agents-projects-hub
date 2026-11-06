@@ -21,7 +21,7 @@ Scoped installed/native checks remain open under
 [finite installation checklist](CLAUDE_CUSTODY.md). Global same-UID/admin custody
 is not claimed; the former infrastructure study is stopped.
 Next trigger: [revised delivery scope](#revised-delivery-scope) and the
-[continuation plan](NEXT_DEVELOPMENT_SESSION.md); live/ADR 0048 work stays separate.
+[continuation plan](NEXT_DEVELOPMENT_SESSION.md); live/[backup adoption](INSTALLED_BACKUP.md) stays separate.
 Keep deployment and live evidence private.
 
 ## Trusted-installation execution

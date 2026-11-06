@@ -6,8 +6,7 @@ Release: v0.11.2
 Source checkpoint: [0.8.0](../operations/RELEASE_0_8_0.md); earlier entries
 are historical. The PR/tag own combined source gates; live acceptance is separate.
 
-This file describes repository capabilities only. It intentionally contains no
-operator deployment inventory or live conversation evidence.
+Repository capabilities only; deployment inventory and live evidence stay private.
 
 ## Capability summary
 
@@ -45,6 +44,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | Registered-project editing (schema 29) | Implemented offline | Pending canary | [REQ-PROJECT-EDIT-001](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0027](../decisions/0027-no-silent-session-rebind-on-project-relocation.md) |
 | Scoped acceptance actor | Implemented | Live authorization pending | [AC-F-011](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md) |
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
+| Installed backup | Source slice | Adoption pending | [Contract](../operations/INSTALLED_BACKUP.md) |
 | Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
 | Application recovery/handoff | Planned; full-host infrastructure externally owned | Bounded Hub restore pending; host drill not claimed | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
 | Incidents | Journal + default-off notices/dismiss; Analyze open | Pending | [REQ-OPS-013/014](../product/PERSISTENCE_AND_RECOVERY.md), [runbook](../operations/HERMES_INCIDENT_NOTICES.md) |

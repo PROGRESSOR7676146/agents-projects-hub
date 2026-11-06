@@ -5,10 +5,10 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from .database_backup import backup_database as backup_database
 from .migration_sql import _execute_migration_script
 from .schema_claude_activity import CLAUDE_ACTIVITY_SCHEMA as MIGRATION_42
 from .schema_claude_corrections import CLAUDE_CORRECTIONS_SCHEMA as MIGRATION_55
@@ -1367,53 +1367,6 @@ class MigrationResult:
     previous_version: int
     current_version: int
     backup_path: Path | None
-
-
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
-def backup_database(source: Path, destination: Path | None = None) -> Path:
-    source = source.expanduser().resolve(strict=True)
-    if not source.is_file():
-        raise FileNotFoundError(source)
-    if destination is None:
-        destination = source.with_name(f"{source.name}.backup-{_timestamp()}")
-    destination = destination.expanduser().resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if destination.exists():
-        raise FileExistsError(destination)
-    source_connection = sqlite3.connect(source)
-    destination_connection: sqlite3.Connection | None = None
-    failed = False
-    try:
-        destination_connection = sqlite3.connect(destination)
-        source_connection.backup(destination_connection)
-        check = destination_connection.execute("PRAGMA integrity_check").fetchone()
-        if check is None or check[0] != "ok":
-            raise RuntimeError("SQLite backup integrity check failed")
-    except BaseException:
-        failed = True
-        raise
-    finally:
-        if destination_connection is not None:
-            try:
-                destination_connection.close()
-            except sqlite3.Error:
-                pass
-        try:
-            source_connection.close()
-        except sqlite3.Error:
-            pass
-        if failed and destination_connection is not None:
-            # Only remove a destination we opened, and only after releasing handles.
-            # Cleanup failure must not replace the original backup error.
-            try:
-                destination.unlink(missing_ok=True)
-            except OSError:
-                pass
-    os.chmod(destination, 0o600)
-    return destination
 
 
 def _ensure_legacy_columns(connection: sqlite3.Connection) -> None:
