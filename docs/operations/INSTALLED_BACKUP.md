@@ -54,6 +54,13 @@ installed root and its sealed-tree SHA-256. `package_root` must be its
 `venv/lib/python*/site-packages/hermes_codex_router` directory. Exact package
 files must match the selected wheel; the complete sealed runtime reuses the
 existing structured [tree digest](PREPARED_RELEASE_SWITCHER.md).
+The runtime pin detects drift in locally accepted bytes; it does not authenticate
+dependencies against the release lock. The venv must exclude system packages,
+declare its Python version in `pyvenv.cfg` and contain one matching import site.
+Independent `lib64`, alternate Hub entries, editable finders, `.pth` files,
+customization hooks and Hub bytecode caches refuse. This constrained layout
+binds the checked package to the declared interpreter import site; the reader
+never executes a discovered interpreter to inspect it.
 
 Supported launch: the pinned runtime's `venv/bin/python -I -B -m
 hermes_codex_router.cli`, then the real command and installed config. Worker
@@ -63,6 +70,12 @@ Controller, optional monitor, configured sender/provisioner and every external
 worker slot are derived from configuration. No credentials are loaded.
 Unexpected active Hub services, duplicate/missing consumers, incompatible state
 paths and unknown direct-message databases refuse.
+Native discovery covers active user-manager services and declared auxiliaries;
+it cannot establish absence of unmanaged/system-manager DB readers. The owning
+installation inventory must cover those integrations before adoption. A timer
+oneshot starting or ending during readback can cause a safe refusal; this entry
+does not stop it or automatically retry. Non-worker options remain the owning
+CLI's contract and are pinned verbatim in the accepted record.
 
 An auxiliary record has `unit`, `owner`, `required`, `uses_hub_state`, `argv` and
 an `executable` file descriptor. Owners are `codex/tlive`, `cpa` or `hermes`;
@@ -103,6 +116,11 @@ saves immutable `PENDING.json`, uses native SQLite backup with a bounded busy
 deadline, and checks schema plus the complete installation fingerprint again.
 Only then does it fsync `receipt.json`. Without the flag the legacy file backup
 invocation retains its behavior.
+Before copying, it fsyncs PENDING, its directory and that directory's parent;
+after the receipt it fsyncs the snapshot directory again before acknowledgement.
+Directory-sync failure remains an uncertain operation and receives no success.
+Continuous writes may restart SQLite's paged copy and exhaust the deadline;
+failure preserves the source and pending directory, without automatic replay.
 
 A failed/interrupted operation keeps its directory and PENDING. Another invocation
 on that directory refuses; it never resumes, deletes or overwrites it. Inspection
@@ -110,6 +128,11 @@ checks original snapshots against the receipt without the current installation.
 A lost response can therefore be inspected after another upgrade. Malformed or
 partial receipts refuse; an absent receipt remains pending. New Hub publication
 does not change another product's PENDING or authorize replay.
+Inspection's `ok` indicates a successful read; callers must check `status` for
+completion. Receipts are private local evidence, not authenticated remote ACKs;
+the original installation binding and exact snapshot hashes are checked. Retain
+the preactivation backup referenced by each provenance manifest: native manifest
+verification still requires it. Dependency-aware retention must preserve it.
 
 ## Evidence and remaining delivery
 

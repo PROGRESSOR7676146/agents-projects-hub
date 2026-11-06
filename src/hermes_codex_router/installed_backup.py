@@ -190,7 +190,12 @@ def _installed_package(root: Any, artifact: ArtifactDescriptor) -> None:
                 and path.read_bytes() == archive.read(member),
                 "installed package differs from accepted artifact",
             )
-    actual = {p for p in package.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+    paths = tuple(package.rglob("*"))
+    _require(
+        not any(p.name == "__pycache__" or p.suffix in {".pyc", ".pyo"} for p in paths),
+        "installed Hub package contains unverified bytecode",
+    )
+    actual = {p for p in paths if p.is_file()}
     _require(actual == names, "installed package contains unaccepted artifact files")
 
 
@@ -216,6 +221,56 @@ def _process(
         "installed process identity drift",
     )
     return {"status": "active", "start_marker": observed["start_marker"]}
+
+
+def _import_site(root: Path, executable: Path) -> Path:
+    venv = root / "venv"
+    configuration: dict[str, str] = {}
+    for line in _regular_file(venv / "pyvenv.cfg").read_text().splitlines():
+        name, separator, value = line.partition("=")
+        if separator:
+            name = name.strip().lower()
+            _require(name not in configuration, "duplicate installed venv setting")
+            configuration[name] = value.strip()
+    version = re.fullmatch(
+        r"(\d+)\.(\d+)(?:\.\d+)?[a-zA-Z0-9.+-]*", configuration.get("version", "")
+    )
+    _require(version is not None, "installed venv requires its Python version")
+    assert version is not None
+    minor = f"{version[1]}.{version[2]}"
+    _require(
+        configuration.get("include-system-site-packages", "").lower() == "false",
+        "installed venv must exclude system site-packages",
+    )
+    named_version = re.fullmatch(r"python(\d+)\.(\d+)[a-z]*", executable.name)
+    _require(
+        named_version is None or f"{named_version[1]}.{named_version[2]}" == minor,
+        "installed interpreter and venv Python versions differ",
+    )
+    lib = venv / "lib"
+    lib64 = venv / "lib64"
+    _require(
+        not (lib64.exists() or lib64.is_symlink())
+        or (lib64.is_symlink() and lib64.resolve(strict=True) == lib),
+        "installed venv has an independent lib64",
+    )
+    sites = tuple(lib.glob("python*/site-packages"))
+    _require(
+        len(sites) == 1 and sites[0].parent.name == f"python{minor}",
+        "installed venv must have one version-matched site-packages",
+    )
+    site = sites[0]
+    _require(site.is_dir() and site.resolve(strict=True) == site, "invalid installed import site")
+    _require(
+        not any(
+            p.suffix == ".pth"
+            or p.name.startswith(("__editable__", "sitecustomize", "usercustomize"))
+            or (p.name.startswith("hermes_codex_router") and p.name != "hermes_codex_router")
+            for p in site.iterdir()
+        ),
+        "installed import site has unsupported redirects or alternate Hub entries",
+    )
+    return site
 
 
 def _runtime(record: dict[str, Any], config: HubConfig, verified: set[tuple[str, str]]) -> None:
@@ -248,6 +303,10 @@ def _runtime(record: dict[str, Any], config: HubConfig, verified: set[tuple[str,
     _require(
         isinstance(argv, list) and argv and Path(python).resolve(strict=True) == executable,
         "process executable is not from the accepted runtime",
+    )
+    _require(
+        package.parent == _import_site(root, executable),
+        "installed package is not in the interpreter import site",
     )
     prefix = [python, "-I", "-B", "-m", "hermes_codex_router.cli"]
     _require(
@@ -468,6 +527,14 @@ def _write(path: Path, value: Any) -> None:
         os.fsync(stream.fileno())
 
 
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def backup_installation(
     path: Path,
     destination: Path,
@@ -490,6 +557,8 @@ def backup_installation(
             "snapshot already exists; inspect PENDING.json and receipt.json"
         ) from exc
     _write(output / "PENDING.json", {"status": "pending", "installation": before})
+    _sync_directory(output)
+    _sync_directory(output.parent)
     snapshots = {}
     for name, database in before["databases"].items():
         target = backup_database(
@@ -512,11 +581,7 @@ def backup_installation(
         "complete_recovery_set": False,
     }
     _write(output / "receipt.json", receipt)
-    descriptor = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    _sync_directory(output)
     return receipt
 
 
@@ -535,6 +600,20 @@ def inspect_backup(destination: Path) -> dict[str, Any]:
     if not receipt_path.exists():
         return {"status": "pending", "installation": pending["installation"]}
     receipt = _json(_regular_file(receipt_path, private=True))
+    _require(
+        set(receipt)
+        == {
+            "status",
+            "schema_version",
+            "installation",
+            "databases",
+            "captured_scope",
+            "complete_recovery_set",
+        }
+        and receipt["captured_scope"] == "sqlite-only"
+        and receipt["complete_recovery_set"] is False,
+        "unsupported snapshot receipt fields or recovery scope",
+    )
     _require(
         receipt.get("status") == "complete"
         and type(receipt.get("schema_version")) is int

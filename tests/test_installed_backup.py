@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -93,6 +94,9 @@ class InstalledBackupTests(unittest.TestCase):
             executable = runtime / "venv/bin/python"
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"fictional fixture interpreter; never executed\n")
+            (runtime / "venv/pyvenv.cfg").write_text(
+                "version = 3.11.0\ninclude-system-site-packages = false\n"
+            )
             for p in sorted(runtime.rglob("*"), reverse=True):
                 p.chmod(0o500 if p.is_dir() or p == executable else 0o400)
             runtime.chmod(0o500)
@@ -175,6 +179,51 @@ class InstalledBackupTests(unittest.TestCase):
     def observe(self, units: tuple[str, ...]) -> dict:
         return self.units
 
+    def add_runtime_file(self, relative: str, text: str) -> None:
+        runtime = self.packages["active"].parents[4]
+        for p in (runtime, *runtime.rglob("*")):
+            if p.is_dir():
+                p.chmod(0o700)
+        target = runtime / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.chmod(0o600)
+        target.write_text(text)
+        for p in (*sorted(runtime.rglob("*"), reverse=True), runtime):
+            p.chmod(p.stat().st_mode & ~0o222)
+        digest = installed_runtime_digest(runtime)
+        for record in self.document["components"]:
+            if record["runtime"]["root"] == str(runtime):
+                record["runtime"]["sha256"] = digest
+        self.write_spec()
+
+    def test_duplicate_python_import_sites_refuse_even_with_matching_pin(self) -> None:
+        self.add_runtime_file(
+            "venv/lib/python3.12/site-packages/hermes_codex_router/__init__.py", ""
+        )
+        with self.assertRaisesRegex(InstalledBackupError, "one version-matched site"):
+            describe_installation(self.spec, observe=self.observe)
+
+    def test_python_version_must_match_the_declared_import_site(self) -> None:
+        self.add_runtime_file(
+            "venv/pyvenv.cfg", "version = 3.12.0\ninclude-system-site-packages = false\n"
+        )
+        with self.assertRaisesRegex(InstalledBackupError, "one version-matched site"):
+            describe_installation(self.spec, observe=self.observe)
+
+    def test_import_redirect_refuses_even_with_matching_runtime_pin(self) -> None:
+        self.add_runtime_file("venv/lib/python3.11/site-packages/redirect.pth", "import sys\n")
+        with self.assertRaisesRegex(InstalledBackupError, "unsupported redirects"):
+            describe_installation(self.spec, observe=self.observe)
+
+    def test_unverified_bytecode_cannot_override_wheel_sources(self) -> None:
+        self.add_runtime_file(
+            "venv/lib/python3.11/site-packages/hermes_codex_router/__pycache__/module.pyc",
+            "fixture",
+        )
+        with self.assertRaisesRegex(InstalledBackupError, "unverified bytecode"):
+            describe_installation(self.spec, observe=self.observe)
+
     def test_versioned_description_checks_artifacts_and_derives_topology(self) -> None:
         result = describe_installation(self.spec, observe=self.observe)
         self.assertEqual(result["schema_version"], 1)
@@ -244,6 +293,47 @@ class InstalledBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(InstalledBackupError, "already exists"):
             backup_installation(self.spec, output, observe=self.observe)
         self.assertEqual(inspect_backup(output)["status"], "pending")
+
+    def test_intent_and_parent_are_synced_before_copy_and_receipt_before_ack(self) -> None:
+        from hermes_codex_router.database_backup import backup_database
+
+        output = self.root / "durable"
+        events = []
+        fsync = os.fsync
+
+        def sync(descriptor: int) -> None:
+            events.append(Path(os.readlink(f"/proc/self/fd/{descriptor}")))
+            fsync(descriptor)
+
+        def copy(*args, **kwargs):
+            events.append("copy")
+            return backup_database(*args, **kwargs)
+
+        with (
+            patch("hermes_codex_router.installed_backup.os.fsync", side_effect=sync),
+            patch("hermes_codex_router.installed_backup.backup_database", side_effect=copy),
+        ):
+            backup_installation(self.spec, output, observe=self.observe)
+        self.assertEqual(
+            events,
+            [output / "PENDING.json", output, self.root, "copy", output / "receipt.json", output],
+        )
+
+    def test_failed_parent_sync_retains_intent_without_copy_or_ack(self) -> None:
+        output = self.root / "unsynced"
+        fsync = os.fsync
+
+        def sync(descriptor: int) -> None:
+            if Path(os.readlink(f"/proc/self/fd/{descriptor}")) == self.root:
+                raise OSError("fixture failed parent fsync")
+            fsync(descriptor)
+
+        with patch("hermes_codex_router.installed_backup.os.fsync", side_effect=sync):
+            with self.assertRaisesRegex(OSError, "failed parent fsync"):
+                backup_installation(self.spec, output, observe=self.observe)
+        self.assertEqual(inspect_backup(output)["status"], "pending")
+        self.assertFalse((output / "shared.db").exists())
+        self.assertFalse((output / "receipt.json").exists())
 
     def test_config_drift_and_missing_provenance_refuse_before_writes(self) -> None:
         self.config.write_text(self.config.read_text() + "\n")
@@ -332,6 +422,18 @@ class InstalledBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(InstalledBackupError, "preactivation.*not installed inventory"):
             describe_installation(self.manifest, observe=self.observe)
 
+    def test_receipt_cannot_claim_full_recovery_or_omit_its_scope(self) -> None:
+        output = self.root / "receipt-scope"
+        original = backup_installation(self.spec, output, observe=self.observe)
+        for change in ({"complete_recovery_set": True}, {"captured_scope": "application"}, {}):
+            with self.subTest(change=change):
+                receipt = {**original, **change}
+                if not change:
+                    receipt.pop("complete_recovery_set")
+                (output / "receipt.json").write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(InstalledBackupError, "unsupported snapshot receipt"):
+                    inspect_backup(output)
+
     def test_unsupported_description_reports_version(self) -> None:
         self.document["schema_version"] = 900
         self.write_spec()
@@ -393,6 +495,9 @@ class InstalledBackupTests(unittest.TestCase):
             executable = runtime / "venv/bin/python"
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"fixture interpreter")
+            (runtime / "venv/pyvenv.cfg").write_text(
+                "version = 3.11.0\ninclude-system-site-packages = false\n"
+            )
             for p in sorted(runtime.rglob("*"), reverse=True):
                 p.chmod(0o500 if p.is_dir() or p == executable else 0o400)
             runtime.chmod(0o500)
