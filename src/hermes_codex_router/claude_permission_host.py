@@ -440,6 +440,7 @@ def hosted_claude_launch(
                 ),
                 profile=settings.profile,
                 toolchain=settings.toolchain,
+                user_releases=settings.user_releases,
             )
             with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
                 pass  # Validate and release source pins; invocation acquires its own set.

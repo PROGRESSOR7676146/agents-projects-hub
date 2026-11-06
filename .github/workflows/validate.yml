@@ -87,6 +87,7 @@ jobs:
           tests.test_review_materials_namespace
           tests.test_review_bridge_namespace
           tests.test_namespace_toolchain
+          tests.test_user_runtime_release
 
   tlive:
     runs-on: ubuntu-latest

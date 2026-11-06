@@ -44,6 +44,7 @@ live acceptance.
 - [Worker operations drain preparation](operations/WORKER_DRAIN_PREPARATION.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
 - [Release metadata synchronization](operations/RELEASE_METADATA.md)
+- [Prepared release switching candidate](operations/PREPARED_RELEASE_SWITCHER.md)
 - [Stabilization release 0.7.1](operations/STABILIZATION_RELEASE_0_7_1.md)
 - [tlive reliability and independent server custody](operations/TLIVE_RELIABILITY.md)
 - [Recovery plane](RECOVERY_PLANE.ru.md)

@@ -392,6 +392,8 @@ accumulated without live acceptance, contrary to product principle 10.
 | 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Done: #100 | ADR 0047; no schema change; host leftovers are a separate authorized task |
 | 4 | Release 0.8.0; branch and worktree hygiene | Source promotion authorized; cleanup separate | Release PR/tag |
 
+Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review and integration pending.
+
 ## Live-acceptance backlog
 
 - tlive approval surface and independent Codex server custody: exact-source review,

@@ -206,8 +206,16 @@ refuse before inference; exact-session failure MUST NOT create a replacement.
     session.
   - Toolchains MUST be bounded, trusted, read-only and separate from private
     authority/runtime/project/HOME; mutable tools, hardlinks and special files MUST refuse.
-  - Trusted hook/control code MUST retain root-owned validation; launch-local Git settings MUST
-    avoid automatic upstream/gc/maintenance without altering shared or sibling configuration.
+  - Trusted runtime/hook/control code MUST retain root-owned validation by default. An explicit
+    local configuration MAY instead pin up to eight disjoint, canonical user-owned version roots
+    directly under `releases`, each with an exact SHA-256 tree digest rechecked before every launch.
+    Such versions MUST be sealed read-only, owned only by the worker/root, without others-writable
+    ancestors, ACLs, hardlinks or special files; root-owned sticky temporary ancestors MAY be used.
+    External links MUST target immutable OS code under `/usr`. Read-only namespace mounts and all
+    private/project/HOME overlap checks MUST remain; bubblewrap itself MUST stay root-owned.
+    This alternative MUST NOT claim hostile-same-UID/admin isolation.
+  - Launch-local Git settings MUST avoid automatic upstream/gc/maintenance without altering shared
+    or sibling configuration.
   - An authorized text-only consultation MAY use one pinned route/model/effort with verified
     inference-only credentials and no paid fallback; no tools, sessions, writer, proxy, redirect or
     automatic retry.

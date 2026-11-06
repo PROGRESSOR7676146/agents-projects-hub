@@ -306,7 +306,7 @@ resume/rollback; no MCP/skills/plugins/children.
 Toolchain: bounded readonly root/worker-owned tools, PATH, visible Git-hook/Python/
 identity settings; pinned native-filesystem/tree checks, no others-writable tools,
 hardlinks/special files or overlap with private authority/runtime/project/HOME.
-Control/hooks root-owned immutable. Launch-local Git disables automatic upstream/
+Control/hooks follow REQ-SEC-008. Launch-local Git disables automatic upstream/
 gc/maintenance without shared/sibling config. Authorized separate consultation CLI:
 one bounded question at pinned CPA route/model/effort/response model, no tools/
 session/writer/proxy/redirect/retry/paid fallback; complete text only. Stop ends

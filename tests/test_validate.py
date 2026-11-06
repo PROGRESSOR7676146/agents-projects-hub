@@ -5,11 +5,15 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any
 from unittest.mock import patch
 
@@ -27,6 +31,7 @@ class ValidationTests(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
         os.environ.pop("HUB_VALIDATION_TEST_JOBS", None)
+        os.environ.pop("HUB_VALIDATION_LOW_LOAD", None)
 
     def invoke(self, args: list[str], failure: str = "") -> tuple[int, list[str], str]:
         calls: list[str] = []
@@ -109,6 +114,71 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL full tests", output)
         self.assertIn("test_example.py", output)
+
+    def test_low_load_preserves_gates_and_caps_cli_or_environment_parallelism(self) -> None:
+        with (
+            patch.object(validator, "enable_low_load", create=True) as enable,
+            patch.object(validator, "affected_test_modules", return_value=None),
+        ):
+            for profile in ("canonical", "commit"):
+                for explicit_jobs in ([], ["--jobs", "8"], ["--jobs", "1"]):
+                    with self.subTest(profile=profile, explicit_jobs=explicit_jobs):
+                        expected_jobs = "1" if explicit_jobs == ["--jobs", "1"] else "2"
+                        _, baseline, _ = self.invoke(
+                            ["--profile", profile, "--jobs", expected_jobs]
+                        )
+                        with patch.dict(os.environ, {"HUB_VALIDATION_TEST_JOBS": "16"}):
+                            code, calls, output = self.invoke(
+                                ["--profile", profile, "--low-load", *explicit_jobs]
+                            )
+                        self.assertEqual(code, 0)
+                        self.assertEqual(calls, baseline)
+                        self.assertIn("Low-load mode", output)
+                        self.assertIn(f"jobs={expected_jobs}", output)
+            self.assertEqual(enable.call_count, 6)
+
+    def test_low_load_environment_reaches_unchanged_hook_invocation_and_focused(self) -> None:
+        with (
+            patch.object(validator, "enable_low_load", create=True) as enable,
+            patch.dict(os.environ, {"HUB_VALIDATION_LOW_LOAD": "1"}),
+        ):
+            code, calls, output = self.invoke([])
+            self.assertEqual(code, 0)
+            self.assertIn("all test modules jobs=2", calls)
+            self.assertIn("Low-load mode", output)
+            code, calls, _ = self.invoke(["--profile", "focused", "tests.test_validate"])
+            self.assertEqual(code, 0)
+            self.assertFalse(any("pyright" in call or "test modules" in call for call in calls))
+            self.assertTrue(any("unittest test_validate -q" in call for call in calls))
+            self.assertEqual(enable.call_count, 2)
+
+    def test_invalid_low_load_environment_fails_before_stages_and_cli_overrides_it(self) -> None:
+        with patch.object(validator, "enable_low_load", create=True) as enable:
+            for value in ("", "yes", "2"):
+                with (
+                    self.subTest(value=value),
+                    patch.dict(os.environ, {"HUB_VALIDATION_LOW_LOAD": value}),
+                ):
+                    with self.assertRaises(SystemExit) as error:
+                        self.invoke([])
+                    self.assertEqual(error.exception.code, 2)
+                    enable.assert_not_called()
+                    code, _, _ = self.invoke(["--low-load"])
+                    self.assertEqual(code, 0)
+                    enable.reset_mock()
+
+    def test_low_load_setup_failure_and_test_failure_still_fail_the_gate(self) -> None:
+        with patch.object(
+            validator, "enable_low_load", side_effect=OSError("priority unavailable"), create=True
+        ):
+            code, calls, output = self.invoke(["--low-load"])
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, [])
+        self.assertIn("FAIL low-load setup", output)
+        with patch.object(validator, "enable_low_load", create=True):
+            code, _, output = self.invoke(["--low-load"], "all test modules")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL full tests", output)
 
     def test_environment_parallelism_keeps_full_gates_and_failure(self) -> None:
         with (
@@ -313,6 +383,94 @@ class TestModuleRunnerTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(textwrap.dedent(source), encoding="utf-8")
         return root
+
+    def test_progress_is_flushed_before_a_slow_module_finishes_even_on_failure(self) -> None:
+        root = self.fixture_root(
+            {
+                "test_a_slow.py": """
+                    import time
+                    import unittest
+                    from pathlib import Path
+
+                    class Slow(unittest.TestCase):
+                        def test_wait_for_observed_progress(self):
+                            deadline = time.monotonic() + 15
+                            while not Path('release').exists():
+                                if time.monotonic() >= deadline:
+                                    self.fail('progress was not observed before release')
+                                time.sleep(0.01)
+                """,
+                "test_z_fast.py": """
+                    import unittest
+
+                    class Fast(unittest.TestCase):
+                        def test_failure(self):
+                            self.fail('fictional regression')
+                """,
+            }
+        )
+        runner = (
+            "import importlib.util; from pathlib import Path; "
+            f"s=importlib.util.spec_from_file_location('validate', {validator.__file__!r}); "
+            "v=importlib.util.module_from_spec(s); s.loader.exec_module(v); "
+            f"v.run_test_modules(jobs=2, root=Path({str(root)!r}))"
+        )
+        # No -u: a newline without flush would remain buffered in this pipe.
+        process = subprocess.Popen(
+            [sys.executable, "-c", runner],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        assert process.stdout is not None
+        lines: Queue[str | None] = Queue()
+
+        def read_output() -> None:
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    lines.put(line)
+            finally:
+                lines.put(None)
+
+        reader = threading.Thread(target=read_output)
+        reader.start()
+        output: list[str] = []
+        try:
+            deadline = time.monotonic() + 12
+            while True:
+                try:
+                    line = lines.get(timeout=max(0.01, deadline - time.monotonic()))
+                except Empty:
+                    self.fail("no completion progress while slow module was waiting")
+                self.assertIsNotNone(line, "".join(output))
+                assert line is not None
+                output.append(line)
+                if "FAIL test_z_fast" in line:
+                    self.assertIn("1/2", line)
+                    self.assertIsNone(process.poll())
+                    (root / "release").touch()
+                    break
+                self.assertLess(time.monotonic(), deadline, "".join(output))
+            self.assertNotEqual(process.wait(timeout=10), 0)
+            reader.join(5)
+            self.assertFalse(reader.is_alive())
+            while not lines.empty():
+                line = lines.get_nowait()
+                if line is not None:
+                    output.append(line)
+            text = "".join(output)
+            self.assertIn("2/2", text)
+            self.assertIn("PASS test_a_slow", text)
+            self.assertIn("1 of 2 test modules failed: test_z_fast", text)
+            self.assertIn("fictional regression", text)
+        finally:
+            (root / "release").touch()
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            reader.join(5)
+            process.stdout.close()
 
     def test_each_module_runs_in_its_own_discovery_process_with_sibling_imports(self) -> None:
         root = self.fixture_root(

@@ -111,3 +111,4 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 
 - [0087: Autonomous project upkeep](0087-autonomous-project-upkeep.md) — agents close superseded PRs, merge green Dependabot updates, deploy released revisions with a rehearsed rollback and settle stale state without asking, then report; backup restores, credentials, permanent deletion and trust changes stay with the owner.
 - [0088: Boot-time external Codex server start](0088-boot-time-codex-server-start.md) — the monitor alerts when the external Codex app-server is not listening; an opt-in boot start lets the first start of each boot prove closed clients itself and remove only the previous boot's dangling socket link.
+- [0089: Prepared release switching](0089-prepared-release-switcher.md) — source candidate for a standalone grouped switch/rollback primitive; trusted-runtime and deployment integration remain separate.
