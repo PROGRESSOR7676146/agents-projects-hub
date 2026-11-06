@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- The Claude `workstation` profile no longer refuses projects with hardlinked
+  virtual environments, special files or more than 100,000 entries, matching
+  Codex. Bind aliases with the session HOME are still refused (ADR 0091).
+
 - Add a native installed-deployment backup input with artifact-bound passive
   readback, visible mixed revisions and retained inspectable SQLite snapshots.
   Installation publication and full recovery adoption remain pending.

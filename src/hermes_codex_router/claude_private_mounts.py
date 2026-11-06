@@ -142,6 +142,31 @@ def _coordinate(
     )
 
 
+def _same_tree(left: _Coordinate, right: _Coordinate) -> bool:
+    return left.mount.device == right.mount.device and (
+        _within(left.path, right.path) or _within(right.path, left.path)
+    )
+
+
+def sources_overlap(
+    source_fds: Mapping[Path, int],
+    mount_ids: Mapping[Path, int],
+    pairs: Sequence[tuple[Path, Path]],
+) -> bool:
+    """Whether a pair of pinned sources exposes one filesystem tree, bind aliases included.
+
+    Compares mount coordinates instead of walking either tree, so it holds for
+    writable sources that are shown without a trust scan.
+    """
+    table = read_mount_table()
+    coordinates = {
+        path: _coordinate(path, source_fds[path], mount_ids[path], table)
+        for pair in pairs
+        for path in pair
+    }
+    return any(_same_tree(coordinates[left], coordinates[right]) for left, right in pairs)
+
+
 @dataclass(frozen=True)
 class _PrivatePath:
     path: Path
@@ -258,10 +283,7 @@ class PrivateMountGuard:
         for source in sources:
             for private, authority in zip(self._private, authorities, strict=True):
                 same_inode = not private.suffix and source.inode == authority.inode
-                same_tree = source.mount.device == authority.mount.device and (
-                    _within(source.path, authority.path) or _within(authority.path, source.path)
-                )
-                if same_inode or same_tree:
+                if same_inode or _same_tree(source, authority):
                     raise PrivateMountError("mount overlaps private authority")
         return tuple(sources + authorities)
 

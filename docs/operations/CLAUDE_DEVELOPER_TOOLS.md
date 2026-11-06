@@ -34,8 +34,10 @@ project dependencies, compiler/build utilities and hook dependencies.
 
 Prepare python/python3 aliases in the dedicated bin directory and the matching
 Node/npm prefix read-only. Keep the control Python/hook immutable. Use copy mode
-for uv/venv dependencies and avoid pnpm hardlinks. The bounded tree scan remains;
-measure real dependency trees instead of disabling it. Required project tests
+for uv/venv dependencies and avoid pnpm hardlinks. In `developer` the bounded tree
+scan remains; measure real dependency trees instead of disabling it. The
+`workstation` project is not scanned
+([ADR 0091](../decisions/0091-workstation-project-not-trust-scanned.md)). Required project tests
 that cannot run under a nested namespace must be reported and run in CI/host.
 Place the venv's own `bin` before generic tool aliases in PATH. A symlink to a
 venv Python from another `bin` can select the system prefix and lose its

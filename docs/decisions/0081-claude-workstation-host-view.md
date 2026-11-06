@@ -5,6 +5,7 @@ Date: 2026-10-28
 Owner: repository owner. Implementation owner: Hub maintainer.
 Contract: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 Supersedes [ADR 0080](0080-claude-workstation-profile.md) before installation.
+Point 4 is amended by [ADR 0091](0091-workstation-project-not-trust-scanned.md).
 Keeps the trust model of [ADR 0072](0072-trusted-personal-installation.md).
 
 ## Context
@@ -39,7 +40,9 @@ The explicit `workstation` profile matches Codex workspace-write:
    is a guard against mistakes, not a boundary.
 4. The host root is shown, not trust-scanned, so it stays out of the private
    mount and nested-mount checks. Private paths must still not overlap a
-   writable or trusted runtime mount.
+   writable or trusted runtime mount. [ADR 0091](0091-workstation-project-not-trust-scanned.md)
+   also shows the project and linked-worktree Git directories without the
+   per-entry walk.
 5. Native Bash runs without a per-command human decision; the permission host
    still validates each request, job, writer and root, and journals the Allow.
    Stop, the single writer, no uncertain replay and immutable runtime and hook

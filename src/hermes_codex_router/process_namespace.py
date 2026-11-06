@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
-from .claude_private_mounts import PrivateMountError, PrivateMountGuard, read_mount_table
+from .claude_private_mounts import (
+    PrivateMountError,
+    PrivateMountGuard,
+    read_mount_table,
+    sources_overlap,
+)
 from .namespace_git import pin_git_sources
 from .namespace_toolchain import NamespaceToolchain, git_environment, validate_control_interpreters
 from .runtime_release import UserRuntimeRelease
@@ -271,6 +276,17 @@ def _scan_pinned_tree(source_fd: int, *, toolchain: bool = False) -> set[tuple[i
     return identities
 
 
+def _overlap(
+    source_fds: Mapping[Path, int],
+    mount_ids: Mapping[Path, int],
+    pairs: Sequence[tuple[Path, Path]],
+) -> bool:
+    try:
+        return sources_overlap(source_fds, mount_ids, pairs)
+    except PrivateMountError as exc:
+        raise NamespaceError(str(exc)) from exc
+
+
 def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = None) -> None:
     try:
         table = read_mount_table()
@@ -496,10 +512,13 @@ class ProcessNamespaceConfig:
         if home_stat.st_uid != os.geteuid() or stat.S_IMODE(home_stat.st_mode) != 0o700:
             raise NamespaceError("session home must be owned by worker UID and mode 0700")
         _reject_nested_mounts(*source_fds, mount_ids=mount_ids)
-        project_ids = _scan_writable_tree(project, source_fds[project])
         home_ids = _scan_writable_tree(home, source_fds[home])
-        if not project_ids.isdisjoint(home_ids):
-            raise NamespaceError("project and session-home tree mount roles overlap")
+        # Workstation shows the project like the host (ADR 0081): hardlinks,
+        # special files and large trees admit, as for Codex workspace-write.
+        if not self.host_view:
+            project_ids = _scan_writable_tree(project, source_fds[project])
+            if not project_ids.isdisjoint(home_ids):
+                raise NamespaceError("project and session-home tree mount roles overlap")
         sock = None
         if self.permission_socket is not None:
             sock = _absolute_path(self.permission_socket, "permission socket")
@@ -604,6 +623,9 @@ class ProcessNamespaceConfig:
                 private_guard.check(source_fds, mount_ids, self.private_paths)
         except (PrivateMountError, MountPinError) as exc:
             raise NamespaceError(str(exc)) from exc
+        # Bind aliases need no tree walk; this also covers the unscanned workstation project.
+        if _overlap(source_fds, mount_ids, ((project, home),)):
+            raise NamespaceError("project and session-home tree mount roles overlap")
         return bwrap, project, home, roots, sock
 
     def wrap(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str) -> SandboxLaunch:
@@ -673,13 +695,15 @@ class ProcessNamespaceConfig:
                 ):
                     if _within(path, other) or _within(other, path):
                         raise NamespaceError("external Git and other mounts overlap")
-        bwrap, project, home, roots, sock = self._validate(
-            {path: pins.mount_id(fd) for path, fd in source_fds.items()}, source_fds, private_guard
-        )
+        mount_ids = {path: pins.mount_id(fd) for path, fd in source_fds.items()}
+        bwrap, project, home, roots, sock = self._validate(mount_ids, source_fds, private_guard)
         for directory in git_sources.external_directories:
-            identities = _scan_writable_tree(directory, source_fds[directory])
-            home_info = os.fstat(home_fd)
-            if (home_info.st_dev, home_info.st_ino) in identities:
+            if not self.host_view:
+                identities = _scan_writable_tree(directory, source_fds[directory])
+                home_info = os.fstat(home_fd)
+                if (home_info.st_dev, home_info.st_ino) in identities:
+                    raise NamespaceError("Git and session-home mounts overlap")
+            if _overlap(source_fds, mount_ids, ((directory, home),)):
                 raise NamespaceError("Git and session-home mounts overlap")
         git_sources.recheck()
         _require_fd_bind_support(bwrap)
