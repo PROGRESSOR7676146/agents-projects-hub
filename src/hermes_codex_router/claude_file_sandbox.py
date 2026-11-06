@@ -15,6 +15,7 @@ from .claude_tool_profiles import BASH_PROFILES, profile_tools
 from .namespace_toolchain import NamespaceToolchain
 from .process_namespace import NamespaceError as FileToolSandboxError
 from .process_namespace import NamespaceRuntime, ProcessNamespaceConfig
+from .runtime_release import UserRuntimeRelease
 
 _SAFE_ENV = frozenset(
     {
@@ -50,6 +51,7 @@ class FileToolSandboxConfig:
     private_paths: tuple[Path, ...]
     profile: str = "editor"
     toolchain: NamespaceToolchain | None = None
+    user_releases: tuple[UserRuntimeRelease, ...] = ()
     _namespace: ProcessNamespaceConfig = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -62,6 +64,7 @@ class FileToolSandboxConfig:
             runtime_roots=self.runtime_roots,
             auxiliary_executables=(self.python_executable,),
             code_root=self.hook_code_root,
+            user_releases=self.user_releases,
         )
         object.__setattr__(
             self,

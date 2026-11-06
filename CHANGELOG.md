@@ -5,6 +5,17 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Development validation reports flushed per-module progress in completion
+  order. Optional Linux low-load mode caps parallelism at two and lowers CPU
+  and I/O priorities for the validator and its children, preserving all gates.
+
+- Add a standalone prepared-release switcher candidate with grouped service
+  transitions, exact plan confirmation, crash recovery and retained-state
+  rollback; deployment integration remains separate.
+- Support explicitly pinned, sealed user-owned runtime/hook versions for
+  no-sudo preparation while retaining read-only namespace mounts and the
+  root-owned default; installed migration and acceptance remain separate.
+
 - Startup scope reconciliation avoids taking SQLite's writer lock when all
   topic and active-lane bindings are already current. Required normalization
   and mismatch checks still run under the existing atomic write transaction.

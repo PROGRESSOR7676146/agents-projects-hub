@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -32,6 +32,19 @@ def run(*argv: str, env: dict[str, str] | None = None) -> None:
 
 def default_test_jobs() -> int:
     return max(1, min(8, os.cpu_count() or 1))
+
+
+def enable_low_load() -> None:
+    """Lower this validator and its future children, never other processes."""
+    if sys.platform != "linux":
+        raise RuntimeError("low-load mode requires Linux nice and ionice")
+    os.setpriority(os.PRIO_PROCESS, 0, 19)
+    subprocess.run(
+        ("ionice", "-c", "3", "-p", str(os.getpid())),
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
 
 
 def parse_test_jobs(value: str) -> int:
@@ -306,8 +319,20 @@ def run_test_modules(*, jobs: int, root: Path = ROOT, only: frozenset[str] | Non
                 return name, f"exit {completed.returncode}", started, output
             return name, composition_mismatch(expected[name], accounted), started, output
 
+        results: list[tuple[str, str | None, int, str]] = []
+        print(f"TESTS 0/{len(modules)} modules completed; jobs={jobs}", flush=True)
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            results = list(pool.map(run_module, modules))
+            futures = [pool.submit(run_module, name) for name in modules]
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                name, reason, count, _ = result
+                status = "FAIL" if reason else "PASS"
+                print(
+                    f"TESTS {len(results)}/{len(modules)} completed: {status} {name} ({count} tests)",
+                    flush=True,
+                )
+        results.sort(key=lambda result: result[0])
     failed = [(name, reason, output) for name, reason, _, output in results if reason]
     failed += [(name, "no tests collected", "") for name in empty]
     for name, reason, output in failed:
@@ -411,6 +436,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"canonical/commit: test modules run in parallel (1-{MAX_TEST_JOBS})",
     )
     parser.add_argument(
+        "--low-load",
+        action="store_true",
+        help="Linux: nice 19, idle I/O, at most two jobs (also HUB_VALIDATION_LOW_LOAD=1)",
+    )
+    parser.add_argument(
         "tests", nargs="*", help="focused only: dotted unittest modules/classes/methods"
     )
     args = parser.parse_args(argv)
@@ -418,6 +448,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("test selectors require --profile focused; other profiles run all tests")
     if args.jobs is not None and args.profile == "focused":
         parser.error("--jobs applies only to profiles that run the full test suite")
+    configured_low_load = os.environ.get("HUB_VALIDATION_LOW_LOAD", "0")
+    if not args.low_load:
+        if configured_low_load not in {"0", "1"}:
+            parser.error("HUB_VALIDATION_LOW_LOAD: must be 0 or 1")
+        args.low_load = configured_low_load == "1"
     configured_jobs = os.environ.get("HUB_VALIDATION_TEST_JOBS")
     if args.jobs is None and args.profile != "focused" and configured_jobs is not None:
         try:
@@ -425,6 +460,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         except argparse.ArgumentTypeError as error:
             parser.error(f"HUB_VALIDATION_TEST_JOBS: {error}")
     jobs = default_test_jobs() if args.jobs is None else args.jobs
+    if args.low_load:
+        jobs = min(jobs, 2)
     if any(
         re.fullmatch(r"tests(?:\.[A-Za-z_][A-Za-z_0-9]*)+", name) is None for name in args.tests
     ):
@@ -522,6 +559,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     }[args.profile]
     print(label, flush=True)
     started = time.monotonic()
+    if args.low_load:
+        try:
+            enable_low_load()
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f"FAIL low-load setup: {error}", file=sys.stderr, flush=True)
+            return 1
+        print(f"Low-load mode: nice=19, I/O=idle, jobs={jobs}", flush=True)
     for name, action in stages:
         stage_started = time.monotonic()
         print(f"RUN {name}", flush=True)

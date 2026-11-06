@@ -64,13 +64,17 @@ These are separately authorized live checks, not a claim from source tests.
 2. Stage the exact tlive release using the
    [pinned patch procedure](../../integrations/tlive/README.md). Verify source
    hashes after patching and building; do not modify the running installation.
-3. Install Python, Claude and the hook in trusted readonly runtime locations
-   owned by root, including their ancestors and descendants, without group/other
-   write or POSIX ACLs. Another non-root UID is not a trusted installer by itself.
+3. Prepare Python, Claude and the hook under the immutable runtime policy of
+   [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md). Root-owned code
+   remains the default; the source candidate also supports explicit sealed
+   user-version pins, prepared by the
+   [no-sudo procedure](PREPARED_RELEASE_SWITCHER.md#preparing-a-user-owned-trusted-runtime).
+   Another non-root UID is not a trusted installer by itself.
    The selected
    Python must resolve `hermes_codex_router.claude_permission_hook` with `-I -m`;
    an editable checkout or PYTHONPATH is not an installation. Configure only
-   explicit runtime roots under `/usr` or a dedicated `/opt` prefix. Do not mount
+   explicit runtime roots under `/usr`, a dedicated `/opt` prefix, or registered
+   canonical user-version roots. Do not mount
    operator homes or generic configuration/data directories. Bubblewrap must
    protect synthetic runtime ancestors and system aliases with a final,
    nonrecursive readonly root remount; explicit project, session home and temporary mounts keep
@@ -83,12 +87,12 @@ These are separately authorized live checks, not a claim from source tests.
    These options are present in upstream 0.10.0 and Ubuntu's 0.9.0 security
    backport; an unpatched upstream 0.9.0 lacks them. Check capabilities rather
    than the displayed version. Group-writable prefixes are refused even when
-   the worker is not a member of that group. User-owned pyenv/uv environments
-   also cannot supply this trusted runtime. Install a dedicated root-owned
-   runtime, remove group/other write and POSIX ACLs before separately accepting it.
+   the worker is not a member of that group. Mutable user-owned pyenv/uv caches
+   cannot supply this trusted runtime. Use a dedicated root-owned runtime or a
+   sealed pinned user version before separately accepting it.
    Interpreters and dynamic dependencies of the resolved Claude executable
    must also lie within the readonly runtime roots; prefer a self-contained
-   root-owned build.
+   dedicated build.
 4. Create a distinct private mode-0700 provider-session base outside project
    roots and Hub/tlive authority directories. Each native session gets its own
    subdirectory. Existing user configuration, hooks, plugins and credentials

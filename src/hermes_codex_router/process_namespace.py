@@ -22,6 +22,7 @@ from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
 from .claude_private_mounts import PrivateMountError, PrivateMountGuard, read_mount_table
 from .namespace_git import pin_git_sources
 from .namespace_toolchain import NamespaceToolchain, git_environment, validate_control_interpreters
+from .runtime_release import UserRuntimeRelease
 
 
 class NamespaceError(ValueError):
@@ -89,7 +90,9 @@ def _not_broad(path: Path, label: str) -> None:
         raise NamespaceError(f"{label} is too broad")
 
 
-def _runtime_location(path: Path) -> None:
+def _runtime_location(path: Path, releases: tuple[UserRuntimeRelease, ...] = ()) -> None:
+    if any(_within(path, pin.root) for pin in releases):
+        return
     if any(_within(path, prefix) for prefix in _RUNTIME_PREFIXES):
         return
     if _within(path, Path("/opt")) and path != Path("/opt"):
@@ -97,18 +100,34 @@ def _runtime_location(path: Path) -> None:
     raise NamespaceError("trusted code mount is outside runtime locations")
 
 
-def _immutable_source(path: Path, label: str, *, directory: bool | None = None) -> None:
+def _immutable_source(
+    path: Path,
+    label: str,
+    *,
+    directory: bool | None = None,
+    releases: tuple[UserRuntimeRelease, ...] = (),
+) -> None:
     if directory is True and not path.is_dir():
         raise NamespaceError(f"{label} must be a directory")
     if directory is False and not path.is_file():
         raise NamespaceError(f"{label} must be a regular file")
     for parent in (path, *path.parents):
-        _immutable_entry(parent, label, parent.stat())
+        _immutable_entry(parent, label, parent.stat(), releases)
+        if any(parent == pin.root for pin in releases):
+            break  # The verified release owns its separately checked user-space ancestors.
 
 
-def _immutable_entry(path: Path, label: str, info: os.stat_result) -> None:
-    if info.st_uid != 0 or info.st_mode & 0o022 or os.access(path, os.W_OK, effective_ids=True):
-        raise NamespaceError(f"{label} must be immutable root-owned code")
+def _immutable_entry(
+    path: Path, label: str, info: os.stat_result, releases: tuple[UserRuntimeRelease, ...] = ()
+) -> None:
+    user_release = any(_within(path, pin.root) for pin in releases)
+    owners = {0, os.geteuid()} if user_release else {0}
+    if (
+        info.st_uid not in owners
+        or info.st_mode & 0o022
+        or os.access(path, os.W_OK, effective_ids=True)
+    ):
+        raise NamespaceError(f"{label} must be immutable code with trusted ownership")
     if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
         raise NamespaceError(f"{label} contains an unsupported runtime hardlink")
     try:
@@ -121,7 +140,7 @@ def _immutable_entry(path: Path, label: str, info: os.stat_result) -> None:
             raise NamespaceError("cannot inspect runtime ACLs") from exc
 
 
-def _immutable_tree(path: Path) -> None:
+def _immutable_tree(path: Path, releases: tuple[UserRuntimeRelease, ...] = ()) -> None:
     """Reject writable descendants of a readonly runtime/code mount.
 
     A readonly namespace bind does not make host files immutable to the same
@@ -129,7 +148,7 @@ def _immutable_tree(path: Path) -> None:
     """
     if not path.is_dir():
         return
-    _immutable_source(path, "runtime root", directory=True)
+    _immutable_source(path, "runtime root", directory=True, releases=releases)
     count = 0
     pending = [path]
     visited: set[tuple[int, int]] = set()
@@ -140,7 +159,7 @@ def _immutable_tree(path: Path) -> None:
         if identity in visited:
             continue
         visited.add(identity)
-        _immutable_entry(directory, "runtime directory", info)
+        _immutable_entry(directory, "runtime directory", info, releases)
         for entry in directory.iterdir():
             count += 1
             if count > _MAX_RUNTIME_ENTRIES:
@@ -151,13 +170,13 @@ def _immutable_tree(path: Path) -> None:
                     target = entry.resolve(strict=True)
                 except (OSError, RuntimeError):
                     raise NamespaceError("runtime tree contains an unsafe symlink") from None
-                _immutable_source(target, "runtime symlink target")
+                _immutable_source(target, "runtime symlink target", releases=releases)
                 if target.is_dir():
                     pending.append(target)
             elif stat.S_ISDIR(info.st_mode):
                 pending.append(entry)
             elif stat.S_ISREG(info.st_mode):
-                _immutable_entry(entry, "runtime entry", info)
+                _immutable_entry(entry, "runtime entry", info, releases)
             else:
                 raise NamespaceError("runtime tree contains a special entry")
 
@@ -317,13 +336,14 @@ def _system_shell_alias_args(roots: tuple[Path, ...], code: Path | None) -> list
 
 @dataclass(frozen=True)
 class NamespaceRuntime:
-    """Capture the immutable runtime baseline once, rather than at each launch."""
+    """Pin source identities; recheck owned-release bytes before every launch."""
 
     bwrap_executable: Path
     executable: Path
     runtime_roots: tuple[Path, ...]
     auxiliary_executables: tuple[Path, ...] = ()
     code_root: Path | None = None
+    user_releases: tuple[UserRuntimeRelease, ...] = ()
     _pins: tuple[tuple[int, int, int, int], ...] = field(init=False, repr=False)
 
     def _sources(self) -> tuple[Path, ...]:
@@ -333,20 +353,35 @@ class NamespaceRuntime:
             *self.auxiliary_executables,
             *((self.code_root,) if self.code_root is not None else ()),
             *self.runtime_roots,
+            *(pin.root for pin in self.user_releases),
         )
 
     def __post_init__(self) -> None:
+        self._verify_user_releases()
         for source in self._sources():
             _absolute_path(source, "trusted runtime source")
         object.__setattr__(
             self, "_pins", tuple(self._runtime_identity(Path(p)) for p in self._sources())
         )
         for root in self.runtime_roots:
-            _immutable_tree(Path(root))
+            _immutable_tree(Path(root), self.user_releases)
         if self.code_root is not None and not any(
             _within(Path(self.code_root), Path(root)) for root in self.runtime_roots
         ):
-            _immutable_tree(Path(self.code_root))
+            _immutable_tree(Path(self.code_root), self.user_releases)
+
+    def _verify_user_releases(self) -> None:
+        try:
+            if len(self.user_releases) > 8 or any(
+                _within(pin.root, other.root) or _within(other.root, pin.root)
+                for index, pin in enumerate(self.user_releases)
+                for other in self.user_releases[:index]
+            ):
+                raise ValueError("invalid release pins")
+            for pin in self.user_releases:
+                pin.verify()
+        except (OSError, ValueError, RuntimeError) as error:
+            raise NamespaceError("user runtime release verification failed") from error
 
     @staticmethod
     def _runtime_identity(path: Path) -> tuple[int, int, int, int]:
@@ -357,25 +392,30 @@ class NamespaceRuntime:
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
     def validate(self) -> tuple[Path, tuple[Path, ...]]:
+        self._verify_user_releases()
         bwrap = _absolute_path(self.bwrap_executable, "bwrap executable")
         roots = tuple(_absolute_path(p, "runtime root") for p in self.runtime_roots)
         if not roots or len(set(roots)) != len(roots):
             raise NamespaceError("runtime roots must be explicit and unique")
         for root in roots:
             _not_broad(root, "runtime root")
-            _runtime_location(root)
-            _immutable_source(root, "runtime root")
+            _runtime_location(root, self.user_releases)
+            _immutable_source(root, "runtime root", releases=self.user_releases)
         _immutable_source(bwrap, "bwrap executable", directory=False)
         if self.code_root is not None:
             code = _absolute_path(self.code_root, "trusted code root")
             _not_broad(code, "trusted code root")
-            _runtime_location(code)
-            _immutable_source(code, "trusted code root", directory=True)
+            _runtime_location(code, self.user_releases)
+            _immutable_source(
+                code, "trusted code root", directory=True, releases=self.user_releases
+            )
         if tuple(self._runtime_identity(Path(p)) for p in self._sources()) != self._pins:
             raise NamespaceError("trusted runtime identity changed")
         for path in (self.executable, *self.auxiliary_executables):
             executable = _absolute_path(path, "runtime executable")
-            _immutable_source(executable, "runtime executable", directory=False)
+            _immutable_source(
+                executable, "runtime executable", directory=False, releases=self.user_releases
+            )
             if not any(_within(executable, root) for root in roots):
                 raise NamespaceError("runtime executable is outside readonly runtime mounts")
         return bwrap, roots

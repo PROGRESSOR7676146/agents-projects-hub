@@ -8,6 +8,7 @@ from typing import Any
 
 from .claude_tool_profiles import BASH_PROFILES, profile_tools
 from .namespace_toolchain import NamespaceToolchain, parse_toolchain
+from .runtime_release import UserRuntimeRelease, parse_user_releases
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,7 @@ class ClaudeFilePermissionsConfig:
     private_paths: tuple[Path, ...]
     profile: str = "editor"
     toolchain: NamespaceToolchain | None = None
+    user_releases: tuple[UserRuntimeRelease, ...] = ()
 
 
 def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | None:
@@ -40,7 +42,7 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
     if (
         not isinstance(raw, dict)
         or not keys <= set(raw)
-        or set(raw) - keys - {"profile", "toolchain"}
+        or set(raw) - keys - {"profile", "toolchain", "user_releases"}
     ):
         raise ValueError("claude_file_permissions requires exact explicit mount configuration")
     profile = raw.get("profile", "editor")
@@ -78,4 +80,5 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
         paths("private_paths"),
         profile,
         parse_toolchain(raw["toolchain"]) if "toolchain" in raw else None,
+        parse_user_releases(raw["user_releases"]) if "user_releases" in raw else (),
     )

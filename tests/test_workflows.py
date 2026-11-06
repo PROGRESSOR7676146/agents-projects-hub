@@ -120,7 +120,8 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "tests.test_namespace_worktrees "
         "tests.test_review_materials_namespace "
         "tests.test_review_bridge_namespace "
-        "tests.test_namespace_toolchain"
+        "tests.test_namespace_toolchain "
+        "tests.test_user_runtime_release"
     ):
         raise AssertionError(
             "namespace job must run all required real namespace scenarios and outer wrapper witness"
@@ -366,6 +367,7 @@ class WorkflowContractTests(unittest.TestCase):
             "missing_private",
             "missing_materials",
             "missing_review_pipe",
+            "missing_user_runtime",
             "wrong_command",
             "tolerate_failure",
         ):
@@ -377,6 +379,10 @@ class WorkflowContractTests(unittest.TestCase):
                 invocation = validation["jobs"]["namespace"]["steps"][-1]
                 if mutation == "missing":
                     invocation["run"] = ""
+                elif mutation == "missing_user_runtime":
+                    selector = "tests.test_user_runtime_release"
+                    self.assertIn(selector, invocation["run"])
+                    invocation["run"] = invocation["run"].replace(selector, "")
                 elif mutation == "missing_custody":
                     selector = (
                         "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."

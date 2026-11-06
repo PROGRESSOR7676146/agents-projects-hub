@@ -60,3 +60,16 @@ class ClaudePermissionsConfigTests(unittest.TestCase):
         )
         assert settings is not None and settings.toolchain is not None
         self.assertEqual(str(settings.toolchain.path[0]), "/opt/example-tools/bin")
+
+    def test_user_runtime_requires_explicit_version_and_digest(self) -> None:
+        original = parse_claude_file_permissions(self.settings())
+        assert original is not None
+        self.assertEqual(original.user_releases, ())
+        pin = {"root": "/home/example/runtime/releases/version-one", "sha256": "a" * 64}
+        settings = parse_claude_file_permissions(self.settings() | {"user_releases": [pin]})
+        assert settings is not None
+        self.assertEqual(str(settings.user_releases[0].root), pin["root"])
+        self.assertEqual(settings.user_releases[0].sha256, pin["sha256"])
+        for invalid in (None, True, [], [pin, pin], [{**pin, "sha256": "latest"}]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                parse_claude_file_permissions(self.settings() | {"user_releases": invalid})
