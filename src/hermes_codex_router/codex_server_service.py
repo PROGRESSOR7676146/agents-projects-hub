@@ -336,7 +336,7 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
             "AND r.resolution IN ('acknowledged','superseded','externally_completed'))))"
         ).fetchall()
         # A late-read claim can authorize a send only while its job is indeterminate,
-        # and a final job never returns there. Such a leftover claim cannot act.
+        # and a final job never returns there. Such a leftover claim cannot authorize a send.
         controls = db.execute(
             "SELECT 1 FROM codex_turn_controls control_owner WHERE (read_claim_token IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM provider_jobs final_job WHERE "

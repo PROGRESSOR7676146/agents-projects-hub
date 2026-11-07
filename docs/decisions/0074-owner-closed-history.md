@@ -28,7 +28,8 @@ continue blocking until their existing owner/cleanup settles them. Amendment,
 2026-11-07: server start ignores a claim left on a final job (completed, failed
 or cancelled). A claim authorizes a send only while its job is indeterminate,
 checked in the same transaction as the send reservation, and only executing work
-can become indeterminate, so such a claim can never act; reading has no effect.
+can become indeterminate, so such a claim cannot authorize a new send; reading
+has no effect. A send already reserved stays blocked by the unsettled-control rule.
 No clock is involved. Claims on indeterminate jobs still block, nothing clears
 the claim, and other admission paths are unchanged.
 
