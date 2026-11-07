@@ -178,6 +178,26 @@ ask for approval one action at a time.
   the permission layer, a sandbox or a gate is a stop, never something to work
   around.
 
+Owner decision, 2026-11-07 ([ADR 0092](docs/decisions/0092-session-hygiene-and-agent-run-procedures.md)):
+
+- **Agents run every technical procedure.** Never ask the owner to run a
+  command, copy output, edit a file, restart, reboot or test by hand. For a
+  reserved step, live acceptance included, the owner only decides; the agent
+  then carries it out. Only
+  account sign-in or credential issuance, approval answers and Windows-host or
+  hardware actions need the owner in person. Any other step that still needs
+  the owner is a defect to remove and to track in `docs/operations/OWNER_STEP_DEFECTS.md`; the
+  root-owned `sudo` runtime install is one.
+- **Each session removes what it creates.** Create worktrees only under
+  `.hub/worktrees/<task>-<date>`, temporary files only in the session scratch
+  directory and kits only in one `rollout-<version>` directory. Merge with a
+  merge commit so branch heads stay reachable from `main`. When work is
+  merged or abandoned, and before the session ends, remove its own worktrees,
+  local and merged remote branches and background processes, after moving any
+  evidence out. In old kits remove only rebuildable artifacts, never backups or
+  evidence. Record in the private handoff whatever is kept, and why. The
+  report names what was removed and what was kept.
+
 This grants nothing to Hub-hosted provider turns, Hermes cards or background
 timers, which stay model-free.
 
