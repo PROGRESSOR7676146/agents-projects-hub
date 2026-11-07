@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-11-07
+
 - Telegram calls survive a stalled TCP connect: the connect gets its own
   3-second limit and a proven unsent attempt is repeated up to three times,
   so no message can be sent twice (ADR 0068 amendment).
