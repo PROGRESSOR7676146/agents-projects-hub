@@ -73,6 +73,30 @@ class NativeNotSentTests(unittest.TestCase):
         # The stalled attempt never had a socket, so only the second one transmitted.
         self.assertEqual(connect.call_count, 2)
 
+    def test_a_repeat_through_an_https_proxy_keeps_the_tls_tunnel(self) -> None:
+        # urllib mutates a Request while applying a proxy; a reused one would lose TLS.
+        sock = response_socket()
+        sock.makefile.side_effect = [
+            io.BytesIO(b"HTTP/1.1 200 Connection Established\r\n\r\n"),
+            io.BytesIO(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 38\r\n\r\n"
+                b'{"ok":true,"result":{"message_id":71}}'
+            ),
+        ]
+        with (
+            patch.dict(os.environ, {"https_proxy": "http://example.com:3128"}, clear=True),
+            patch("socket.create_connection", side_effect=[TimeoutError("stalled"), sock]),
+            patch("ssl.SSLContext.wrap_socket", return_value=sock) as tls,
+        ):
+            receipt = TelegramBotApi("123456:example").send_html(-1001234567890, 77, "Example")
+        self.assertEqual(receipt, 71)
+        sent = [call.args[0] for call in sock.sendall.call_args_list]
+        self.assertTrue(sent[0].startswith(b"CONNECT api.telegram.org:443 "))
+        self.assertEqual(tls.call_args.kwargs["server_hostname"], "api.telegram.org")
+        self.assertTrue(
+            any(data.startswith(b"POST /bot123456:example/sendMessage ") for data in sent)
+        )
+
     def test_connect_has_its_own_short_timeout_and_reads_keep_the_request_timeout(self) -> None:
         sock = response_socket()
         with (

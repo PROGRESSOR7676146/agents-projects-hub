@@ -40,16 +40,19 @@ def _observe(
     send = connection.send
 
     def initial_connect(address: Any, timeout: Any = None, *args: Any, **kwargs: Any) -> Any:
-        limit = timeout
-        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
-            limit = min(timeout, CONNECT_TIMEOUT_SECONDS)
+        capped = (
+            isinstance(timeout, (int, float))
+            and not isinstance(timeout, bool)
+            and timeout > CONNECT_TIMEOUT_SECONDS
+        )
+        limit = CONNECT_TIMEOUT_SECONDS if capped else timeout
         try:
             sock = create_connection(address, limit, *args, **kwargs)
         except OSError as error:
             if not attempt.http_started:
                 raise _InitialConnectNotSent(error) from None
             raise
-        if limit is not timeout:
+        if capped:
             sock.settimeout(timeout)  # TLS, send and read keep the request's own timeout.
         return sock
 
@@ -98,11 +101,26 @@ def _open_once(request: urllib.request.Request, *, timeout: float) -> Any:
     return opener.open(request, timeout=timeout)
 
 
+def _fresh_copy(request: urllib.request.Request) -> urllib.request.Request:
+    # urllib mutates a Request while applying a proxy (host, type, selector, tunnel),
+    # so a reused object would lose its HTTPS tunnel. Each attempt gets its own copy.
+    copy = urllib.request.Request(
+        request.full_url,
+        data=request.data,
+        headers=dict(request.headers),
+        origin_req_host=request.origin_req_host,
+        unverifiable=request.unverifiable,
+        method=request.get_method(),
+    )
+    copy.unredirected_hdrs = dict(request.unredirected_hdrs)
+    return copy
+
+
 def urlopen_with_send_proof(request: urllib.request.Request, *, timeout: float) -> Any:
     """Repeat only attempts proven to have failed before any HTTP transmission."""
     for remaining in range(CONNECT_ATTEMPTS - 1, -1, -1):
         try:
-            return _open_once(request, timeout=timeout)
+            return _open_once(_fresh_copy(request), timeout=timeout)
         except urllib.error.URLError as error:
             if not remaining or not isinstance(error.reason, _InitialConnectNotSent):
                 raise
