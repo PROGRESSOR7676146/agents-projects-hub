@@ -38,6 +38,18 @@ existing domain facades and HubState retain SQL/transaction ownership. Provider
 invocation and artifact cleanup owners are unchanged. No hotspot receives a new
 responsibility, so a broad Controller/state extraction is unwarranted here.
 
+## Amendment 2026-11-07: short connect limit and immediate unsent repeats
+
+Some hosts stall about one TCP connect in ten while DNS answers at once; the
+request timeout then expired before the not-sent proof, delaying deliveries and
+failing chat actions and the alert check. The default transport now gives the
+initial socket connect its own limit of at most 3 seconds and restores the
+request timeout for TLS, send and read. Within one call it repeats up to three
+attempts, each with a fresh witness, and only while the previous attempt raised
+the proven not-sent error; any transmission, redirect or later failure ends the
+call as before. The delivery fence, attempt caps and backoff are unchanged, and
+a custom opener still gets no repeats or proof.
+
 ## Limits and next trigger
 
 Crash before saving the proven retry, expired/stale ownership, TLS failure,

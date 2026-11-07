@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import http.client
 import socket
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, cast
+
+# A TCP connect normally takes well under a second; some hosts stall about one
+# connect in ten. A stalled connect gets its own short limit instead of the whole
+# request budget, and only a proven unsent attempt is repeated.
+CONNECT_TIMEOUT_SECONDS = 3.0
+CONNECT_ATTEMPTS = 3
 
 
 class _InitialConnectNotSent(OSError):
@@ -32,13 +39,19 @@ def _observe(
     create_connection = observed._create_connection
     send = connection.send
 
-    def initial_connect(*args: Any, **kwargs: Any) -> Any:
+    def initial_connect(address: Any, timeout: Any = None, *args: Any, **kwargs: Any) -> Any:
+        limit = timeout
+        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+            limit = min(timeout, CONNECT_TIMEOUT_SECONDS)
         try:
-            return create_connection(*args, **kwargs)
+            sock = create_connection(address, limit, *args, **kwargs)
         except OSError as error:
             if not attempt.http_started:
                 raise _InitialConnectNotSent(error) from None
             raise
+        if limit is not timeout:
+            sock.settimeout(timeout)  # TLS, send and read keep the request's own timeout.
+        return sock
 
     def observed_send(data: Any) -> None:
         # HTTPConnection.send normally connects lazily. Observe socket creation
@@ -77,9 +90,20 @@ class _HTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(connection, req, context=getattr(self, "_context", None))
 
 
-def urlopen_with_send_proof(request: urllib.request.Request, *, timeout: float) -> Any:
+def _open_once(request: urllib.request.Request, *, timeout: float) -> Any:
     # One fresh witness covers all redirects/proxy steps in this call. Never
     # reuse a process-global opener, attempt state or previously connected socket.
     attempt = _Attempt()
     opener = urllib.request.build_opener(_HTTPHandler(attempt), _HTTPSHandler(attempt))
     return opener.open(request, timeout=timeout)
+
+
+def urlopen_with_send_proof(request: urllib.request.Request, *, timeout: float) -> Any:
+    """Repeat only attempts proven to have failed before any HTTP transmission."""
+    for remaining in range(CONNECT_ATTEMPTS - 1, -1, -1):
+        try:
+            return _open_once(request, timeout=timeout)
+        except urllib.error.URLError as error:
+            if not remaining or not isinstance(error.reason, _InitialConnectNotSent):
+                raise
+    raise AssertionError("unreachable")

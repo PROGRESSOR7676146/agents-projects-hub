@@ -14,7 +14,12 @@ from unittest.mock import Mock, patch
 
 from hermes_codex_router.delivery_retry import delivery_failure_phase, retryable_delivery_failure
 from hermes_codex_router.telegram import TelegramBotApi, TelegramError
-from hermes_codex_router.telegram_transport import _InitialConnectNotSent, urlopen_with_send_proof
+from hermes_codex_router.telegram_transport import (
+    CONNECT_ATTEMPTS,
+    CONNECT_TIMEOUT_SECONDS,
+    _InitialConnectNotSent,
+    urlopen_with_send_proof,
+)
 
 
 def response_socket(body: bytes = b'{"ok":true,"result":{"message_id":71}}') -> Mock:
@@ -47,10 +52,50 @@ class NativeNotSentTests(unittest.TestCase):
                             bot.send_document(-1001234567890, 77, path)
                         else:
                             bot.send_html(-1001234567890, 77, "Example")
-                    connect.assert_called_once()
+                    # Every bounded attempt failed before HTTP transmission.
+                    self.assertEqual(connect.call_count, CONNECT_ATTEMPTS)
                     self.assertTrue(retryable_delivery_failure(caught.exception))
                     self.assertEqual(delivery_failure_phase(caught.exception), "proven_not_sent")
                     self.assertNotIn("private", str(caught.exception))
+
+    def test_a_stalled_connect_is_retried_without_a_duplicate_send(self) -> None:
+        # About one connect in ten stalls on some hosts; a fresh attempt then succeeds.
+        sock = response_socket()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "socket.create_connection", side_effect=[TimeoutError("stalled"), sock]
+            ) as connect,
+            patch("ssl.SSLContext.wrap_socket", return_value=sock),
+        ):
+            receipt = TelegramBotApi("123456:example").send_html(-1001234567890, 77, "Example")
+        self.assertEqual(receipt, 71)
+        # The stalled attempt never had a socket, so only the second one transmitted.
+        self.assertEqual(connect.call_count, 2)
+
+    def test_connect_has_its_own_short_timeout_and_reads_keep_the_request_timeout(self) -> None:
+        sock = response_socket()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("socket.create_connection", return_value=sock) as connect,
+            patch("ssl.SSLContext.wrap_socket", return_value=sock),
+        ):
+            TelegramBotApi("123456:example").send_html(-1001234567890, 77, "Example")
+        self.assertEqual(connect.call_args.args[1], CONNECT_TIMEOUT_SECONDS)
+        sock.settimeout.assert_any_call(8)
+
+    def test_a_failure_after_transmission_is_never_retried(self) -> None:
+        sock = response_socket()
+        sock.makefile.side_effect = TimeoutError("read after sending")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("socket.create_connection", return_value=sock) as connect,
+            patch("ssl.SSLContext.wrap_socket", return_value=sock),
+        ):
+            with self.assertRaises(TelegramError) as caught:
+                TelegramBotApi("123456:example").send_html(-1001234567890, 77, "Example")
+        self.assertEqual(connect.call_count, 1)
+        self.assertEqual(delivery_failure_phase(caught.exception), "unknown")
 
     def test_custom_opener_errors_have_no_connection_phase_proof(self) -> None:
         for failure in (socket.gaierror("DNS"), ConnectionRefusedError(), TimeoutError()):
@@ -94,7 +139,10 @@ class NativeNotSentTests(unittest.TestCase):
                 self.subTest(document=document),
                 tempfile.TemporaryDirectory() as directory,
                 patch.dict(os.environ, {}, clear=True),
-                patch("socket.create_connection", side_effect=[sock, socket.gaierror()]) as connect,
+                patch(
+                    "socket.create_connection",
+                    side_effect=[sock, *[socket.gaierror()] * CONNECT_ATTEMPTS],
+                ) as connect,
                 patch("ssl.SSLContext.wrap_socket", return_value=sock),
             ):
                 bot = TelegramBotApi("123456:example", opener=retrying_opener)
@@ -105,7 +153,7 @@ class NativeNotSentTests(unittest.TestCase):
                         bot.send_document(-1001234567890, 77, path)
                     else:
                         bot.send_html(-1001234567890, 77, "Example")
-                self.assertEqual(connect.call_count, 2)
+                self.assertEqual(connect.call_count, 1 + CONNECT_ATTEMPTS)
                 self.assertGreater(sock.sendall.call_count, 0)
                 self.assertEqual(delivery_failure_phase(caught.exception), "unknown")
 
@@ -188,7 +236,10 @@ class NativeNotSentTests(unittest.TestCase):
         bot = TelegramBotApi("123456:example")
         with (
             patch.dict(os.environ, {"https_proxy": "http://example.com:3128"}, clear=True),
-            patch("socket.create_connection", side_effect=[sock, socket.gaierror("DNS")]),
+            patch(
+                "socket.create_connection",
+                side_effect=[sock, *[socket.gaierror("DNS")] * CONNECT_ATTEMPTS],
+            ),
             patch("ssl.SSLContext.wrap_socket", return_value=sock),
         ):
             self.assertEqual(bot.send_html(-1001234567890, 77, "Example"), 71)
