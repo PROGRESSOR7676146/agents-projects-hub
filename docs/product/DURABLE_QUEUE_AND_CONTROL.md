@@ -1,7 +1,7 @@
 # Durable queue and control requirements
 
 Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
-Supporting detail: [reference](REQUIREMENT_DETAILS.md#durable-queue-and-control).
+Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#durable-queue-and-control).
 
 ## 22. Durable provider queue and control
 
