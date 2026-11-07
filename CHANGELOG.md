@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-11-07
+
 - The Codex app-server start is no longer refused forever by a late-read claim
   left on a job that has since completed, failed or been cancelled. Such a claim
   can never authorize a send; claims on indeterminate jobs still block.
