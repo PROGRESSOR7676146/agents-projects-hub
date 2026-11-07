@@ -6,6 +6,8 @@ Owner: repository owner
 Amends: the deployment, service-restart and branch-deletion reservations in
 [AGENTS.md](../../AGENTS.md#review-merge-and-scope) and the per-update approval
 in the [Hub restart procedure](../operations/HUB_RESTART.ru.md)
+Amended by: [ADR 0092](0092-session-hygiene-and-agent-run-procedures.md)
+(sessions clean up after themselves; the elevated-privilege reservation becomes a defect)
 
 ## Context
 
@@ -125,7 +127,8 @@ own.
   token rotation, allowlists, and enabling paid or extra usage.
 - Steps that need elevated privileges, such as a `sudo` install of a
   root-owned runtime. The agent prepares and checks everything else and asks
-  for that one step.
+  for that one step. [ADR 0092](0092-session-hygiene-and-agent-run-procedures.md)
+  makes each such step a tracked defect to remove.
 - Permanently deleting data: databases, backups, session histories, project
   roots, unmerged branches or commits. Also rewriting shared history,
   force-pushing `main` and moving an existing tag.

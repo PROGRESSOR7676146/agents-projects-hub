@@ -51,7 +51,9 @@ unsupported. Topic creation requires Telegram Manage Topics permission.
     MUST be resolved or explicitly carried.
 16. Accepted plans MUST record state, verified revision, next trigger and closure.
 17. Long-lived worktrees MUST record owner, purpose, base and post-merge review; automatic removal
-    MUST first inspect tracked, staged and untracked state.
+    MUST first inspect tracked, staged and untracked state. Each session MUST remove the worktrees,
+    branches, kits and processes it created once merged or abandoned, and record what it keeps
+    (ADR 0092).
 18. Routine upkeep MUST NOT wait for owner attention: assigned agents close superseded work, merge
     green dependency updates, deploy released revisions with a rehearsed rollback and settle stale
     state, then report (ADR 0087). Backup restores, credentials, permanent deletion and trust

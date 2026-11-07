@@ -57,12 +57,27 @@ checks: `status`, `doctor` and the audits. Never run a live model probe.
 A refusal by the permission layer, a sandbox or a gate stops the step. Report
 it and ask; never work around it.
 
-## 3. Report
+## 3. Own leftovers
+
+[ADR 0092](../decisions/0092-session-hygiene-and-agent-run-procedures.md):
+before ending, and as soon as a task's work is merged or abandoned, remove
+what this session created.
+
+1. Worktrees under `.hub/worktrees/`, local branches and remote branches whose
+   head is in `main`. Inspect tracked, staged, untracked and ignored files
+   first; move evidence and work products to the private operations cache.
+2. Background processes the session started.
+3. Deployment kits older than the running release and its rollback release.
+4. Record in the private handoff what is kept, its purpose and the event that
+   ends it. Unrecorded leftovers older than seven days are removed by the
+   sweep in section 2 under the same checks.
+
+## 4. Report
 
 Send one short report to the channel where the owner gave the task:
 
 - what was closed, merged, deleted, resolved or deployed, as counts with
-  exceptions named;
+  exceptions named, including this session's own leftovers removed or kept;
 - the exact revision every component runs, and the highest evidence level;
 - the backup and rollback pointer, described without private paths;
 - what is left for the owner, each item with a recommendation.
