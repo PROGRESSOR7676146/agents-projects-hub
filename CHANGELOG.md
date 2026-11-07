@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Telegram calls survive a stalled TCP connect: the connect gets its own
+  3-second limit and a proven unsent attempt is repeated up to three times,
+  so no message can be sent twice (ADR 0068 amendment).
+
 ## [0.11.4] - 2026-11-07
 
 - The Codex app-server start is no longer refused forever by a late-read claim

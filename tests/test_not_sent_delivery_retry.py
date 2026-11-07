@@ -15,6 +15,7 @@ from hermes_codex_router.progress_delivery_sender import deliver_progress
 from hermes_codex_router.state import HubState
 from hermes_codex_router.task_notice_sender import deliver_task_notice
 from hermes_codex_router.telegram import TelegramBotApi
+from hermes_codex_router.telegram_transport import CONNECT_ATTEMPTS
 from tests import test_delivery_certainty as final_fixtures
 from tests import test_progress_delivery as progress_fixtures
 from tests import test_task_lifecycle as notice_fixtures
@@ -61,7 +62,7 @@ class NotSentDeliveryRetryTests(unittest.TestCase):
                 result = deliver_final_part(
                     state.delivery, bot, second, state_path=state_path, now=now
                 )
-            connect.assert_called_once()
+            self.assertEqual(connect.call_count, CONNECT_ATTEMPTS)  # each bounded attempt unsent
             self.assertIsNotNone(result.error)
             pending = state.get_telegram_outbox_for_job(job_id)
             self.assertEqual(pending.status, "pending")
