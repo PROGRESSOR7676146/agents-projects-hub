@@ -87,9 +87,14 @@ review. Scoring, judges and parallel writers stay excluded.
 
 ## Source candidates
 
-Earlier candidate and prerequisite sections, from the source integration
-checkpoint to the final-response mode indicators, are kept unchanged in
-[stabilization source candidates](STABILIZATION_CANDIDATES.md).
+Candidate and prerequisite sections, from the source integration checkpoint to
+the final-response mode indicators, are kept unchanged in
+[stabilization source candidates](STABILIZATION_CANDIDATES.md), each with its own
+status. Still open there, with their next triggers:
+
+- [Final/progress delivery certainty prerequisite](STABILIZATION_CANDIDATES.md#finalprogress-delivery-certainty-prerequisite)
+- [Delivery control storage and preview prerequisite](STABILIZATION_CANDIDATES.md#delivery-control-storage-and-preview-prerequisite)
+- [Coordinated delivery control authority](STABILIZATION_CANDIDATES.md#coordinated-delivery-control-authority)
 
 ## Why
 

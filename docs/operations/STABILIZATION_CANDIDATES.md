@@ -1,9 +1,10 @@
 # Stabilization source candidates
 
-Status: historical record, moved unchanged from the
-[stabilization plan](STABILIZATION_PLAN.md) on 2026-11-07 to keep the plan
-readable. Each section keeps its own status line; open live acceptance stays
-tracked in the plan's [live-acceptance backlog](STABILIZATION_PLAN.md#live-acceptance-backlog).
+Status: reference for source candidates and prerequisites, moved unchanged from
+the [stabilization plan](STABILIZATION_PLAN.md) on 2026-11-07 to keep the plan
+readable. Sections are not all closed: each keeps its own status and next
+trigger, and the plan lists the open ones. Open live acceptance stays tracked in
+the plan's [live-acceptance backlog](STABILIZATION_PLAN.md#live-acceptance-backlog).
 
 ## Current source integration checkpoint
 
