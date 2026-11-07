@@ -1,7 +1,7 @@
 # Telegram delivery and receipt requirements
 
 Part of the [product requirements baseline](PRODUCT_REQUIREMENTS.md).
-Supporting detail: [reference](REQUIREMENT_DETAILS.md#delivery-and-receipts).
+Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipts).
 
 ## 23. Telegram result and progress delivery
 

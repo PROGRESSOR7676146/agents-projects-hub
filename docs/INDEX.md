@@ -26,6 +26,8 @@ live acceptance.
 ## Delivery and operation
 
 - [Stabilization plan and live-acceptance backlog](operations/STABILIZATION_PLAN.md)
+- [Earlier stabilization source candidates](operations/STABILIZATION_CANDIDATES.md)
+- [Owner-step defects](operations/OWNER_STEP_DEFECTS.md)
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
 - [Claude Code: project editor and human approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
