@@ -169,7 +169,7 @@ refuse before inference; exact-session failure MUST NOT create a replacement.
   before invocation.
 - **REQ-SEC-007 (Accepted):** Provider failure MUST be visible, reversible and isolated; recovery
   MUST NOT weaken security.
-- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent and workstation live acceptance
+- **REQ-SEC-008 (Minimal developer and workstation live accepted; temporary Bash consent
   pending):** Claude tool access MUST follow an explicitly selected profile and verified launch
   boundary; failed confinement MUST refuse, never launch unconfined.
   - The editor profile permits project read/search and requires fresh human permission for each
