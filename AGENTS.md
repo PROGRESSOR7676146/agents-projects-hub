@@ -190,10 +190,12 @@ Owner decision, 2026-11-07 ([ADR 0092](docs/decisions/0092-session-hygiene-and-a
   root-owned `sudo` runtime install is one.
 - **Each session removes what it creates.** Create worktrees only under
   `.hub/worktrees/<task>-<date>`, temporary files only in the session scratch
-  directory and kits only in one `rollout-<version>` directory. When work is
+  directory and kits only in one `rollout-<version>` directory. Merge with a
+  merge commit so branch heads stay reachable from `main`. When work is
   merged or abandoned, and before the session ends, remove its own worktrees,
   local and merged remote branches and background processes, after moving any
-  evidence out. Record in the private handoff whatever is kept, and why. The
+  evidence out. In old kits remove only rebuildable artifacts, never backups or
+  evidence. Record in the private handoff whatever is kept, and why. The
   report names what was removed and what was kept.
 
 This grants nothing to Hub-hosted provider turns, Hermes cards or background

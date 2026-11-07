@@ -67,7 +67,10 @@ what this session created.
    head is in `main`. Inspect tracked, staged, untracked and ignored files
    first; move evidence and work products to the private operations cache.
 2. Background processes the session started.
-3. Deployment kits older than the running release and its rollback release.
+3. In deployment kits older than the running release and its rollback
+   release, only rebuildable artifacts: staged and rehearsal virtual
+   environments, runtime trees and sealed bundles. Backups, journals, receipts
+   and other evidence stay.
 4. Record in the private handoff what is kept, its purpose and the event that
    ends it. Unrecorded leftovers older than seven days are removed by the
    sweep in section 2 under the same checks.

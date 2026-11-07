@@ -36,17 +36,22 @@ bottleneck and is easy to get wrong.
    inspects tracked, staged, untracked and ignored files first: work products
    and evidence are moved to the private operations cache or recorded, never
    deleted with the worktree.
-3. **Kits.** After a successful deployment, keep the kit of the running
-   release and of its rollback release. Remove older kits whose release is
-   neither running nor a recorded rollback.
+3. **Kits.** After a successful deployment, the kits of the running release and
+   of its rollback release stay whole. In older kits, remove only artifacts that
+   can be rebuilt from a published release: staged and rehearsal virtual
+   environments, runtime trees and sealed bundles. State backups, window
+   journals, receipts and other evidence stay; deleting them is the owner's
+   decision under ADR 0087.
 4. **Anything kept** past the session (unfinished work, evidence, a long-lived
    worktree) is recorded in the private handoff with its purpose and the event
    that ends it. A leftover that is not recorded and is older than seven days
    is fair game for any session's upkeep sweep, under the cleanliness checks of
    ADR 0087 rule 4.
-5. **Merged remote branches** are deleted on merge. The repository setting
-   that deletes head branches automatically is enabled, so this needs no
-   session action.
+5. **Merging keeps heads reachable.** An agent merges with a merge commit, so the
+   branch head stays reachable from `main` and its branch can then be deleted
+   under ADR 0087 rule 4. A squash-merged branch is not merged in that sense and
+   stays. Platform automation that deletes head branches on merge is not used:
+   it cannot check those conditions.
 6. The session report says what the session removed and what it kept, and why.
 
 ### Agents run every technical procedure
@@ -55,10 +60,10 @@ bottleneck and is easy to get wrong.
    owner to run a command, copy output, edit a file, restart a service, reboot
    for a technical reason or test by hand. The same holds for every step that
    ADR 0087 reserves for the owner: the owner decides, and the agent carries it
-   out once the owner has said yes. Live acceptance and live model probes stay
-   owner-authorized; once authorized, the agent runs them, for example through
-   the dedicated Telegram acceptance actor, instead of asking the owner to send
-   messages.
+   out once the owner has said yes. Live acceptance and live model probes still
+   need the owner's explicit invocation for that run; once invoked, the agent
+   runs them, for example through the dedicated Telegram acceptance actor,
+   instead of asking the owner to send messages.
 2. Only steps that need the owner as a person stay with the owner: signing in
    to an account or issuing a credential, answering an approval request, and
    actions on the Windows host or hardware outside the Linux installation. The
