@@ -1,6 +1,6 @@
 # ADR 0081: Claude workstation profile sees the whole host
 
-Status: accepted owner direction; source implementation, installed acceptance pending.
+Status: accepted owner direction; installed and live-accepted on release 0.11.5 (2026-11-07).
 Date: 2026-10-28
 Owner: repository owner. Implementation owner: Hub maintainer.
 Contract: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).

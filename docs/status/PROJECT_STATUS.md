@@ -16,7 +16,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | --- | --- | --- | --- |
 | Claude corrections during execution | Opt-in bounded implementation (schema55); offline tests and native source review at `99f0416` | Pending | [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0083](../decisions/0083-durable-claude-corrections.md) |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
-| Claude Code CPA worker | Text-only default; opt-in developer and workstation implemented; confined linked worktrees; subscription route: ADR 0082 | Bounded ordinary-root developer acceptance complete; linked-worktree productive acceptance and full parity remain separate | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
+| Claude Code CPA worker | Text-only default; opt-in developer and workstation implemented; confined linked worktrees; subscription route: ADR 0082 | Bounded ordinary-root developer acceptance complete; workstation live-accepted on 0.11.5; linked-worktree productive acceptance and full parity remain separate | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
 | Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending scoped live checks; global helper/admin isolation not claimed; unsupported local boundaries remain refused | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
 | Claude/Codex lead and advisor | Retired from Hub scope; not implemented | Not required | [Retired IDs](../product/IDENTITY_AND_INTERACTION.md#explicit-claude-codecodex-collaboration), [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) |
 | Minimal outcome journal | Read-only projection and schema-45 owner assessments implemented offline | Assessment/correction canary pending | [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0062](../decisions/0062-owner-outcome-assessments.md) |
@@ -60,8 +60,8 @@ and immediate protected-card settlement have source regression coverage under
 and live callbacks remain pending. The current foreground-heartbeat follow-up
 adds reader-local regression coverage; installed long-command acceptance remains
 open in the continuation plan. [ADR 0081](../decisions/0081-claude-workstation-host-view.md)
-workstation: source and namespace witness only. Older editor-only entries below retain their
-historical evidence and do not override this checkpoint.
+workstation: live-accepted on 0.11.5. Older editor-only entries below are history and
+do not override this checkpoint.
 
 External Codex slots have offline admission, root-exclusion, fairness and health
 coverage; deployment and live three-project acceptance remain pending. See

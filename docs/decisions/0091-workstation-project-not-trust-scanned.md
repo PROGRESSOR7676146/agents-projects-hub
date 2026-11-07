@@ -1,6 +1,6 @@
 # ADR 0091: Workstation shows the project without a trust scan
 
-Status: accepted owner direction; source candidate, installed acceptance pending.
+Status: accepted owner direction; installed and live-accepted on release 0.11.5 (2026-11-07).
 Date: 2026-11-07
 Owner: repository owner. Implementation owner: Hub maintainer.
 Contract: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).

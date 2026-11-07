@@ -103,7 +103,7 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 
 - [0080: Claude workstation profile](0080-claude-workstation-profile.md) — wide readonly view with masks; superseded before installation by 0081.
 
-- [0081: Claude workstation host view](0081-claude-workstation-host-view.md) — whole host readonly, Docker shared, preauthorized foreground Bash, no masks; installed acceptance pending.
+- [0081: Claude workstation host view](0081-claude-workstation-host-view.md) — whole host readonly, Docker shared, preauthorized foreground Bash, no masks; installed and live-accepted on 0.11.5.
 
 - [0082: Claude subscription route](0082-claude-subscription-route.md) — explicit `auth_route`, native subscription token without CPA, optional fixed account per project without pools or switching, `developer` excluded; installed acceptance pending.
 
@@ -113,5 +113,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0088: Boot-time external Codex server start](0088-boot-time-codex-server-start.md) — the monitor alerts when the external Codex app-server is not listening; an opt-in boot start lets the first start of each boot prove closed clients itself and remove only the previous boot's dangling socket link.
 - [0089: Prepared release switching](0089-prepared-release-switcher.md) — source candidate for a standalone grouped switch/rollback primitive; trusted-runtime and deployment integration remain separate.
 - [0090: Native installed backup input](0090-installed-backup-input.md) — artifact-bound readback and inspectable SQLite snapshots; installation publication and full recovery adoption remain separate.
-- [0091: Workstation project without a trust scan](0091-workstation-project-not-trust-scanned.md) — `workstation` admits hardlinks, special files and large trees in the project like Codex; bind aliases with the session HOME still refuse; installed acceptance pending.
+- [0091: Workstation project without a trust scan](0091-workstation-project-not-trust-scanned.md) — `workstation` admits hardlinks, special files and large trees in the project like Codex; bind aliases with the session HOME still refuse; installed and live-accepted on 0.11.5.
 - [0092: Session hygiene and agent-run procedures](0092-session-hygiene-and-agent-run-procedures.md) — each session removes the worktrees, branches, kits and processes it created; agents run every technical procedure, and a step that still needs the owner is a tracked defect.

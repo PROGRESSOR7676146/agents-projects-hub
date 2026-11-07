@@ -186,8 +186,8 @@ Owner decision, 2026-11-07 ([ADR 0092](docs/decisions/0092-session-hygiene-and-a
   then carries it out. Only
   account sign-in or credential issuance, approval answers and Windows-host or
   hardware actions need the owner in person. Any other step that still needs
-  the owner is a defect to remove and to track in `docs/operations/OWNER_STEP_DEFECTS.md`; the
-  root-owned `sudo` runtime install is one.
+  the owner is a defect to remove and to track in `docs/operations/OWNER_STEP_DEFECTS.md`.
+  Releases deploy as user-owned sealed runtimes, without `sudo`.
 - **Each session removes what it creates.** Create worktrees only under
   `.hub/worktrees/<task>-<date>`, temporary files only in the session scratch
   directory and kits only in one `rollout-<version>` directory. Merge with a
