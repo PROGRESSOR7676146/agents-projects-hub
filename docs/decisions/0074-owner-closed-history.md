@@ -24,7 +24,13 @@ for admission, control changes, transfers, adoption, relocation, lanes and drain
 The retained send fence continues to prohibit every repeat interrupt. The
 provider job, control row, terminal evidence and delivery records remain intact.
 No background disposition or native invocation is added. Unfinished read claims
-continue blocking until their existing owner/cleanup settles them.
+continue blocking until their existing owner/cleanup settles them. Amendment,
+2026-11-07: server start ignores a claim left on a final job (completed, failed
+or cancelled). A claim authorizes a send only while its job is indeterminate,
+checked in the same transaction as the send reservation, and only executing work
+can become indeterminate, so such a claim can never act; reading has no effect.
+No clock is involved. Claims on indeterminate jobs still block, nothing clears
+the claim, and other admission paths are unchanged.
 
 HubState retains transaction ownership. The only mutation is the existing
 owner-only `indeterminate-resolve` operation. No migration or schema bump is

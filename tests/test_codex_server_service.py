@@ -119,6 +119,46 @@ class CodexServerServiceTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "active or unknown"):
                         service.require_idle_state(f.fixture.config.state_path)
 
+    def test_read_claim_left_on_a_final_job_does_not_refuse_start(self):
+        # A claim can only authorize a send while its job is indeterminate, and a
+        # final job never returns there; reading has no effect. No clock is used.
+        from tests import test_codex_turn_controls as fixtures
+
+        for status, refused in (
+            ("indeterminate", True),
+            ("completed", False),
+            ("failed", False),
+            ("cancelled", False),
+        ):
+            with self.subTest(status=status):
+                f = fixtures.CodexTurnControlJournalTests()
+                f.setUp()
+                self.addCleanup(f.doCleanups)
+                f.journal.record_turn(f.job_id, f.token, "example-turn")
+                f.state.terminate_provider_job_with_notice(
+                    f.job_id,
+                    f.token,
+                    status="indeterminate",
+                    error_class="ambiguous_execution",
+                    error_code="example_unknown",
+                    sender_agent_id="codex",
+                    telegram_html="Unknown outcome",
+                    terminal_turn_status="interrupted",
+                )
+                with f.state._connection as db:
+                    db.execute(
+                        "UPDATE codex_turn_controls SET read_claim_token='example-reader',"
+                        "read_claim_owner='example-worker',"
+                        "read_claim_expires_at='2099-01-01T00:00:00+00:00'"
+                    )
+                    db.execute("UPDATE provider_jobs SET status=?", (status,))
+                path = f.fixture.config.state_path
+                if refused:
+                    with self.assertRaisesRegex(ValueError, "turn control"):
+                        service.require_idle_state(path)
+                else:
+                    service.require_idle_state(path)
+
     def test_existing_process_custody_and_unreadable_inventory(self):
         root = Path(self.temp.name) / "proc"
         root.mkdir()
