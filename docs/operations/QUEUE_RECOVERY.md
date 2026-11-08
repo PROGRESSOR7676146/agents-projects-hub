@@ -144,8 +144,12 @@ checks remain independent. See [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONT
 
 ### Hub-owner recovery of a delivery hold
 
-Schema56 adds a second, narrower route after its exact reviewed release is
-deployed. It is not live acceptance evidence and must not be used before the
+Schema56 supports a second, narrower route when the release artifact enables it.
+The 0.11.6 rollback target disables remote recovery: `release-info` reports
+`remote_delivery_hold_recovery` as false, and Telegram commands and callbacks
+refer the owner to the local `delivery-hold` command. Previously recorded remote
+decisions still release their matching FIFO barriers. When enabled in a future
+reviewed artifact, this route is available after that exact release is deployed. It is not live acceptance evidence and must not be used before the
 separate deployment/owner Telegram acceptance gate is complete.
 
 Only the configured Hub bot in external queue/outbox mode can offer it, and

@@ -363,7 +363,9 @@ class HubConfigTests(unittest.TestCase):
                 outbox_runtime="external",
             )
         )
-        self.assertTrue(configured.hub_delivery_hold_recovery_enabled)
+        self.assertFalse(configured.hub_delivery_hold_recovery_enabled)
+        with patch("hermes_codex_router.artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY", True):
+            self.assertTrue(configured.hub_delivery_hold_recovery_enabled)
         assert configured.hub_bot is not None
         self.assertEqual(configured.hub_bot.telegram_user_id, 700)
         for invalid in (True, 0, -1, "700"):

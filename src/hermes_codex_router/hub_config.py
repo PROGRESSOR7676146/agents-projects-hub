@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import artifact_capabilities
 from .claude_catalog import CLAUDE_EFFORTS, parse_claude_catalog
 from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
 from .codex_permissions import validate_permission_profile_id
@@ -206,7 +207,8 @@ class HubConfig:
         """
         hub_bot_id = self.hub_bot.telegram_user_id if self.hub_bot is not None else None
         return (
-            type(hub_bot_id) is int
+            artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY
+            and type(hub_bot_id) is int
             and hub_bot_id > 0
             and self.dispatch_mode == "queue"
             and self.queue_runtime == "external"

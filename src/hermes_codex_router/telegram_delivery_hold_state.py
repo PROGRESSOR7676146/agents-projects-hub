@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Sequence
 
+from . import artifact_capabilities
 from .delivery_hold_predicates import outbox_delivery_hold_released
 from .delivery_hold_state import ACTION, DeliveryHoldState
 
@@ -101,6 +102,12 @@ class TelegramDeliveryHoldState:
     def _require_transaction(self) -> None:
         if not self.db.in_transaction:
             raise self.error("Telegram delivery-hold recovery requires a state transaction")
+
+    def _require_enabled_artifact(self) -> None:
+        if not artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY:
+            raise self.error(
+                "Remote delivery recovery is unavailable in this build; use local delivery-hold"
+            )
 
     def _timestamp(self, now: datetime) -> tuple[datetime, str]:
         if now.tzinfo is None or now.utcoffset() is None:
@@ -257,6 +264,7 @@ class TelegramDeliveryHoldState:
         now: datetime,
     ) -> TelegramDeliveryHoldPreview:
         self._require_transaction()
+        self._require_enabled_artifact()
         self._owner(owner_user_id, owner_user_ids)
         self._integer(hub_bot_user_id, "Hub Bot")
         current, issued_at = self._timestamp(now)
@@ -307,6 +315,7 @@ class TelegramDeliveryHoldState:
     ) -> None:
         """Persist only after Telegram returned the exact preview message ID."""
         self._require_transaction()
+        self._require_enabled_artifact()
         if not isinstance(preview, TelegramDeliveryHoldPreview):
             raise self.error("invalid Telegram delivery-hold preview")
         self._owner(preview.owner_user_id, owner_user_ids)
@@ -432,6 +441,7 @@ class TelegramDeliveryHoldState:
         now: datetime,
     ) -> TelegramDeliveryHoldDisposition:
         self._require_transaction()
+        self._require_enabled_artifact()
         self._owner(owner_user_id, owner_user_ids)
         self._validate_token(token)
         self._integer(chat_id, "chat", positive=False)

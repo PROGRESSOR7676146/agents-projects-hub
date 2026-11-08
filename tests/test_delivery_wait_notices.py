@@ -192,7 +192,7 @@ class DeliveryWaitSenderTests(TestCase):
         self.assertTrue(self.sender.run_cycle())
         self.assertEqual(len(self.hub.sent), 1)
         self.assertIn("unconfirmed", self.hub.sent[0][2])
-        self.assertIn("/delivery", self.hub.sent[0][2])
+        self.assertNotIn("/delivery", self.hub.sent[0][2])
         self.assertEqual(
             self.sender.state.get_telegram_outbox_for_job(self.job_id).status, "unknown"
         )

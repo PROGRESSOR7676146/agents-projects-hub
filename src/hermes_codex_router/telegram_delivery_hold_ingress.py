@@ -10,11 +10,16 @@ from __future__ import annotations
 import sqlite3
 from typing import Protocol
 
+from . import artifact_capabilities
 from .hub_config import AgentDefinition, HubConfig
 from .routing import parse_command
 from .state import HubState, StateError
 from .telegram import TelegramBotApi, TelegramError, TopicCallback, TopicMessage
 from .telegram_delivery_hold_state import CALLBACK_ORIGIN, CALLBACK_PREFIX, preview_text
+
+UNAVAILABLE = (
+    "Remote delivery recovery is unavailable in this build. Use the local delivery-hold command."
+)
 
 
 class _HubDeliveryHoldService(Protocol):
@@ -71,6 +76,8 @@ def try_handle_telegram_delivery_hold_command(
     command = parse_command(message.text)
     if command is None or command.name != "delivery":
         if _looks_like_delivery_recovery_command(message.text):
+            if not artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY:
+                return _refusal(service, message, UNAVAILABLE)
             return _refusal(
                 service,
                 message,
@@ -81,6 +88,8 @@ def try_handle_telegram_delivery_hold_command(
         # A scoped acceptance actor can pass general ingress authorization,
         # but is never an owner for this recovery capability.
         return False
+    if not artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY:
+        return _refusal(service, message, UNAVAILABLE)
     if (
         message.is_forwarded
         or command.arguments
@@ -183,6 +192,9 @@ def try_handle_telegram_delivery_hold_callback(
     """Apply a bound owner callback without the generic callback receipt gate."""
     if not callback.data.startswith(CALLBACK_PREFIX):
         return None
+    if not artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY:
+        service.telegram.answer_callback(callback.callback_id, UNAVAILABLE)
+        return True
     hub_bot = service.config.hub_bot
     if (
         not _recovery_enabled(service)
