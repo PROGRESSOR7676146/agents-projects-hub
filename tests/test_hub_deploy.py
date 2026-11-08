@@ -856,8 +856,32 @@ class ServiceManagerTests(unittest.TestCase):
                 "BoundBy",
                 "ConsistsOf",
                 "UpheldBy",
+                "PropagatesStopTo",
+                "StopPropagatedFrom",
+                "Conflicts",
+                "ConflictedBy",
             ):
                 self.assertIn((unit, name), manager.reads)
+
+    def test_new_dependency_properties_use_strict_systemctl_reads(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            name = argv[-1].split("=", 1)[1]
+            return SimpleNamespace(stdout=name + "=fixture.service\n")
+
+        manager = hub_deploy.ServiceManager(runner)
+        for name in ("PropagatesStopTo", "StopPropagatedFrom", "Conflicts", "ConflictedBy"):
+            self.assertEqual(manager.property("worker.service", name), "fixture.service")
+            self.assertEqual(calls[-1][-2:], ["--all", "--property=" + name])
+        manager.runner = lambda argv: SimpleNamespace(stdout="")
+        for name in ("PropagatesStopTo", "StopPropagatedFrom", "Conflicts", "ConflictedBy"):
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(hub_deploy.Refused, "dependency property"),
+            ):
+                manager.property("worker.service", name)
 
     def test_environment_is_read_through_systemctl(self):
         calls = []
@@ -1288,6 +1312,59 @@ class WindowTests(unittest.TestCase):
         with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
             self.execute()
         self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
+
+    def test_stop_propagation_and_conflicts_refused_before_effects(self):
+        self.prepare_config_only()
+        original = self.manager.property
+        scenarios = (
+            {
+                ("worker.service", "PropagatesStopTo"): "middle.service",
+                ("middle.service", "StopPropagatedFrom"): "worker.service",
+                ("middle.service", "PropagatesStopTo"): "codex-alias.service",
+                ("codex-alias.service", "StopPropagatedFrom"): "middle.service",
+            },
+            {("worker.service", "Conflicts"): "codex.service"},
+            *(
+                {
+                    ("worker.service", relation): "middle.service",
+                    ("middle.service", "Conflicts"): "codex.service",
+                }
+                for relation in ("Wants", "Requires", "BindsTo", "Upholds")
+            ),
+            {
+                ("worker.service", "Wants"): "middle.service",
+                ("middle.service", "Conflicts"): "stopper.service",
+                ("stopper.service", "PropagatesStopTo"): "socket-dir.service",
+            },
+            {
+                ("worker.service", "Requires"): "middle.service",
+                ("middle.service", "ConflictedBy"): "codex-alias.service",
+            },
+            {
+                ("worker.service", "PropagatesStopTo"): "middle.service",
+                ("middle.service", "UpheldBy"): "keeper.service",
+                ("middle.service", "Conflicts"): "socket-dir.service",
+            },
+        )
+        for edges in scenarios:
+
+            def property_value(unit, name):
+                if unit in ("codex.service", "codex-alias.service"):
+                    if name == "Id":
+                        return "codex.service"
+                    if name == "Names":
+                        return "codex.service codex-alias.service"
+                return edges.get((unit, name), original(unit, name))
+
+            self.manager.property = property_value
+            with (
+                self.subTest(edges=edges),
+                self.assertRaisesRegex(hub_deploy.Refused, "dependency"),
+            ):
+                self.execute()
+            self.assertFalse(
+                any(call[0] in ("start", "stop", "reload") for call in self.manager.calls)
+            )
 
     def test_rollback_schema_drift_never_starts_old_runtime(self):
         result = self.execute()

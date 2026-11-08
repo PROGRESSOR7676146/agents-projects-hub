@@ -1191,6 +1191,10 @@ _DEPENDENCIES = (
     "BoundBy",
     "ConsistsOf",
     "UpheldBy",
+    "PropagatesStopTo",
+    "StopPropagatedFrom",
+    "Conflicts",
+    "ConflictedBy",
 )
 
 
@@ -1234,8 +1238,10 @@ def _check_dependencies(manager: Any, operated: list[str], untouched: list[str])
         if action == "start":
             for name in ("Wants", "Requires", "BindsTo", "Upholds"):
                 pending.extend((target, "start") for target in values[name])
+            for name in ("Conflicts", "ConflictedBy"):
+                pending.extend((target, "stop") for target in values[name])
         else:
-            for name in ("RequiredBy", "BoundBy", "ConsistsOf"):
+            for name in ("RequiredBy", "BoundBy", "ConsistsOf", "PropagatesStopTo"):
                 pending.extend((target, "stop") for target in values[name])
             if values["UpheldBy"]:
                 pending.append((unit, "start"))
