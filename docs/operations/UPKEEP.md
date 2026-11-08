@@ -46,7 +46,10 @@ checks: `status`, `doctor` and the audits. Never run a live model probe.
    [release preparation](IMMUTABLE_RELEASES.md) and the
    [Hub restart procedure](HUB_RESTART.ru.md). When a condition is missing,
    prepare it first. For example, publish the compatible rollback release and
-   rehearse the rollback on a copy of the populated state. Ask the owner only
+   rehearse the rollback on a copy of the populated state. For `hub_deploy`, a
+   forward schema migration requires `--rollback-release` with the target schema;
+   recovery selects the runtime from the quiesced live schema and never restores
+   a database backup automatically (see [deploy runbook](HUB_DEPLOY.md)). Ask the owner only
    when the missing condition is one of the reserved steps. A release that
    needs a root-owned runtime installed with `sudo` is such a step: prepare
    the rest and ask for that one command.

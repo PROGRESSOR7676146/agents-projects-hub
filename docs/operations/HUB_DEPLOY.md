@@ -75,24 +75,22 @@ are synced to the private journal.
 The result and exit code are:
 
 - `ACCEPTED` (0): core convergence and monitor check succeeded.
-- `ROLLED_BACK` (2): apply failed and the old runtime converged after recovery.
+- `ROLLED_BACK` (2): the schema-compatible rollback runtime converged after recovery.
 - `CORE_HEALTHY_MONITOR_INCOMPLETE` (3): core converged but both monitor checks failed; the new files remain installed.
 - `RECOVERY_REQUIRED` (4): recovery could not be verified; preserve the window evidence and stop further changes.
 - Refusal (1): the window was not accepted for execution.
 
 On an interrupted window, `apply` and `deploy` print the complete
-`rollback --window ID` command including the installation input. `status` prints
-the last recorded window state. Explicit rollback accepts a mixture of saved
-before and after files, restores the recorded before files, reloads and verifies
-old convergence. It refuses unrelated file edits. Neither automatic nor explicit
-rollback restores the database backup. Window records and backups remain in the
-private ops directory.
-
-Only the newest window can be explicitly rolled back. Recovery validates the
-complete before/after file inventory before stopping services and again after
-quiescence. Before starting the old runtime it rechecks the live schema, the
-bound rollback artifact and the old runtime identity and pin. A mismatch leaves
-recovery required; the saved database backup is never restored automatically.
+`rollback --window ID` command including the installation input. `status` shows
+the last recorded window, live schema and currently applicable rollback target
+and revision; recovery makes its final selection after stopping services.
+Recovery accepts only the newest window and validates the complete saved file
+inventory before effects and again after quiescence. With the original schema it
+restores the previous runtime; with the target schema it installs the prepared
+rollback release. Another schema stops recovery and requires an owner decision.
+The selected artifact, runtime identity and pin are rechecked, and the choice is
+journaled. Neither automatic nor explicit rollback restores a database backup.
+Window records and backups remain in the private ops directory.
 
 ```text
 python3.12 -I scripts/hub_deploy.py deploy --installation /home/example/private/installation.json --release v1.2.3
@@ -103,7 +101,14 @@ python3.12 -I scripts/hub_deploy.py status --installation /home/example/private/
 The `plan` command discovers the common managed runtime and Claude pin, checks
 unit activity and residency, downloads and verifies both release asset sets,
 compares their `schema_max` values with the read-only database schema, and builds
-or verifies an inactive sealed candidate. It requires network access and writes
+or verifies an inactive sealed candidate. A forward migration also requires
+`--rollback-release TAG`: this distinct verified release must have the same
+`schema_max` as the candidate and is prepared and validated in the same way.
+A candidate below the live schema, or an old release whose schema differs from
+live state, is refused. The plan binds both schemas and the rollback identity.
+The backup is completed before the first new-runtime service starts; workers
+may migrate the database before the controller starts. The live database must
+still have the old schema before the backup and the target schema after start. It requires network access and writes
 the candidate runtime and private evidence; it does not change installed service
 files or restart services. A Claude config filename containing the first seven
 characters of the old revision is changed to the new prefix; otherwise its
@@ -111,7 +116,7 @@ existing name is retained. The candidate runtime validates both Hub configs.
 Release unit templates are included as changes only when their bytes differ;
 unchanged templates are recorded as guards.
 
-The private plan directory records before and after copies and hashes, runtime
+The private plan directory records before, after and applicable rollback copies and hashes, runtime
 identities, service order and a digest of canonical plan JSON. The command
 rechecks the digest, copies and installed files before reporting the plan. Old
 release tags are resolved from the discovered revision; missing or ambiguous
@@ -121,5 +126,5 @@ releases. Only offline fixture execution has been tested; no installed planning,
 deployment or rollback has been accepted.
 
 ```text
-python3.12 -I scripts/hub_deploy.py plan --installation /home/example/private/installation.json --release v1.2.3
+python3.12 -I scripts/hub_deploy.py plan --installation /home/example/private/installation.json --release v1.2.3 --rollback-release v1.2.2
 ```
