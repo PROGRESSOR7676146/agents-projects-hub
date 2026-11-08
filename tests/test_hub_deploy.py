@@ -13,6 +13,7 @@ import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 from scripts import hub_deploy
@@ -229,7 +230,7 @@ class DiscoveryTests(unittest.TestCase):
         )
 
 
-class StageTests(unittest.TestCase):
+class StageFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -392,6 +393,8 @@ class StageTests(unittest.TestCase):
             )
         return SimpleNamespace(stdout="")
 
+
+class StageTests(StageFixture):
     def test_input_validation(self):
         self.assertEqual(hub_deploy.load_installation(self.input)["schema_version"], 1)
         for key, value in [
@@ -954,7 +957,7 @@ class FakeManager:
         self.calls = []
         self.fail_start = False
         self.monitor_failures = 0
-        self.environment_override = None
+        self.environment_override: str | None = None
         self.resident_calls = []
         self.effective_reads = []
 
@@ -1033,14 +1036,9 @@ class FakeManager:
         )
 
 
-class WindowTests(unittest.TestCase):
-    write_input = StageTests.write_input
-    write_layout = StageTests.write_layout
-    make_assets = StageTests.make_assets
-    runner = StageTests.runner
-
+class WindowTests(StageFixture):
     def setUp(self):
-        StageTests.setUp(self)
+        super().setUp()
         self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
         with closing(sqlite3.connect(self.db)) as db:
             db.execute("CREATE TABLE provider_jobs (agent_id TEXT, status TEXT)")
@@ -1055,6 +1053,12 @@ class WindowTests(unittest.TestCase):
         self.manager.states["codex.service"] = "failed"
         self.sleeps = []
         self.fail_verify_old = False
+
+    def require_window(self) -> dict[str, Any]:
+        window = hub_deploy.last_window(self.install)
+        if window is None:
+            self.fail("expected a window")
+        return window
 
     def window_runner(self, argv, **kwargs):
         argv = list(map(str, argv))
@@ -1079,7 +1083,7 @@ class WindowTests(unittest.TestCase):
                 "release_clean": True,
                 "instance_id": "fixture",
             }
-            health = {
+            health: dict[str, Any] = {
                 k: component for k in ("controller", "monitor", "sender", "project_provisioner")
             }
             health["provider_workers"] = []
@@ -1399,7 +1403,7 @@ class WindowTests(unittest.TestCase):
         )
         with patch.object(hub_deploy.time, "time_ns", return_value=1):
             second = self.execute()
-        self.assertEqual(hub_deploy.last_window(self.install)["id"], second["id"])
+        self.assertEqual(self.require_window()["id"], second["id"])
         with self.assertRaisesRegex(hub_deploy.Refused, "superseded"):
             hub_deploy.rollback_window(
                 self.install, first["id"], self.manager, self.window_runner, self.sleeps.append
@@ -1506,7 +1510,7 @@ class WindowTests(unittest.TestCase):
 
                     with self.assertRaises(Interrupted):
                         fixture.execute(fault=interrupt)
-                    window = hub_deploy.last_window(fixture.install)
+                    window = fixture.require_window()
                     with self.assertRaisesRegex(hub_deploy.Refused, "rollback --window"):
                         fixture.execute()
                     result = hub_deploy.rollback_window(
@@ -1577,7 +1581,7 @@ class WindowTests(unittest.TestCase):
             )
         self.assertEqual(code, 1)
         self.assertIn(
-            "rollback --window " + hub_deploy.last_window(self.install)["id"] + " --installation ",
+            "rollback --window " + self.require_window()["id"] + " --installation ",
             error.getvalue(),
         )
 
@@ -1625,16 +1629,16 @@ class WindowTests(unittest.TestCase):
 
         with self.assertRaises(Interrupted):
             self.execute(fault=lambda _: (_ for _ in ()).throw(Interrupted()))
-        window = hub_deploy.last_window(self.install)
+        window = self.require_window()
         journal = self.ops / window["id"] / "journal.jsonl"
         with journal.open("ab") as stream:
             stream.write(b'{"phase":')
-        self.assertEqual(hub_deploy.last_window(self.install)["id"], window["id"])
+        self.assertEqual(self.require_window()["id"], window["id"])
         result = hub_deploy.rollback_window(
             self.install, window["id"], self.manager, self.window_runner, self.sleeps.append
         )
         self.assertEqual(result["outcome"], "ROLLED_BACK")
-        self.assertEqual(hub_deploy.last_window(self.install)["state"], "ROLLED_BACK")
+        self.assertEqual(self.require_window()["state"], "ROLLED_BACK")
 
     def test_monitor_retry_once(self):
         self.manager.monitor_failures = 1

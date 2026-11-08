@@ -6,7 +6,7 @@ and releases use semantic versioning while the public API is still evolving.
 ## [Unreleased]
 
 - Add fixture-tested planning, execution and recovery paths for one-command Hub
-  deployment; installed acceptance remains outstanding (ADR 0093 proposed).
+  deployment; installed acceptance remains outstanding (ADR 0094 proposed).
 
 ## [0.11.5] - 2026-11-07
 

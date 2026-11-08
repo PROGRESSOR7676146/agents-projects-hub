@@ -91,7 +91,7 @@ The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or
 introduces a durable trade-off whose rationale must outlive its implementation.
 
-- [0093: One-command Hub deploy](0093-one-command-hub-deploy.md) — proposed; first source slice fixture-tested.
+- [0094: One-command Hub deploy](0094-one-command-hub-deploy.md) — proposed; first source slice fixture-tested.
 
 - [0073: Passive card evidence and independent Codex custody](0073-tlive-approval-evidence-and-server-custody.md) — source candidate; live acceptance pending.
 

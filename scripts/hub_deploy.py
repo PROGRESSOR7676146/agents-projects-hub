@@ -111,7 +111,8 @@ def verify_config_pin(
     config: dict[str, Any], old: str, verify: Callable[[str, str], bool], *, user_owned: bool
 ) -> None:
     permissions = config.get("claude_file_permissions")
-    need(isinstance(permissions, dict), "missing Claude permissions")
+    if not isinstance(permissions, dict):
+        raise Refused("missing Claude permissions")
     pins = permissions.get("user_releases", [])
     need(isinstance(pins, list) and len(pins) <= 1, "ambiguous runtime pins")
     need(bool(pins) or not user_owned, "user runtime has no pin")
@@ -129,7 +130,8 @@ def verify_config_pin(
 
 
 def _path_rewrite(value: object, old: str, new: str) -> str:
-    need(isinstance(value, str), "expected path string")
+    if not isinstance(value, str):
+        raise Refused("expected path string")
     if value == old or value.startswith(old + "/"):
         return new + value[len(old) :]
     return value
@@ -154,13 +156,15 @@ def rewrite_claude_config(
     result = copy.deepcopy(config)
     agents = result.get("agents")
     permissions = result.get("claude_file_permissions")
-    need(isinstance(agents, list) and isinstance(permissions, dict), "unsupported Claude config")
+    if not isinstance(agents, list) or not isinstance(permissions, dict):
+        raise Refused("unsupported Claude config")
     for agent in agents:
         need(isinstance(agent, dict), "invalid agent")
         if agent.get("runtime") == "claude" and "executable" in agent:
             agent["executable"] = _path_rewrite(agent["executable"], old, new)
     roots = permissions.get("runtime_roots")
-    need(isinstance(roots, list), "invalid runtime_roots")
+    if not isinstance(roots, list):
+        raise Refused("invalid runtime_roots")
     permissions["runtime_roots"] = [_path_rewrite(path, old, new) for path in roots]
     for key in ("python_executable", "hook_code_root"):
         need(key in permissions, "missing " + key)
@@ -496,7 +500,8 @@ def _managed_dropins(
     texts = {}
     for path in paths:
         content = _file_bytes(path)
-        need(content is not None, "missing managed drop-in")
+        if content is None:
+            raise Refused("missing managed drop-in")
         texts[path] = content.decode("utf-8")
     scoped_units = (
         installation["restart_order"]
@@ -550,9 +555,11 @@ def _unit_runtime_modes(installation: dict[str, Any], root: str) -> dict[str, st
         ordered = [specific] + sorted(names - {specific})
         paths = [units_dir / name / installation["managed_dropin_name"] for name in ordered]
         path = next((path for path in paths if path.exists() or path.is_symlink()), None)
-        need(path is not None, "missing managed drop-in: " + unit)
+        if path is None:
+            raise Refused("missing managed drop-in: " + unit)
         content = _file_bytes(path)
-        need(content is not None, "missing managed drop-in: " + unit)
+        if content is None:
+            raise Refused("missing managed drop-in: " + unit)
         commands: list[str] = []
         environments: list[str] = []
         for line in content.decode("utf-8").splitlines():
@@ -631,7 +638,8 @@ def discover_installation(
     need(isinstance(config, dict), "invalid Claude config")
     agents = config.get("agents")
     permissions = config.get("claude_file_permissions")
-    need(isinstance(agents, list) and isinstance(permissions, dict), "invalid Claude config")
+    if not isinstance(agents, list) or not isinstance(permissions, dict):
+        raise Refused("invalid Claude config")
     claude = [a for a in agents if isinstance(a, dict) and a.get("runtime") == "claude"]
     need(
         bool(claude)
@@ -645,12 +653,12 @@ def discover_installation(
         value = permissions.get(key)
         need(isinstance(value, str) and value.startswith(root + "/"), "mixed Claude runtime")
     roots = permissions.get("runtime_roots")
-    need(
+    if not (
         isinstance(roots, list)
         and all(isinstance(p, str) and Path(p).is_absolute() for p in roots)
-        and any(p == root or p.startswith(root + "/") for p in roots),
-        "missing Claude runtime root",
-    )
+        and any(p == root or p.startswith(root + "/") for p in roots)
+    ):
+        raise Refused("missing Claude runtime root")
     releases = Path(installation["releases_dir"])
     need(
         all(
@@ -924,12 +932,14 @@ def create_plan(
     new_name = old_name.replace(short, new["git_sha"][:7]) if short in old_name else old_name
     need(short not in old_name or new_name != old_name, "candidate config name is unchanged")
     config_bytes = _file_bytes(old_config)
-    need(config_bytes is not None, "missing Claude config")
+    if config_bytes is None:
+        raise Refused("missing Claude config")
     config = json.loads(config_bytes)
     candidate_config = rewrite_claude_config(config, old["root"], new["root"], new["tree_sha256"])
     manifest_path = Path(installation["codex_manifest"])
     manifest_bytes = _file_bytes(manifest_path)
-    need(manifest_bytes is not None, "missing Codex manifest")
+    if manifest_bytes is None:
+        raise Refused("missing Codex manifest")
     manifest = json.loads(manifest_bytes)
     need(
         isinstance(manifest, dict) and manifest.get("hub_git_sha") == old["git_sha"],
@@ -1439,7 +1449,8 @@ def _socket(
         data = json.loads(exc.stdout)
         need(isinstance(data, dict), "invalid doctor response")
     checks = data.get("checks")
-    need(isinstance(checks, list), "invalid doctor checks")
+    if not isinstance(checks, list):
+        raise Refused("invalid doctor checks")
     matches = [row for row in checks if isinstance(row, dict) and row.get("name") == "codex_socket"]
     need(
         len(matches) == 1 and isinstance(matches[0].get("detail"), str),
@@ -1814,7 +1825,8 @@ def apply_window(
         sequence = time.time_ns()
         if previous is not None:
             match = re.fullmatch(r"window-([0-9]{20})-[a-z0-9_]+", previous["id"])
-            need(match is not None, "invalid previous window ID")
+            if match is None:
+                raise Refused("invalid previous window ID")
             sequence = max(sequence, int(match.group(1)) + 1)
         need(sequence < 10**20, "window sequence exhausted")
         final = window.with_name(
@@ -1908,7 +1920,8 @@ def rollback_window(
         metadata = json.loads(_private_bytes(window / "metadata.json"))
         plan = verify_saved_plan(Path(metadata["plan_dir"]), check_live=False)
         need(plan["installation"] == installation, "installation changed")
-        need(last_window(installation)["id"] == window_id, "superseded window")
+        previous = last_window(installation)
+        need(previous is not None and previous["id"] == window_id, "superseded window")
         _check_recovery_inventory(plan)
         return _recover(window, metadata, manager, runner, sleep)
 

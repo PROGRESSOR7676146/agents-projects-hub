@@ -1,4 +1,4 @@
-# ADR 0093: One-command Hub deploy
+# ADR 0094: One-command Hub deploy
 
 Status: proposed; first source slice implemented and fixture-tested
 
