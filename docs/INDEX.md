@@ -42,6 +42,7 @@ live acceptance.
 - [Operations](operations/README.md)
 - [Routine upkeep sweep](operations/UPKEEP.md)
 - [Hub restart with independent outcome delivery](operations/HUB_RESTART.ru.md)
+- [One-command Hub deploy: fixture-tested source slice](operations/HUB_DEPLOY.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Worker operations drain preparation](operations/WORKER_DRAIN_PREPARATION.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
