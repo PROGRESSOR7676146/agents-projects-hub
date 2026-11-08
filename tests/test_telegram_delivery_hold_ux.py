@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from hermes_codex_router import artifact_capabilities
 from hermes_codex_router.hub_config import AcceptanceActor, HubTelegramBot
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.task_notice_sender import deliver_task_notice
@@ -84,6 +85,9 @@ def _callback_update(
 
 class TelegramDeliveryHoldUXTests(unittest.TestCase):
     def setUp(self) -> None:
+        capability = patch.object(artifact_capabilities, "REMOTE_DELIVERY_HOLD_RECOVERY", True)
+        capability.start()
+        self.addCleanup(capability.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.hub = HubHarness(Path(self.temporary.name))
         self.addCleanup(self.hub.close)

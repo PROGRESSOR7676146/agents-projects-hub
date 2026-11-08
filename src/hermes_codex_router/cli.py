@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import delivery_control_cli, delivery_hold_cli, installed_backup_cli
+from . import artifact_capabilities, delivery_control_cli, delivery_hold_cli, installed_backup_cli
 from .acceptance_actor import (
     AcceptanceActorError,
     load_acceptance_actor_config,
@@ -681,7 +681,13 @@ def _indeterminate_resolve_command(args: argparse.Namespace) -> int:
 
 
 def _release_info_command(args: argparse.Namespace) -> int:
-    _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
+    _print(
+        {
+            "ok": CURRENT_RELEASE.verified,
+            **asdict(CURRENT_RELEASE),
+            "remote_delivery_hold_recovery": artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY,
+        }
+    )
     return 0 if CURRENT_RELEASE.verified else 1
 
 

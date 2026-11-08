@@ -200,7 +200,13 @@ class ControllerCommandTests(unittest.TestCase):
         hub_commands = ControllerCommandOrchestrator(hub_config, self.state)
         with patch.object(self.state.delivery, "topic_delivery_controls", return_value=controls):
             hub_status = hub_commands.status(self.topic, None)
-        self.assertIn("/delivery", hub_status.text)
+        self.assertNotIn("/delivery", hub_status.text)
+        with (
+            patch("hermes_codex_router.artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY", True),
+            patch.object(self.state.delivery, "topic_delivery_controls", return_value=controls),
+        ):
+            enabled_status = hub_commands.status(self.topic, None)
+        self.assertIn("/delivery", enabled_status.text)
 
     def test_accounts_ignores_a_retired_codex_pool_snapshot(self) -> None:
         # State written by a release with multi-auth may still hold its last snapshot.

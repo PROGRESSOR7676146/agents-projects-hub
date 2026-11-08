@@ -26,7 +26,14 @@ immutable triggers intact. The new records use only the authority value
 `telegram_owner_callback`; local CLI records remain `local_owner_cli`, and
 neither path can overwrite or relabel the other.
 
-The capability exists only when the configured Hub bot is the established
+The artifact-level `REMOTE_DELIVERY_HOLD_RECOVERY` constant gates this capability.
+It is off by default in the 0.11.6 rollback target; `release-info` reports
+its value. With it off, Telegram commands and callbacks refuse new previews
+and decisions, and state independently refuses their creation. Existing remote
+decisions still release their matching FIFO barriers; local `delivery-hold`
+remains available. Schema56 and its read predicate are unchanged.
+
+When enabled in an artifact, the capability exists only when the configured Hub bot is the established
 external queue/outbox ingress and has an explicitly configured, positive
 numeric Telegram bot ID as well as its configured username. A current
 configured owner may Reply with the exact `/delivery` command to the delivered
