@@ -305,6 +305,7 @@ _INPUT_FIELDS = set(_PATH_FIELDS) | {
     "managed_dropin_name",
     "native_sha256",
     "restart_order",
+    "config_only_units",
     "controller_unit",
     "untouched_units",
     "monitor_service",
@@ -363,11 +364,11 @@ def load_installation(path: Path) -> dict[str, Any]:
     )
     for key in ("ops_dir", "releases_dir"):
         need(Path(data[key]).stat().st_uid == os.geteuid(), "directory must be user-owned: " + key)
-    for key in ("restart_order", "untouched_units"):
+    for key in ("restart_order", "untouched_units", "config_only_units"):
         units = data[key]
         need(
             isinstance(units, list)
-            and bool(units)
+            and (bool(units) or key == "config_only_units")
             and all(
                 isinstance(u, str) and _UNIT.fullmatch(u) and u.endswith(".service") for u in units
             )
@@ -375,13 +376,18 @@ def load_installation(path: Path) -> dict[str, Any]:
             "invalid units: " + key,
         )
     need(not set(data["restart_order"]) & set(data["untouched_units"]), "overlapping units")
+    need(not set(data["restart_order"]) & set(data["config_only_units"]), "overlapping units")
     for key, suffix in (("monitor_service", ".service"), ("monitor_timer", ".timer")):
         value = data[key]
         need(
             isinstance(value, str) and _UNIT.fullmatch(value) and value.endswith(suffix),
             "invalid " + key,
         )
-        need(value not in data["restart_order"] + data["untouched_units"], "overlapping monitor")
+        need(
+            value
+            not in data["restart_order"] + data["untouched_units"] + data["config_only_units"],
+            "overlapping monitor",
+        )
     need(
         isinstance(data["controller_unit"], str)
         and data["controller_unit"] == data["restart_order"][-1],
@@ -492,8 +498,18 @@ def _managed_dropins(
         content = _file_bytes(path)
         need(content is not None, "missing managed drop-in")
         texts[path] = content.decode("utf-8")
-    applicable = set().union(
-        *(_applicable_dropin_dirs(unit) for unit in installation["restart_order"])
+    scoped_units = (
+        installation["restart_order"]
+        + installation["config_only_units"]
+        + [installation["monitor_service"]]
+    )
+    applicable = set().union(*(_applicable_dropin_dirs(unit) for unit in scoped_units))
+    protected = set().union(
+        *(
+            _applicable_dropin_dirs(unit)
+            for unit in installation["untouched_units"]
+            if unit not in installation["config_only_units"]
+        )
     )
     roots = set().union(
         *(
@@ -511,7 +527,12 @@ def _managed_dropins(
     for path, text in held.items():
         need(path.stat().st_uid in {0, os.geteuid()}, "unsafe managed drop-in")
         need(not (_command_runtime_roots(text) - {root}), "mixed runtime roots")
-    for unit in installation["restart_order"]:
+        need(path.parent.name in applicable, "runtime drop-in has unscoped consumer: " + str(path))
+        need(
+            path.parent.name not in protected,
+            "runtime drop-in has protected consumer: " + str(path),
+        )
+    for unit in installation["restart_order"] + installation["config_only_units"]:
         need(
             any(path.parent.name in _applicable_dropin_dirs(unit) for path in held),
             "missing managed drop-in: " + unit,
@@ -860,6 +881,35 @@ def _private_bytes(path: Path) -> bytes:
     return content
 
 
+def _check_candidate_unit(before: bytes, after: bytes) -> None:
+    # Preserve the Unit section except ordering directives. Group continuations
+    # before filtering so a continued dependency cannot masquerade as ordering.
+    def relevant(content: bytes) -> list[str]:
+        section = ""
+        result = []
+        logical_lines: list[str] = []
+        pending = ""
+        for line in content.decode("utf-8").splitlines():
+            pending += line + "\n"
+            if not line.rstrip().endswith("\\"):
+                logical_lines.append(pending)
+                pending = ""
+        need(not pending, "unterminated candidate unit continuation")
+        for line in logical_lines:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped
+            if section == "[Unit]" and line.partition("=")[0].strip() in {"After", "Before"}:
+                continue
+            if section == "[Unit]" or (
+                section == "[Service]" and line.partition("=")[0].strip() == "Sockets"
+            ):
+                result.append(line)
+        return result
+
+    need(relevant(before) == relevant(after), "candidate unit dependency configuration changed")
+
+
 def create_plan(
     installation: dict[str, Any],
     old: dict[str, Any],
@@ -911,11 +961,28 @@ def create_plan(
     modes = _unit_runtime_modes(installation, old["root"])
     need(modes == old["unit_runtime_modes"], "unit runtime references changed")
     for path, text in held.items():
+        if path.parent.name.endswith("@.service.d"):
+            _check_template_instances(path.parent.name[:-2], installation["restart_order"], runner)
         after = rewrite_dropin(text, old["root"], new["root"], old_name, new_name)
+        _check_candidate_unit(text.encode(), after.encode())
         files.append(("dropin", path, text.encode(), after.encode()))
+    scope_dirs = set().union(
+        *(
+            _applicable_dropin_dirs(unit)
+            for unit in installation["restart_order"] + [installation["monitor_service"]]
+        )
+    )
     for unit, content in _templates(new).items():
         path = units_dir / unit
         before = _file_bytes(path)
+        if unit in installation["untouched_units"] or unit in BASE_UNITS[-2:]:
+            need(before == content, "protected unit template changed: " + unit)
+        if unit + ".d" not in scope_dirs:
+            content = before
+        if unit.endswith("@.service"):
+            content = before
+        if before is not None and content is not None:
+            _check_candidate_unit(before, content)
         files.append(("base_unit" if before != content else "base_guard", path, before, content))
     need(len({str(path) for _, path, _, _ in files}) == len(files), "duplicate managed file")
     plan_dir = Path(tempfile.mkdtemp(prefix="plan-", dir=installation["ops_dir"]))
@@ -974,6 +1041,7 @@ def create_plan(
             "restart_order": installation["restart_order"],
             "unit_runtime_modes": modes,
             "untouched_units": installation["untouched_units"],
+            "config_only_units": installation["config_only_units"],
             "files": entries,
         }
         _write_private(plan_dir / "plan.json", canonical_document(bind_plan(plan)) + b"\n")
@@ -1052,6 +1120,16 @@ class ServiceManager:
         self.runner = runner
 
     def property(self, unit: str, name: str) -> str:
+        if name in (*_DEPENDENCIES, "Id", "Names"):
+            output = self.runner(
+                ["systemctl", "--user", "show", unit, "--all", "--property=" + name]
+            ).stdout.strip()
+            prefix = name + "="
+            need(
+                output.startswith(prefix) and "\n" not in output,
+                "missing dependency property: " + name,
+            )
+            return output[len(prefix) :]
         return self.runner(
             ["systemctl", "--user", "show", unit, "--property=" + name, "--value"]
         ).stdout.strip()
@@ -1098,6 +1176,148 @@ class ServiceManager:
 
     def resident(self, unit: str, root: str) -> bool:
         return inspect_unit(unit, root, self.runner)
+
+
+_DEPENDENCIES = (
+    "Wants",
+    "Requires",
+    "Requisite",
+    "BindsTo",
+    "PartOf",
+    "Upholds",
+    "WantedBy",
+    "RequiredBy",
+    "RequisiteOf",
+    "BoundBy",
+    "ConsistsOf",
+    "UpheldBy",
+)
+
+
+def _check_dependencies(manager: Any, operated: list[str], untouched: list[str]) -> None:
+    """Follow effective systemd start/stop propagation, refusing protected effects."""
+    protected: set[str] = set()
+    cache: dict[str, dict[str, list[str]]] = {}
+    aliases: dict[str, set[str]] = {}
+
+    def read(unit: str) -> dict[str, list[str]]:
+        if unit not in cache:
+            need(len(cache) < 2048, "dependency graph too large")
+            identity = manager.property(unit, "Id")
+            names = set(manager.property(unit, "Names").split())
+            need(identity in names and unit in names, "missing dependency unit identity: " + unit)
+            aliases[unit] = names
+            values = {name: manager.property(unit, name).split() for name in _DEPENDENCIES}
+            need(
+                all(
+                    re.fullmatch(r"[A-Za-z0-9_.@:\\-]+", target)
+                    for targets in values.values()
+                    for target in targets
+                ),
+                "invalid dependency unit name",
+            )
+            cache[unit] = values
+        return cache[unit]
+
+    for unit in untouched:
+        read(unit)
+        protected.update(aliases[unit])
+    pending = [(unit, action) for unit in operated for action in ("start", "stop")]
+    visited: set[tuple[str, str]] = set()
+    while pending:
+        unit, action = pending.pop()
+        if (unit, action) in visited:
+            continue
+        visited.add((unit, action))
+        values = read(unit)
+        need(not aliases[unit] & protected, "dependency can operate on untouched unit: " + unit)
+        if action == "start":
+            for name in ("Wants", "Requires", "BindsTo", "Upholds"):
+                pending.extend((target, "start") for target in values[name])
+        else:
+            for name in ("RequiredBy", "BoundBy", "ConsistsOf"):
+                pending.extend((target, "stop") for target in values[name])
+            if values["UpheldBy"]:
+                pending.append((unit, "start"))
+
+
+def _check_template_instances(
+    template: str, restart_order: list[str], runner: Callable[..., Any]
+) -> None:
+    prefix = template.replace("@.service", "@")
+    result = runner(
+        [
+            "systemctl",
+            "--user",
+            "list-units",
+            "--all",
+            "--type=service",
+            "--no-legend",
+            "--plain",
+            "--no-pager",
+            prefix + "*.service",
+        ]
+    )
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        need(len(fields) >= 4, "invalid template instance listing")
+        unit, _, state = fields[:3]
+        need(
+            unit.startswith(prefix) and unit.endswith(".service") and _UNIT.fullmatch(unit),
+            "invalid template instance listing",
+        )
+        if state not in {"inactive", "failed"}:
+            need(
+                unit in restart_order,
+                "shared runtime drop-in has unscoped active instance: " + unit,
+            )
+
+
+def _verify_config_only(
+    plan: dict[str, Any], manager: Any, untouched: dict[str, Any], role: str
+) -> None:
+    root = plan[role]["root"]
+    other = plan["old_runtime" if role == "new_runtime" else "new_runtime"]["root"]
+    for unit in plan["config_only_units"]:
+        need(
+            manager.identity(unit) == untouched["units"][unit], "config-only unit changed: " + unit
+        )
+        required = set()
+        for entry in plan["files"]:
+            path = Path(entry["path"])
+            if entry["kind"] != "dropin" or path.parent.name not in _applicable_dropin_dirs(unit):
+                continue
+            for line in path.read_text().splitlines():
+                key, sep, value = line.partition("=")
+                if sep and key in {"ExecStart", "ExecStartPost", "Environment"} and root in value:
+                    required.add(key)
+        need(bool(required), "config-only unit has no runtime reference: " + unit)
+        for key in ("ExecStart", "ExecStartPost", "Environment"):
+            value = manager.property(unit, key)
+            need(other not in value, "config-only unit has stale runtime: " + unit)
+            if key in required:
+                has_root = (
+                    _environment_has_root(value, root)
+                    if key == "Environment"
+                    else re.search(
+                        r"(?<![A-Za-z0-9_./-])" + re.escape(root) + r"(?=/|[\s\"';}]|$)", value
+                    )
+                    is not None
+                )
+                need(has_root, "config-only unit effective runtime mismatch: " + unit)
+
+
+def _check_window_dependencies(plan: dict[str, Any], manager: Any) -> None:
+    installation = plan["installation"]
+    _check_dependencies(
+        manager,
+        [*plan["restart_order"], installation["monitor_service"], installation["monitor_timer"]],
+        list(set(plan["untouched_units"]) | set(plan["config_only_units"])),
+    )
+    for entry in plan["files"]:
+        path = Path(entry["path"])
+        if entry["kind"] == "dropin" and path.parent.name.endswith("@.service.d"):
+            _check_template_instances(path.parent.name[:-2], plan["restart_order"], manager.runner)
 
 
 def _sync_dir(path: Path) -> None:
@@ -1260,6 +1480,12 @@ def _verify(
                 )
             for unit in plan["restart_order"]:
                 _verify_unit(unit, runtime["root"], plan["unit_runtime_modes"][unit], manager)
+            _verify_config_only(
+                plan,
+                manager,
+                untouched,
+                "new_runtime" if runtime == plan["new_runtime"] else "old_runtime",
+            )
             for unit in plan["untouched_units"]:
                 need(
                     manager.identity(unit) == untouched["units"][unit],
@@ -1321,6 +1547,7 @@ def _install_files(
     role: str,
     fault: Callable[[str], None] | None,
 ) -> None:
+    _check_recovery_inventory(plan)
     for entry in plan["files"]:
         path = Path(entry["path"])
         current = _file_bytes(path)
@@ -1339,6 +1566,22 @@ def _install_files(
             ),
             fault,
         )
+
+
+def _check_recovery_inventory(plan: dict[str, Any]) -> None:
+    for entry in plan["files"]:
+        path = Path(entry["path"])
+        current = _file_bytes(path)
+        digest = hashlib.sha256(current).hexdigest() if current is not None else None
+        valid = {item["sha256"] if item else None for item in (entry["before"], entry["after"])}
+        need(digest in valid, "unrelated file edit: " + str(path))
+        if current is not None:
+            modes = set()
+            for label, mode in (("before", entry["mode"]), ("after", entry["after_mode"])):
+                snapshot = entry[label]
+                if snapshot and snapshot["sha256"] == digest:
+                    modes.add(mode)
+            need(stat.S_IMODE(path.stat().st_mode) in modes, "unrelated file mode: " + str(path))
 
 
 def _stop(
@@ -1410,10 +1653,35 @@ def _recover(
             json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == metadata["plan_sha256"],
             "window plan changed",
         )
+        _check_recovery_inventory(plan)
+        _check_window_dependencies(plan, manager)
         _journal(window, "rollback_started")
         _stop(window, plan, manager, fault)
+        _check_recovery_inventory(plan)
+        with closing(
+            sqlite3.connect(Path(plan["installation"]["state_db"]).as_uri() + "?mode=ro", uri=True)
+        ) as db:
+            need(
+                db.execute("PRAGMA user_version").fetchone()[0] == plan["state_schema"],
+                "rollback schema mismatch",
+            )
+        need(
+            hashlib.sha256(Path(plan["old_wheel"]).read_bytes()).hexdigest()
+            == plan["old_wheel_sha256"],
+            "rollback artifact changed",
+        )
+        runtime = plan["old_runtime"]
+        info = _json_command(runner, [_runtime_cli(runtime), "release-info"])
+        need(
+            info.get("git_sha") == runtime["git_sha"] and info.get("clean_tree") is True,
+            "rollback runtime identity changed",
+        )
+        if runtime["tree_sha256"] is not None:
+            _runtime_command(Path(runtime["root"]), "verify", runner, runtime["tree_sha256"])
         _install_files(window, plan_dir, plan, "before", fault)
         _effect(window, "daemon-reload", manager.reload, fault)
+        _check_window_dependencies(plan, manager)
+        _verify_config_only(plan, manager, metadata["untouched"], "old_runtime")
         _start(window, plan, manager, sleep, fault)
         _verify(plan["old_runtime"], plan, manager, runner, metadata["untouched"], sleep)
         outcome = "ROLLED_BACK"
@@ -1495,7 +1763,15 @@ def apply_window(
             "monitor timer inactive",
         )
         manager.preflight_extra()
-        identities = {unit: manager.identity(unit) for unit in plan["untouched_units"]}
+        identities = {
+            unit: manager.identity(unit)
+            for unit in set(plan["untouched_units"]) | set(plan["config_only_units"])
+        }
+        for unit in plan["config_only_units"]:
+            need(
+                bool(identities[unit]["ActiveState"]) and identities[unit]["MainPID"].isdecimal(),
+                "invalid config-only identity: " + unit,
+            )
         app = plan["untouched_units"][0]
         need(manager.enabled(app), "managed app-server is not enabled")
         need(
@@ -1519,6 +1795,7 @@ def apply_window(
             )
         untouched = {"units": identities, "socket": socket}
         verify_saved_plan(plan_dir)
+        _check_window_dependencies(plan, manager)
         window = Path(tempfile.mkdtemp(prefix=".window-preparing-", dir=installation["ops_dir"]))
         metadata = {
             "plan_dir": str(plan_dir),
@@ -1527,11 +1804,15 @@ def apply_window(
         }
         _atomic_file(window / "metadata.json", canonical_document(metadata), 0o600)
         _journal(window, "started")
+        previous = last_window(installation)
+        sequence = time.time_ns()
+        if previous is not None:
+            match = re.fullmatch(r"window-([0-9]{20})-[a-z0-9_]+", previous["id"])
+            need(match is not None, "invalid previous window ID")
+            sequence = max(sequence, int(match.group(1)) + 1)
+        need(sequence < 10**20, "window sequence exhausted")
         final = window.with_name(
-            "window-"
-            + f"{time.time_ns():020d}"
-            + "-"
-            + window.name.removeprefix(".window-preparing-")
+            "window-" + f"{sequence:020d}" + "-" + window.name.removeprefix(".window-preparing-")
         )
         window.rename(final)
         window = final
@@ -1592,8 +1873,11 @@ def apply_window(
                 fault,
             )
             verify_saved_plan(plan_dir)
+            _check_window_dependencies(plan, manager)
             _install_files(window, plan_dir, plan, "after", fault)
             _effect(window, "daemon-reload", manager.reload, fault)
+            _check_window_dependencies(plan, manager)
+            _verify_config_only(plan, manager, untouched, "new_runtime")
             monitor_ok = _start(window, plan, manager, sleep, fault)
             _verify(plan["new_runtime"], plan, manager, runner, untouched, sleep)
             outcome = "ACCEPTED" if monitor_ok else "CORE_HEALTHY_MONITOR_INCOMPLETE"
@@ -1618,6 +1902,8 @@ def rollback_window(
         metadata = json.loads(_private_bytes(window / "metadata.json"))
         plan = verify_saved_plan(Path(metadata["plan_dir"]), check_live=False)
         need(plan["installation"] == installation, "installation changed")
+        need(last_window(installation)["id"] == window_id, "superseded window")
+        _check_recovery_inventory(plan)
         return _recover(window, metadata, manager, runner, sleep)
 
 

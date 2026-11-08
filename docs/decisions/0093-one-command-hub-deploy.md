@@ -21,6 +21,17 @@ services, and verify convergence. An interrupted window requires explicit
 rollback; recovery never automatically restores a database backup. A monitor
 failure after retry has a distinct incomplete outcome.
 
+Recovery accepts only the newest window, validates the whole file inventory
+before effects and again after quiescence, and rechecks the live schema and old
+runtime evidence before starting it. The tool refuses unscoped runtime-bearing
+files, shared template drop-ins with active instances outside the restart order,
+changes to protected templates, and candidate dependency changes. Explicit
+config-only units receive managed drop-in updates and rollback without lifecycle
+operations; after each reload their effective runtime references and identities
+must match the expected state. The monitor service is in scope. Effective service dependency
+propagation is checked before lifecycle effects and after reloads, including
+indirect start and stop paths to untouched and config-only services; ordering alone is allowed.
+
 The published release metadata contains `schema_max`; the current installed
 `release-info` command does not. Schema compatibility must therefore be bound
 to independently verified artifacts, not inferred from that CLI's output.

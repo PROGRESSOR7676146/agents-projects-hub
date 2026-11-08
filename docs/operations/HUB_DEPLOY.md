@@ -26,6 +26,7 @@ and outside a Git checkout. The last restart unit must be the controller.
   "native_claude": "/home/example/.cache/example/claude",
   "native_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "restart_order": ["example-worker.service", "example-controller.service"],
+  "config_only_units": ["example-codex.service", "example-socket-directory.service"],
   "controller_unit": "example-controller.service",
   "untouched_units": ["example-codex.service", "example-tlive.service"],
   "monitor_service": "example-monitor.service",
@@ -41,6 +42,24 @@ compares the Codex socket only when the app-server was initially active. The
 reference window also requires the fallback app-server to be inactive and checks
 the effective managed app-server start timeout (five minutes) and socket-directory
 start limit (zero); releases with different effective settings are refused.
+
+`config_only_units` may be empty and may include untouched units, but must be
+disjoint from the restart order and monitor units. Their managed runtime drop-ins
+are planned, rewritten and restored on rollback; the runner never operates on
+these services. After each reload it verifies their effective runtime references
+and unchanged service identities. Runtime-bearing drop-ins must belong to the
+restart order, config-only units or monitor service; other protected services
+cannot share them. For a shared template drop-in, every active instance must
+be in the restart order; the check is repeated around service effects. Inactive
+or future instances pick up the rewritten configuration when started. Base
+unit templates outside the deployment scope and shared templates are guards;
+protected app-server and socket-directory template changes are refused. The
+candidate may not change a unit's dependency configuration. Before service
+effects and again after each reload, the tool reads effective dependency and
+reverse-dependency properties through the service manager and follows start and
+stop propagation, including indirect dependencies. It refuses a graph that can
+operate on an untouched or config-only unit (including through an alias) or cannot be read completely. Ordering-only
+`After=` and `Before=` do not propagate service operations.
 
 For a prepared private plan, `apply --plan PLAN_DIRECTORY` rechecks the plan
 under an exclusive lock. `deploy --release TAG` prepares, plans and applies in
@@ -68,6 +87,12 @@ before and after files, restores the recorded before files, reloads and verifies
 old convergence. It refuses unrelated file edits. Neither automatic nor explicit
 rollback restores the database backup. Window records and backups remain in the
 private ops directory.
+
+Only the newest window can be explicitly rolled back. Recovery validates the
+complete before/after file inventory before stopping services and again after
+quiescence. Before starting the old runtime it rechecks the live schema, the
+bound rollback artifact and the old runtime identity and pin. A mismatch leaves
+recovery required; the saved database backup is never restored automatically.
 
 ```text
 python3.12 -I scripts/hub_deploy.py deploy --installation /home/example/private/installation.json --release v1.2.3

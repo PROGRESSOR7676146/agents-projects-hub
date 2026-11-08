@@ -13,6 +13,7 @@ import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from scripts import hub_deploy
 
@@ -267,6 +268,7 @@ class StageTests(unittest.TestCase):
             "native_claude": str(self.native),
             "native_sha256": hashlib.sha256(b"native").hexdigest(),
             "restart_order": ["worker.service", "controller.service"],
+            "config_only_units": [],
             "controller_unit": "controller.service",
             "untouched_units": ["codex.service", "tlive.service"],
             "monitor_service": "monitor.service",
@@ -396,6 +398,8 @@ class StageTests(unittest.TestCase):
             ("schema_version", True),
             ("units_dir", "relative"),
             ("restart_order", ["worker.service", "worker.service"]),
+            ("config_only_units", ["worker.service"]),
+            ("config_only_units", ["other.service", "other.service"]),
             ("native_sha256", "x"),
             ("controller_unit", "worker.service"),
             ("github_repo", "../bad"),
@@ -561,7 +565,7 @@ class StageTests(unittest.TestCase):
         self.assertEqual(plan["untouched_units"], self.install["untouched_units"])
         entries = plan["files"]
         bases = [x for x in entries if x["kind"] == "base_unit" and x["changed"]]
-        self.assertEqual(len(bases), 1)
+        self.assertEqual(len(bases), 0)
         self.assertFalse(any(x["kind"] == "base_unit" and not x["changed"] for x in entries))
         manifest = next(x for x in entries if x["kind"] == "manifest")
         candidate = json.loads((plan_dir / manifest["after"]["copy"]).read_text())
@@ -645,15 +649,56 @@ class StageTests(unittest.TestCase):
         unknown = self.units / "other.service.d"
         unknown.mkdir()
         (unknown / "override.conf").write_text(f"ExecStart={self.old}/venv/bin/hub\n")
-        with self.assertRaisesRegex(hub_deploy.Refused, "drop-in set changed"):
+        with self.assertRaisesRegex(hub_deploy.Refused, "consumer"):
             hub_deploy.create_plan(self.install, old, new, self.runner)
+        with self.assertRaisesRegex(hub_deploy.Refused, "consumer"):
+            hub_deploy.discover_installation(
+                self.install, self.runner, lambda *_: True, lambda _: 0
+            )
+
+    def test_unscoped_runtime_dropin_is_refused(self):
+        path = self.units / "unrelated.service.d/override.conf"
+        path.parent.mkdir()
+        path.write_text(f"ExecStart={self.old}/venv/bin/hub\n")
+        with self.assertRaisesRegex(hub_deploy.Refused, "consumer"):
+            hub_deploy.discover_installation(
+                self.install, self.runner, lambda *_: True, lambda _: 0
+            )
+
+    def test_shared_runtime_dropin_refuses_active_instance_outside_restart_order(self):
+        worker = self.units / "worker.service.d/override.conf"
+        body = worker.read_text()
+        worker.unlink()
+        self.install["restart_order"] = ["worker@one.service", "controller.service"]
+        template = self.units / "worker@.service.d/override.conf"
+        template.parent.mkdir()
+        template.write_text(body)
+        self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
         old = hub_deploy.discover_installation(
             self.install, self.runner, lambda *_: True, lambda _: 0
         )
-        plan = hub_deploy.verify_saved_plan(
-            hub_deploy.create_plan(self.install, old, new, self.runner)
+        new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
+
+        def active_instance(argv, **kwargs):
+            if "list-units" in argv:
+                return SimpleNamespace(
+                    stdout="worker@other.service loaded active running fixture\n"
+                )
+            return self.runner(argv, **kwargs)
+
+        with self.assertRaisesRegex(hub_deploy.Refused, "shared"):
+            hub_deploy.create_plan(self.install, old, new, active_instance)
+
+    def test_changed_protected_base_unit_is_refused(self):
+        self.install["untouched_units"][0] = "agents-projects-hub-codex-app-server.service"
+        (self.units / self.install["untouched_units"][0]).write_text("old protected unit\n")
+        self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
         )
-        self.assertIn(str(unknown / "override.conf"), [e["path"] for e in plan["files"]])
+        new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
+        with self.assertRaisesRegex(hub_deploy.Refused, "protected"):
+            hub_deploy.create_plan(self.install, old, new, self.runner)
 
     def test_template_and_instance_dropins_are_planned_and_stray_ignored(self):
         self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
@@ -677,17 +722,18 @@ class StageTests(unittest.TestCase):
             self.install, self.runner, lambda *_: True, lambda _: 0
         )
         new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
-        plan_dir = hub_deploy.create_plan(self.install, old, new, self.runner)
-        entries = [
-            e for e in hub_deploy.verify_saved_plan(plan_dir)["files"] if e["kind"] == "dropin"
-        ]
-        self.assertEqual(
-            {e["path"] for e in entries},
-            {str(template), str(instance), str(self.units / "controller.service.d/override.conf")},
+
+        def running_instances(argv, **kwargs):
+            if "list-units" in argv:
+                return SimpleNamespace(
+                    stdout="worker@one.service loaded active running fixture\nworker@two.service loaded active running fixture\n"
+                )
+            return self.runner(argv, **kwargs)
+
+        plan = hub_deploy.verify_saved_plan(
+            hub_deploy.create_plan(self.install, old, new, running_instances)
         )
-        for entry in entries:
-            self.assertIn(str(self.old), (plan_dir / entry["before"]["copy"]).read_text())
-            self.assertIn(new["root"], (plan_dir / entry["after"]["copy"]).read_text())
+        self.assertIn(str(template), [entry["path"] for entry in plan["files"]])
         template.unlink()
         with self.assertRaises(hub_deploy.Refused):
             hub_deploy.discover_installation(
@@ -735,6 +781,84 @@ class StageTests(unittest.TestCase):
 
 
 class ServiceManagerTests(unittest.TestCase):
+    def test_dependency_alias_of_untouched_unit_is_refused(self):
+        class Manager:
+            def property(self, unit, name):
+                if name == "Names":
+                    return "codex.service codex-alias.service" if unit.startswith("codex") else unit
+                if name == "Id":
+                    return "codex.service" if unit.startswith("codex") else unit
+                return "codex-alias.service" if (unit, name) == ("worker.service", "Wants") else ""
+
+        with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
+            hub_deploy._check_dependencies(Manager(), ["worker.service"], ["codex.service"])
+
+    def test_missing_dependency_property_is_not_treated_as_empty(self):
+        manager = hub_deploy.ServiceManager(lambda argv: SimpleNamespace(stdout=""))
+        with self.assertRaisesRegex(hub_deploy.Refused, "dependency property"):
+            manager.property("worker.service", "Upholds")
+
+    def test_candidate_dependency_change_is_refused_before_window(self):
+        before = b"[Unit]\nDescription=worker\n[Service]\nExecStart=/old/bin\n"
+        after = b"[Unit]\nDescription=worker\nWants=codex.service\n[Service]\nExecStart=/new/bin\n"
+        with self.assertRaisesRegex(hub_deploy.Refused, "candidate.*dependency"):
+            hub_deploy._check_candidate_unit(before, after)
+        hub_deploy._check_candidate_unit(before, before.replace(b"/old", b"/new"))
+        hub_deploy._check_candidate_unit(
+            before,
+            before.replace(b"Description=worker\n", b"Description=worker\nAfter=codex.service\n"),
+        )
+
+    def test_dependency_graph_propagation_and_order_only(self):
+        class Manager:
+            def __init__(self, edges):
+                self.edges = edges
+                self.reads = set()
+
+            def property(self, unit, name):
+                self.reads.add((unit, name))
+                if name in ("Id", "Names"):
+                    return unit
+                return self.edges.get((unit, name), "")
+
+        for edges in (
+            {("worker.service", "Wants"): "codex.service"},
+            {
+                ("worker.service", "Requires"): "middle.service",
+                ("middle.service", "Upholds"): "codex.service",
+            },
+            {("worker.service", "ConsistsOf"): "codex.service"},
+            {
+                ("codex.service", "PartOf"): "worker.service",
+                ("worker.service", "ConsistsOf"): "codex.service",
+            },
+        ):
+            with (
+                self.subTest(edges=edges),
+                self.assertRaisesRegex(hub_deploy.Refused, "dependency"),
+            ):
+                hub_deploy._check_dependencies(
+                    Manager(edges), ["worker.service"], ["codex.service"]
+                )
+        manager = Manager({("worker.service", "After"): "codex.service"})
+        hub_deploy._check_dependencies(manager, ["worker.service"], ["codex.service"])
+        for unit in ("worker.service", "codex.service"):
+            for name in (
+                "Wants",
+                "Requires",
+                "Requisite",
+                "BindsTo",
+                "PartOf",
+                "Upholds",
+                "WantedBy",
+                "RequiredBy",
+                "RequisiteOf",
+                "BoundBy",
+                "ConsistsOf",
+                "UpheldBy",
+            ):
+                self.assertIn((unit, name), manager.reads)
+
     def test_environment_is_read_through_systemctl(self):
         calls = []
 
@@ -795,7 +919,12 @@ class ServiceManagerTests(unittest.TestCase):
 class FakeManager:
     def __init__(self, install):
         self.install = install
-        self.states = {u: "active" for u in install["restart_order"] + install["untouched_units"]}
+        self.states = {
+            u: "active"
+            for u in install["restart_order"]
+            + install["untouched_units"]
+            + install["config_only_units"]
+        }
         self.states[install["monitor_timer"]] = "active"
         self.states[install["monitor_service"]] = "inactive"
         self.calls = []
@@ -803,6 +932,10 @@ class FakeManager:
         self.monitor_failures = 0
         self.environment_override = None
         self.resident_calls = []
+        self.effective_reads = []
+
+    def runner(self, argv):
+        return SimpleNamespace(stdout="")
 
     def identity(self, unit):
         return {"ActiveState": self.states[unit], "MainPID": "1", "InvocationID": "fixed"}
@@ -841,15 +974,38 @@ class FakeManager:
         return self.states[unit] == "active"
 
     def property(self, unit, name):
-        assert name == "Environment"
+        if name in ("ExecStart", "ExecStartPost", "Environment"):
+            self.effective_reads.append((unit, name))
+        if name in ("Id", "Names"):
+            return unit
+        if name in ("ExecStart", "ExecStartPost"):
+            path = Path(self.install["units_dir"]) / (unit + ".d") / "override.conf"
+            return (
+                " ".join(
+                    line.partition("=")[2]
+                    for line in path.read_text().splitlines()
+                    if line.startswith(name + "=")
+                )
+                if path.exists()
+                else ""
+            )
+        if name != "Environment":
+            return ""
         self.calls.append(("environment", unit))
         if self.environment_override is not None:
             return self.environment_override
         path = Path(self.install["units_dir"]) / (unit + ".d") / "override.conf"
-        return next(
-            line.partition("=")[2]
-            for line in path.read_text().splitlines()
-            if line.startswith("Environment=")
+        return (
+            next(
+                (
+                    line.partition("=")[2]
+                    for line in path.read_text().splitlines()
+                    if line.startswith("Environment=")
+                ),
+                "",
+            )
+            if path.exists()
+            else ""
         )
 
 
@@ -1021,6 +1177,171 @@ class WindowTests(unittest.TestCase):
                 ("stop", "controller.service"),
             ],
         )
+
+    def prepare_config_only(self):
+        self.install["config_only_units"] = ["codex.service", "socket-dir.service"]
+        for unit in self.install["config_only_units"]:
+            path = self.units / (unit + ".d") / "override.conf"
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(
+                f'[Service]\nExecStart="{self.old}/venv/bin/hub"\nExecStartPost="{self.old}/venv/bin/check"\nEnvironment="SOURCE={self.old}/src"\n'
+            )
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        self.manager = FakeManager(self.install)
+        self.manager.states["codex.service"] = "failed"
+
+    def test_config_only_rewritten_verified_and_rolled_back_without_lifecycle(self):
+        self.prepare_config_only()
+        paths = [
+            self.units / (u + ".d") / "override.conf" for u in self.install["config_only_units"]
+        ]
+        original = [p.read_bytes() for p in paths]
+        result = self.execute()
+        self.assertEqual(result["outcome"], "ACCEPTED")
+        self.assertTrue(all(str(self.releases / self.new_sha) in p.read_text() for p in paths))
+        result = hub_deploy.rollback_window(
+            self.install, result["id"], self.manager, self.window_runner, self.sleeps.append
+        )
+        self.assertEqual(result["outcome"], "ROLLED_BACK")
+        self.assertEqual([p.read_bytes() for p in paths], original)
+        for unit in self.install["config_only_units"]:
+            for name in ("ExecStart", "ExecStartPost", "Environment"):
+                self.assertGreaterEqual(self.manager.effective_reads.count((unit, name)), 2)
+        self.assertFalse(
+            any(
+                c[0] in ("start", "stop", "restart", "reset")
+                and c[1] in self.install["config_only_units"]
+                for c in self.manager.calls
+            )
+        )
+
+    def test_config_only_effective_mismatch_causes_rollback(self):
+        self.prepare_config_only()
+        original = self.manager.property
+
+        def stale(unit, name):
+            if unit == "socket-dir.service" and name == "ExecStartPost":
+                return str(self.old) + "/venv/bin/check"
+            return original(unit, name)
+
+        self.manager.property = stale
+        self.assertEqual(self.execute()["outcome"], "ROLLED_BACK")
+
+    def test_config_only_identity_change_requires_recovery(self):
+        self.prepare_config_only()
+        reload = self.manager.reload
+
+        def changed():
+            reload()
+            self.manager.states["socket-dir.service"] = "inactive"
+
+        self.manager.reload = changed
+        self.assertEqual(self.execute()["outcome"], "RECOVERY_REQUIRED")
+
+    def test_config_only_recovery_requires_effective_old_runtime(self):
+        self.prepare_config_only()
+        result = self.execute()
+        original = self.manager.property
+
+        def stale(unit, name):
+            if unit == "socket-dir.service" and name == "Environment":
+                return "SOURCE=/unrelated"
+            return original(unit, name)
+
+        self.manager.property = stale
+        result = hub_deploy.rollback_window(
+            self.install, result["id"], self.manager, self.window_runner, self.sleeps.append
+        )
+        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED")
+
+    def test_config_only_propagation_refused_before_effects(self):
+        self.prepare_config_only()
+        original = self.manager.property
+
+        def dependency(unit, name):
+            if unit == "worker.service" and name == "Wants":
+                return "socket-dir.service"
+            return original(unit, name)
+
+        self.manager.property = dependency
+        with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
+            self.execute()
+        self.assertFalse(any(c[0] in ("start", "stop", "reload") for c in self.manager.calls))
+
+    def test_dependency_on_untouched_unit_refused_before_effects(self):
+        original = self.manager.property
+
+        def property_value(unit, name):
+            if unit == "worker.service" and name == "Wants":
+                return "codex.service"
+            if name in ("Id", "Names"):
+                return unit
+            if name != "Environment":
+                return ""
+            return original(unit, name)
+
+        self.manager.property = property_value
+        with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
+            self.execute()
+        self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
+
+    def test_rollback_schema_drift_never_starts_old_runtime(self):
+        result = self.execute()
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("PRAGMA user_version = 99")
+        self.manager.calls.clear()
+        result = hub_deploy.rollback_window(
+            self.install, result["id"], self.manager, self.window_runner, self.sleeps.append
+        )
+        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED")
+        self.assertFalse(any(call[0] == "start" for call in self.manager.calls))
+
+    def test_superseded_window_refused_before_service_effects(self):
+        result = self.execute()
+        window = Path(self.install["ops_dir"]) / result["id"]
+        later = window.with_name("window-99999999999999999999-later")
+        shutil.copytree(window, later)
+        self.manager.calls.clear()
+        with self.assertRaisesRegex(hub_deploy.Refused, "superseded"):
+            hub_deploy.rollback_window(
+                self.install, result["id"], self.manager, self.window_runner, self.sleeps.append
+            )
+        self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
+
+    def test_window_lineage_survives_clock_moving_backwards(self):
+        first = self.execute()
+        self.assertEqual(
+            hub_deploy.rollback_window(
+                self.install, first["id"], self.manager, self.window_runner, self.sleeps.append
+            )["outcome"],
+            "ROLLED_BACK",
+        )
+        with patch.object(hub_deploy.time, "time_ns", return_value=1):
+            second = self.execute()
+        self.assertEqual(hub_deploy.last_window(self.install)["id"], second["id"])
+        with self.assertRaisesRegex(hub_deploy.Refused, "superseded"):
+            hub_deploy.rollback_window(
+                self.install, first["id"], self.manager, self.window_runner, self.sleeps.append
+            )
+
+    def test_recovery_inventory_checked_before_any_mutation(self):
+        result = self.execute()
+        plan = hub_deploy.verify_saved_plan(self.plan, check_live=False)
+        created = next(e for e in plan["files"] if e["kind"] == "claude_config")
+        path = Path(created["path"])
+        before = path.read_bytes()
+        self.manifest.write_text("unrelated edit")
+        self.manager.calls.clear()
+        with self.assertRaisesRegex(hub_deploy.Refused, "unrelated file edit"):
+            hub_deploy.rollback_window(
+                self.install, result["id"], self.manager, self.window_runner, self.sleeps.append
+            )
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
 
     def test_failure_outcomes(self):
         self.manager.fail_start = True
