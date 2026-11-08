@@ -1192,7 +1192,13 @@ class WindowTests(StageFixture):
             (bound["plan"]["state_schema_before"], bound["plan"]["state_schema"]), (7, 8)
         )
         self.assertEqual(bound["plan"]["rollback_runtime"]["tag"], "v3.0.0")
-        for key in ("state_schema_before", "state_schema", "rollback_runtime"):
+        for key in (
+            "state_schema_before",
+            "state_schema",
+            "rollback_runtime",
+            "candidate_config",
+            "rollback_config",
+        ):
             altered = copy.deepcopy(bound)
             altered["plan"][key] = None
             with self.subTest(key=key), self.assertRaisesRegex(hub_deploy.Refused, "digest"):
@@ -1239,6 +1245,91 @@ class WindowTests(StageFixture):
             (report["rollback_target"], report["rollback_git_sha"]), ("rollback_release", "d" * 40)
         )
         self.assertIn("d" * 40, (self.units / "worker.service.d/override.conf").read_text())
+
+    def test_forward_waits_for_migration_commit_after_start(self):
+        old = self.prepare_forward()
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+
+        def commit_on_wait(seconds):
+            self.sleeps.append(seconds)
+            with closing(sqlite3.connect(self.db)) as db:
+                db.execute("PRAGMA user_version=8")
+
+        result = hub_deploy.apply_window(
+            self.install,
+            self.plan,
+            self.manager,
+            self.window_runner,
+            commit_on_wait,
+            load=lambda: 0,
+        )
+        self.assertEqual(result["outcome"], "ACCEPTED", result)
+        self.assertEqual(self.sleeps, [5])
+
+    def test_forward_config_snapshots_are_selected_by_role(self):
+        old = self.prepare_forward()
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        plan = hub_deploy.verify_saved_plan(self.plan)
+        entries = {e["path"]: e for e in plan["files"]}
+        old_path = old["claude_config"]
+        candidate, rollback = plan["candidate_config"], plan["rollback_config"]
+        self.assertEqual(len({old_path, candidate, rollback}), 3)
+        self.assertEqual(entries[old_path]["kind"], "source_config")
+        self.assertIsNone(entries[rollback]["after"])
+        self.assertIsNone(entries[candidate]["rollback"])
+        validated = []
+
+        def runner(argv, **kwargs):
+            if "validate-hub" in argv:
+                validated.append((argv[0], Path(argv[-1]).read_bytes()))
+            return self.window_runner(argv, **kwargs)
+
+        result = hub_deploy.apply_window(
+            self.install, self.plan, self.manager, runner, self.sleeps.append, load=lambda: 0
+        )
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        self.assertEqual(len(validated), 4)
+        for role, path, snapshot in (
+            ("new_runtime", candidate, "after"),
+            ("rollback_runtime", rollback, "rollback"),
+        ):
+            content = (self.plan / entries[path][snapshot]["copy"]).read_bytes()
+            self.assertIn((hub_deploy._runtime_cli(plan[role]), content), validated)
+        for role, snapshot, key in (
+            ("new_runtime", "after", "candidate_config"),
+            ("rollback_runtime", "rollback", "rollback_config"),
+        ):
+            altered = copy.deepcopy(plan)
+            altered["candidate_config" if role == "rollback_runtime" else "rollback_config"] = (
+                old_path
+            )
+            altered[key] = rollback if role == "new_runtime" else candidate
+            with self.assertRaisesRegex(hub_deploy.Refused, "missing active config snapshot"):
+                hub_deploy._validate_plan_configs(self.plan, altered, role, snapshot, key, runner)
+
+    def test_forward_unexpected_schema_does_not_wait(self):
+        old = self.prepare_forward()
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        original = self.manager.start
+
+        def start(unit):
+            original(unit)
+            if unit == "controller.service":
+                with closing(sqlite3.connect(self.db)) as db:
+                    db.execute("PRAGMA user_version=99")
+
+        self.manager.start = start
+        self.assertEqual(self.execute()["outcome"], "RECOVERY_REQUIRED")
+        self.assertEqual(self.sleeps, [])
 
     def test_forward_before_migration_and_unknown_schema_recovery(self):
         old = self.prepare_forward()

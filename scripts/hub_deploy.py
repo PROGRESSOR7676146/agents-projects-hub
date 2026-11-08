@@ -1092,13 +1092,6 @@ def create_plan(
                     _write_private(plan_dir / name, content)
                     entry[label] = {"copy": name, "sha256": hashlib.sha256(content).hexdigest()}
             entries.append(entry)
-        cli = str(Path(new["root"]) / "venv/bin/agents-projects-hub")
-        for kind in ("hub_config", "claude_config"):
-            entry = next(item for item in entries if item["kind"] == kind)
-            result = _json_command(
-                runner, [cli, "validate-hub", str(plan_dir / entry["after"]["copy"])]
-            )
-            need(result.get("ok") is True, "candidate config validation failed")
         plan = {
             "schema_version": 1,
             "installation": copy.deepcopy(installation),
@@ -1114,8 +1107,10 @@ def create_plan(
             "unit_runtime_modes": modes,
             "untouched_units": installation["untouched_units"],
             "config_only_units": installation["config_only_units"],
+            "candidate_config": str(target_config),
             "files": entries,
         }
+        _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
         if "rollback" in new:
             _add_rollback_plan(plan_dir, plan, installation, old, new["rollback"], runner)
         _write_private(plan_dir / "plan.json", canonical_document(bind_plan(plan)) + b"\n")
@@ -1172,9 +1167,7 @@ def _add_rollback_plan(
             if "rollback" not in entry:
                 entry["rollback"] = entry["before"]
                 entry["rollback_mode"] = entry["mode"]
-        plan["rollback_config"] = next(
-            item["path"] for item in other["files"] if item["kind"] == "claude_config"
-        )
+        plan["rollback_config"] = other["candidate_config"]
         plan["rollback_runtime"] = {
             k: target[k] for k in ("root", "git_sha", "tree_sha256", "tag", "package_version")
         }
@@ -1184,6 +1177,30 @@ def _add_rollback_plan(
         ).hexdigest()
     finally:
         shutil.rmtree(other_dir)
+
+
+def _validate_plan_configs(
+    plan_dir: Path,
+    plan: dict[str, Any],
+    runtime: str,
+    snapshot: str,
+    config_path: str,
+    runner: Callable[..., Any],
+) -> None:
+    for kind, path in (
+        ("hub_config", plan["installation"]["hub_config"]),
+        ("claude_config", plan[config_path]),
+    ):
+        matches = [e for e in plan["files"] if e["kind"] == kind and e["path"] == path]
+        need(
+            len(matches) == 1 and matches[0].get(snapshot) is not None,
+            "missing active config snapshot: " + config_path,
+        )
+        saved = matches[0][snapshot]
+        result = _json_command(
+            runner, [_runtime_cli(plan[runtime]), "validate-hub", str(plan_dir / saved["copy"])]
+        )
+        need(result.get("ok") is True, "config validation failed: " + config_path)
 
 
 def verify_saved_plan(plan_dir: Path, *, check_live: bool = True) -> dict[str, Any]:
@@ -1629,11 +1646,17 @@ def _verify(
     attempts: int = 48,
     schema: int | None = None,
     role: str | None = None,
+    before_schema: int | None = None,
 ) -> None:
     installation = plan["installation"]
     last = ""
     for attempt in range(attempts):
+        live_schema = _live_schema(installation) if before_schema is not None else None
+        if before_schema is not None:
+            need(live_schema in (before_schema, plan["state_schema"]), "unexpected database schema")
         try:
+            if before_schema is not None:
+                need(live_schema == plan["state_schema"], "migration not yet complete")
             result = _json_command(
                 runner, [_runtime_cli(runtime), "status", installation["hub_config"]]
             )
@@ -1963,29 +1986,11 @@ def apply_window(
             )
             if runtime["tree_sha256"] is not None:
                 _runtime_command(Path(runtime["root"]), "verify", runner, runtime["tree_sha256"])
-        for kind in ("hub_config", "claude_config"):
-            entry = next(item for item in plan["files"] if item["kind"] == kind)
-            result = _json_command(
-                runner,
-                [
-                    _runtime_cli(plan["new_runtime"]),
-                    "validate-hub",
-                    str(plan_dir / entry["after"]["copy"]),
-                ],
-            )
-            need(result.get("ok") is True, "candidate config validation failed")
+        _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
         if "rollback_runtime" in plan:
-            for entry in plan["files"]:
-                if entry["kind"] == "hub_config" or entry["path"] == plan["rollback_config"]:
-                    result = _json_command(
-                        runner,
-                        [
-                            _runtime_cli(plan["rollback_runtime"]),
-                            "validate-hub",
-                            str(plan_dir / entry["rollback"]["copy"]),
-                        ],
-                    )
-                    need(result.get("ok") is True, "rollback config validation failed")
+            _validate_plan_configs(
+                plan_dir, plan, "rollback_runtime", "rollback", "rollback_config", runner
+            )
         with closing(
             sqlite3.connect(Path(installation["state_db"]).as_uri() + "?mode=ro", uri=True)
         ) as db:
@@ -2134,10 +2139,15 @@ def apply_window(
                 "schema changed before new runtime start",
             )
             monitor_ok = _start(window, plan, manager, sleep, fault)
-            need(
-                _live_schema(installation) == plan["state_schema"], "post-migration schema mismatch"
+            _verify(
+                plan["new_runtime"],
+                plan,
+                manager,
+                runner,
+                untouched,
+                sleep,
+                before_schema=plan.get("state_schema_before", plan["state_schema"]),
             )
-            _verify(plan["new_runtime"], plan, manager, runner, untouched, sleep)
             outcome = "ACCEPTED" if monitor_ok else "CORE_HEALTHY_MONITOR_INCOMPLETE"
             _journal(window, outcome)
             return {"id": window.name, "outcome": outcome}
