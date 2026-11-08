@@ -36,14 +36,34 @@ The published release metadata contains `schema_max`; the current installed
 `release-info` command does not. Schema compatibility must therefore be bound
 to independently verified artifacts, not inferred from that CLI's output.
 
+## Amendment: forward state migrations
+
+A same-schema release retains the previous runtime as its rollback target. A
+candidate below the live schema is refused. A forward migration requires the
+old release schema to match the live schema and an explicitly named, distinct
+`--rollback-release` whose verified metadata has the candidate schema. Its
+assets, sealed runtime, identity and configuration receive the same preparation
+and checks as the candidate. The plan digest binds both schema versions and the
+rollback target.
+
+The consistent database backup precedes the first start of any new-runtime
+unit: workers can open and migrate the database before the controller starts.
+Before starting, the live schema must still be the planned old schema; after
+starting, it must be the target schema. Recovery stops the managed services,
+reads the live schema under quiescence and selects the previous runtime for the
+old schema or the prepared rollback release for the target schema. Any other
+schema requires an owner decision and no service is started. Status shows the
+currently applicable target; the journal records the choice. A database backup
+is never restored automatically.
+
 ## Deferred and status
 
-Migration to symlinks and `stack.py`, state migrations and the separate Codex
-server start procedure are out of scope. Independent source review, release
+Migration to symlinks and `stack.py` and the separate Codex server start
+procedure are out of scope. Independent source review, release
 provenance and installed acceptance remain prerequisites to calling the tool
 supported. The CLI's `plan`
-path validates the private input, discovers the old runtime, verifies both
-releases against the live database schema, prepares or verifies an inactive
+path validates the private input, discovers the old runtime, verifies release
+metadata against the live database schema, prepares or verifies an inactive
 runtime, validates candidate configurations and records a digest-bound private
 plan. This path has offline fixture coverage; installed behavior is not yet
 accepted. The deployment window, status and explicit recovery are implemented

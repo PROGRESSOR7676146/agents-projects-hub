@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Allow fixture-tested forward schema deployments with a separately prepared
+  compatible rollback release and schema-aware recovery (ADR 0094).
+
 - Add fixture-tested planning, execution and recovery paths for one-command Hub
   deployment; installed acceptance remains outstanding (ADR 0094 proposed).
 - Default off the artifact-level Telegram delivery-hold recovery capability for

@@ -70,13 +70,32 @@ def verify_plan(bound: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(plan)
 
 
-def check_schema(old: dict[str, Any], new: dict[str, Any], live: int) -> None:
-    versions = (old.get("schema_max"), new.get("schema_max"), live)
-    need(
-        all(type(version) is int and version >= 0 for version in versions),
-        "missing schema evidence",
-    )
-    need(versions[0] == versions[1] == versions[2], "rollback schema mismatch")
+def check_schema(
+    old: dict[str, Any], new: dict[str, Any], live: int, rollback: dict[str, Any] | None = None
+) -> None:
+    old_schema, new_schema = old.get("schema_max"), new.get("schema_max")
+    if not (
+        type(old_schema) is int
+        and old_schema >= 0
+        and type(new_schema) is int
+        and new_schema >= 0
+        and type(live) is int
+        and live >= 0
+    ):
+        raise Refused("missing schema evidence")
+    need(old_schema == live, "old release schema mismatch")
+    need(new_schema >= live, "candidate schema downgrade refused")
+    if new_schema > live:
+        if rollback is None:
+            raise Refused("forward migration requires --rollback-release")
+        need(rollback.get("schema_max") == new_schema, "rollback release schema mismatch")
+
+
+def _live_schema(installation: dict[str, Any]) -> int:
+    with closing(
+        sqlite3.connect(Path(installation["state_db"]).as_uri() + "?mode=ro", uri=True)
+    ) as db:
+        return int(db.execute("PRAGMA user_version").fetchone()[0])
 
 
 def discover_dropin_root(dropins: list[str]) -> str:
@@ -758,8 +777,9 @@ def prepare_stage(
     runner: Callable[..., Any] = run_command,
     lookup: Callable[..., str] = lookup_release_tag,
     python: Path = Path("/usr/bin/python3.12"),
+    rollback_release: str | None = None,
 ) -> dict[str, Any]:
-    """Verify both release assets and DB, then build or verify the inactive runtime."""
+    """Verify release assets and DB, then prepare inactive runtimes."""
     candidate_dir = download_release(installation, tag, runner)
     candidate, wheel = verify_assets(candidate_dir, tag)
     old_tag = lookup(installation, old["git_sha"], runner)
@@ -770,11 +790,55 @@ def prepare_stage(
         and previous["package_version"] == old["package_version"],
         "old release identity mismatch",
     )
-    with closing(
-        sqlite3.connect(Path(installation["state_db"]).as_uri() + "?mode=ro", uri=True)
-    ) as db:
-        live = db.execute("PRAGMA user_version").fetchone()[0]
-    check_schema(previous, candidate, live)
+    live = _live_schema(installation)
+    rollback_info = None
+    rollback_dir = None
+    rollback_wheel = None
+    if candidate["schema_max"] > live and rollback_release:
+        rollback_dir = download_release(installation, rollback_release, runner)
+        rollback_info, rollback_wheel = verify_assets(rollback_dir, rollback_release)
+    check_schema(previous, candidate, live, rollback_info)
+    if rollback_info is not None:
+        need(
+            rollback_info["git_sha"] not in {old["git_sha"], candidate["git_sha"]},
+            "rollback release must be distinct",
+        )
+    prepared = _prepare_runtime(installation, candidate, candidate_dir, wheel, runner, python)
+    prepared.update(
+        {
+            "state_schema_before": live,
+            "old_wheel": str(next(old_dir.glob("*.whl"))),
+            "new_wheel": str(wheel),
+            "candidate_assets": str(candidate_dir),
+            "old_assets": str(old_dir),
+        }
+    )
+    if rollback_info is not None:
+        assert rollback_dir is not None and rollback_wheel is not None
+        target = _prepare_runtime(
+            installation, rollback_info, rollback_dir, rollback_wheel, runner, python
+        )
+        target.update(
+            {
+                "old_wheel": prepared["old_wheel"],
+                "new_wheel": str(rollback_wheel),
+                "candidate_assets": str(rollback_dir),
+                "state_schema_before": live,
+                "tag": rollback_release,
+            }
+        )
+        prepared["rollback"] = target
+    return prepared
+
+
+def _prepare_runtime(
+    installation: dict[str, Any],
+    candidate: dict[str, Any],
+    candidate_dir: Path,
+    wheel: Path,
+    runner: Callable[..., Any],
+    python: Path,
+) -> dict[str, Any]:
     native = Path(installation["native_claude"])
     need(
         hashlib.sha256(native.read_bytes()).hexdigest() == installation["native_sha256"],
@@ -838,10 +902,7 @@ def prepare_stage(
         "git_sha": candidate["git_sha"],
         "tree_sha256": pin["sha256"],
         "schema_max": candidate["schema_max"],
-        "old_wheel": str(next(old_dir.glob("*.whl"))),
-        "new_wheel": str(wheel),
-        "candidate_assets": str(candidate_dir),
-        "old_assets": str(old_dir),
+        "package_version": candidate["package_version"],
     }
 
 
@@ -1031,17 +1092,11 @@ def create_plan(
                     _write_private(plan_dir / name, content)
                     entry[label] = {"copy": name, "sha256": hashlib.sha256(content).hexdigest()}
             entries.append(entry)
-        cli = str(Path(new["root"]) / "venv/bin/agents-projects-hub")
-        for kind in ("hub_config", "claude_config"):
-            entry = next(item for item in entries if item["kind"] == kind)
-            result = _json_command(
-                runner, [cli, "validate-hub", str(plan_dir / entry["after"]["copy"])]
-            )
-            need(result.get("ok") is True, "candidate config validation failed")
         plan = {
             "schema_version": 1,
             "installation": copy.deepcopy(installation),
             "state_schema": new["schema_max"],
+            "state_schema_before": new.get("state_schema_before", new["schema_max"]),
             "old_wheel": new["old_wheel"],
             "new_wheel": new["new_wheel"],
             "old_wheel_sha256": hashlib.sha256(Path(new["old_wheel"]).read_bytes()).hexdigest(),
@@ -1052,8 +1107,12 @@ def create_plan(
             "unit_runtime_modes": modes,
             "untouched_units": installation["untouched_units"],
             "config_only_units": installation["config_only_units"],
+            "candidate_config": str(target_config),
             "files": entries,
         }
+        _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
+        if "rollback" in new:
+            _add_rollback_plan(plan_dir, plan, installation, old, new["rollback"], runner)
         _write_private(plan_dir / "plan.json", canonical_document(bind_plan(plan)) + b"\n")
         verify_saved_plan(plan_dir)
         _sync_dir(plan_dir)
@@ -1062,6 +1121,86 @@ def create_plan(
     except Exception:
         shutil.rmtree(plan_dir)
         raise
+
+
+def _add_rollback_plan(
+    plan_dir: Path,
+    plan: dict[str, Any],
+    installation: dict[str, Any],
+    old: dict[str, Any],
+    target: dict[str, Any],
+    runner: Callable[..., Any],
+) -> None:
+    other_dir = create_plan(installation, old, target, runner)
+    try:
+        other = verify_saved_plan(other_dir)
+        entries = {entry["path"]: entry for entry in plan["files"]}
+        for item in other["files"]:
+            entry = entries.get(item["path"])
+            if entry is None:
+                entry = copy.deepcopy(item)
+                entry["after"] = entry["before"]
+                plan["files"].append(entry)
+                entries[item["path"]] = entry
+                if entry["before"] is not None:
+                    raise Refused("rollback file inventory differs unexpectedly")
+            else:
+                need(
+                    entry["before"] == item["before"]
+                    or (
+                        entry["before"] is not None
+                        and item["before"] is not None
+                        and entry["before"]["sha256"] == item["before"]["sha256"]
+                        and entry["mode"] == item["mode"]
+                    ),
+                    "rollback file inventory changed",
+                )
+            snapshot = item["after"]
+            if snapshot is not None:
+                data = _private_bytes(other_dir / snapshot["copy"])
+                name = f"rollback-{len([p for p in plan_dir.glob('rollback-*')]):03d}"
+                _write_private(plan_dir / name, data)
+                snapshot = {"copy": name, "sha256": hashlib.sha256(data).hexdigest()}
+            entry["rollback"] = snapshot
+            entry["rollback_mode"] = item["after_mode"]
+        for entry in plan["files"]:
+            if "rollback" not in entry:
+                entry["rollback"] = entry["before"]
+                entry["rollback_mode"] = entry["mode"]
+        plan["rollback_config"] = other["candidate_config"]
+        plan["rollback_runtime"] = {
+            k: target[k] for k in ("root", "git_sha", "tree_sha256", "tag", "package_version")
+        }
+        plan["rollback_wheel"] = target["new_wheel"]
+        plan["rollback_wheel_sha256"] = hashlib.sha256(
+            Path(target["new_wheel"]).read_bytes()
+        ).hexdigest()
+    finally:
+        shutil.rmtree(other_dir)
+
+
+def _validate_plan_configs(
+    plan_dir: Path,
+    plan: dict[str, Any],
+    runtime: str,
+    snapshot: str,
+    config_path: str,
+    runner: Callable[..., Any],
+) -> None:
+    for kind, path in (
+        ("hub_config", plan["installation"]["hub_config"]),
+        ("claude_config", plan[config_path]),
+    ):
+        matches = [e for e in plan["files"] if e["kind"] == kind and e["path"] == path]
+        need(
+            len(matches) == 1 and matches[0].get(snapshot) is not None,
+            "missing active config snapshot: " + config_path,
+        )
+        saved = matches[0][snapshot]
+        result = _json_command(
+            runner, [_runtime_cli(plan[runtime]), "validate-hub", str(plan_dir / saved["copy"])]
+        )
+        need(result.get("ok") is True, "config validation failed: " + config_path)
 
 
 def verify_saved_plan(plan_dir: Path, *, check_live: bool = True) -> dict[str, Any]:
@@ -1075,12 +1214,13 @@ def verify_saved_plan(plan_dir: Path, *, check_live: bool = True) -> dict[str, A
     plan = verify_plan(bound)
     need(isinstance(plan.get("files"), list), "invalid plan files")
     for entry in plan["files"]:
-        for label in ("before", "after"):
+        for label in ("before", "after", *(["rollback"] if "rollback" in entry else [])):
             snapshot = entry[label]
             if snapshot is not None:
                 name = snapshot["copy"]
                 need(
-                    isinstance(name, str) and re.fullmatch(r"[0-9]{3}-(?:before|after)", name),
+                    isinstance(name, str)
+                    and re.fullmatch(r"(?:[0-9]{3}-(?:before|after)|rollback-[0-9]{3})", name),
                     "invalid snapshot",
                 )
                 content = _private_bytes(plan_dir / name)
@@ -1293,7 +1433,11 @@ def _verify_config_only(
     plan: dict[str, Any], manager: Any, untouched: dict[str, Any], role: str
 ) -> None:
     root = plan[role]["root"]
-    other = plan["old_runtime" if role == "new_runtime" else "new_runtime"]["root"]
+    others = {
+        plan[key]["root"]
+        for key in ("old_runtime", "new_runtime", "rollback_runtime")
+        if key in plan
+    } - {root}
     for unit in plan["config_only_units"]:
         need(
             manager.identity(unit) == untouched["units"][unit], "config-only unit changed: " + unit
@@ -1310,7 +1454,10 @@ def _verify_config_only(
         need(bool(required), "config-only unit has no runtime reference: " + unit)
         for key in ("ExecStart", "ExecStartPost", "Environment"):
             value = manager.property(unit, key)
-            need(other not in value, "config-only unit has stale runtime: " + unit)
+            need(
+                all(other not in value for other in others),
+                "config-only unit has stale runtime: " + unit,
+            )
             if key in required:
                 has_root = (
                     _environment_has_root(value, root)
@@ -1412,6 +1559,35 @@ def last_window(installation: dict[str, Any]) -> dict[str, Any] | None:
     return {"id": path.name, "state": rows[-1]["phase"]}
 
 
+def window_status(installation: dict[str, Any]) -> dict[str, Any] | None:
+    result = last_window(installation)
+    if result is None:
+        return None
+    path = Path(installation["ops_dir"]) / result["id"]
+    metadata = json.loads(_private_bytes(path / "metadata.json"))
+    plan_dir = Path(metadata["plan_dir"])
+    plan = verify_saved_plan(plan_dir, check_live=False)
+    need(
+        json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == metadata["plan_sha256"],
+        "window plan changed",
+    )
+    need(plan["installation"] == installation, "installation changed")
+    schema = _live_schema(installation)
+    before = plan.get("state_schema_before", plan["state_schema"])
+    target = (
+        "previous"
+        if schema == before
+        else "rollback_release"
+        if schema == plan["state_schema"] and "rollback_runtime" in plan
+        else "owner_required"
+    )
+    result.update({"schema": schema, "rollback_target": target})
+    if target != "owner_required":
+        role = "old_runtime" if target == "previous" else "rollback_runtime"
+        result["rollback_git_sha"] = plan[role]["git_sha"]
+    return result
+
+
 def _unfinished(installation: dict[str, Any], input_path: str | None = None) -> None:
     for path in sorted(Path(installation["ops_dir"]).glob("window-*")):
         rows = _journal_rows(path / "journal.jsonl")
@@ -1468,17 +1644,28 @@ def _verify(
     sleep: Callable[[float], None],
     *,
     attempts: int = 48,
+    schema: int | None = None,
+    role: str | None = None,
+    before_schema: int | None = None,
 ) -> None:
     installation = plan["installation"]
     last = ""
     for attempt in range(attempts):
+        live_schema = _live_schema(installation) if before_schema is not None else None
+        if before_schema is not None:
+            need(live_schema in (before_schema, plan["state_schema"]), "unexpected database schema")
         try:
+            if before_schema is not None:
+                need(live_schema == plan["state_schema"], "migration not yet complete")
             result = _json_command(
                 runner, [_runtime_cli(runtime), "status", installation["hub_config"]]
             )
             health = result["runtime_health"]
             dep = health["deployment_revision"]
-            need(result["schema_version"] == plan["state_schema"], "status schema mismatch")
+            need(
+                result["schema_version"] == (plan["state_schema"] if schema is None else schema),
+                "status schema mismatch",
+            )
             need(
                 dep["status"] == "converged" and dep["git_sha"] == runtime["git_sha"],
                 "revision not converged",
@@ -1501,7 +1688,7 @@ def _verify(
                 plan,
                 manager,
                 untouched,
-                "new_runtime" if runtime == plan["new_runtime"] else "old_runtime",
+                role or ("new_runtime" if runtime == plan["new_runtime"] else "old_runtime"),
             )
             for unit in plan["untouched_units"]:
                 need(
@@ -1569,18 +1756,36 @@ def _install_files(
         path = Path(entry["path"])
         current = _file_bytes(path)
         digest = hashlib.sha256(current).hexdigest() if current is not None else None
-        valid = {item["sha256"] if item else None for item in (entry["before"], entry["after"])}
+        valid = {
+            item["sha256"] if item else None
+            for item in (
+                entry["before"],
+                entry["after"],
+                *([entry["rollback"]] if "rollback" in entry else []),
+            )
+        }
         need(digest in valid, "unrelated file edit: " + str(path))
-        if not entry["changed"]:
-            continue
         snapshot = entry[role]
+        mode = (
+            entry["mode"]
+            if role == "before"
+            else entry.get("rollback_mode", entry["after_mode"])
+            if role == "rollback"
+            else entry["after_mode"]
+        )
+        if not entry["changed"] and "rollback" not in entry:
+            continue
+        if (
+            "rollback" in entry
+            and digest == (snapshot["sha256"] if snapshot else None)
+            and (current is None or stat.S_IMODE(path.stat().st_mode) == mode)
+        ):
+            continue
         data = _private_bytes(plan_dir / snapshot["copy"]) if snapshot else None
         _effect(
             window,
             role + ":" + str(path),
-            lambda: _atomic_file(
-                path, data, entry["mode"] if role == "before" else entry["after_mode"]
-            ),
+            lambda: _atomic_file(path, data, mode),
             fault,
         )
 
@@ -1590,12 +1795,23 @@ def _check_recovery_inventory(plan: dict[str, Any]) -> None:
         path = Path(entry["path"])
         current = _file_bytes(path)
         digest = hashlib.sha256(current).hexdigest() if current is not None else None
-        valid = {item["sha256"] if item else None for item in (entry["before"], entry["after"])}
+        valid = {
+            item["sha256"] if item else None
+            for item in (
+                entry["before"],
+                entry["after"],
+                *([entry["rollback"]] if "rollback" in entry else []),
+            )
+        }
         need(digest in valid, "unrelated file edit: " + str(path))
         if current is not None:
             modes = set()
-            for label, mode in (("before", entry["mode"]), ("after", entry["after_mode"])):
-                snapshot = entry[label]
+            for label, mode in (
+                ("before", entry["mode"]),
+                ("after", entry["after_mode"]),
+                ("rollback", entry.get("rollback_mode", entry["mode"])),
+            ):
+                snapshot = entry.get(label)
                 if snapshot and snapshot["sha256"] == digest:
                     modes.add(mode)
             need(stat.S_IMODE(path.stat().st_mode) in modes, "unrelated file mode: " + str(path))
@@ -1675,36 +1891,46 @@ def _recover(
         _journal(window, "rollback_started")
         _stop(window, plan, manager, fault)
         _check_recovery_inventory(plan)
-        with closing(
-            sqlite3.connect(Path(plan["installation"]["state_db"]).as_uri() + "?mode=ro", uri=True)
-        ) as db:
-            need(
-                db.execute("PRAGMA user_version").fetchone()[0] == plan["state_schema"],
-                "rollback schema mismatch",
-            )
+        live = _live_schema(plan["installation"])
+        before = plan.get("state_schema_before", plan["state_schema"])
+        if live == before:
+            role, file_role, artifact = "old_runtime", "before", "old"
+        elif live == plan["state_schema"] and "rollback_runtime" in plan:
+            role, file_role, artifact = "rollback_runtime", "rollback", "rollback"
+        else:
+            raise Refused("unexpected database schema; owner decision required; no backup restored")
+        _journal(window, "rollback_target", schema=live, target=role, git_sha=plan[role]["git_sha"])
         need(
-            hashlib.sha256(Path(plan["old_wheel"]).read_bytes()).hexdigest()
-            == plan["old_wheel_sha256"],
+            hashlib.sha256(Path(plan[artifact + "_wheel"]).read_bytes()).hexdigest()
+            == plan[artifact + "_wheel_sha256"],
             "rollback artifact changed",
         )
-        runtime = plan["old_runtime"]
+        runtime = plan[role]
         info = _json_command(runner, [_runtime_cli(runtime), "release-info"])
         need(
-            info.get("git_sha") == runtime["git_sha"] and info.get("clean_tree") is True,
+            info.get("git_sha") == runtime["git_sha"]
+            and info.get("clean_tree") is True
+            and (
+                "package_version" not in runtime
+                or info.get("package_version") == runtime["package_version"]
+            ),
             "rollback runtime identity changed",
         )
         if runtime["tree_sha256"] is not None:
             _runtime_command(Path(runtime["root"]), "verify", runner, runtime["tree_sha256"])
-        _install_files(window, plan_dir, plan, "before", fault)
+        _install_files(window, plan_dir, plan, file_role, fault)
         _effect(window, "daemon-reload", manager.reload, fault)
         _check_window_dependencies(plan, manager)
-        _verify_config_only(plan, manager, metadata["untouched"], "old_runtime")
+        _verify_config_only(plan, manager, metadata["untouched"], role)
         _start(window, plan, manager, sleep, fault)
-        _verify(plan["old_runtime"], plan, manager, runner, metadata["untouched"], sleep)
+        _verify(
+            runtime, plan, manager, runner, metadata["untouched"], sleep, schema=live, role=role
+        )
         outcome = "ROLLED_BACK"
     except Exception as exc:
         _journal(window, "recovery_error", error=str(exc))
-        outcome = "RECOVERY_REQUIRED"
+        _journal(window, "RECOVERY_REQUIRED")
+        return {"id": window.name, "outcome": "RECOVERY_REQUIRED", "error": str(exc)}
     _journal(window, outcome)
     return {"id": window.name, "outcome": outcome}
 
@@ -1735,38 +1961,42 @@ def apply_window(
             or json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == expected_digest,
             "plan digest changed",
         )
-        for label in ("old", "new"):
+        for label in ("old", "new", *(["rollback"] if "rollback_runtime" in plan else [])):
             need(
                 hashlib.sha256(Path(plan[label + "_wheel"]).read_bytes()).hexdigest()
                 == plan[label + "_wheel_sha256"],
                 "release artifact changed",
             )
         need(plan["installation"] == installation, "installation changed since planning")
-        for label in ("old_runtime", "new_runtime"):
+        for label in (
+            "old_runtime",
+            "new_runtime",
+            *(["rollback_runtime"] if "rollback_runtime" in plan else []),
+        ):
             runtime = plan[label]
             info = _json_command(runner, [_runtime_cli(runtime), "release-info"])
             need(
-                info.get("git_sha") == runtime["git_sha"] and info.get("clean_tree") is True,
+                info.get("git_sha") == runtime["git_sha"]
+                and info.get("clean_tree") is True
+                and (
+                    "package_version" not in runtime
+                    or info.get("package_version") == runtime["package_version"]
+                ),
                 "runtime identity changed",
             )
             if runtime["tree_sha256"] is not None:
                 _runtime_command(Path(runtime["root"]), "verify", runner, runtime["tree_sha256"])
-        for kind in ("hub_config", "claude_config"):
-            entry = next(item for item in plan["files"] if item["kind"] == kind)
-            result = _json_command(
-                runner,
-                [
-                    _runtime_cli(plan["new_runtime"]),
-                    "validate-hub",
-                    str(plan_dir / entry["after"]["copy"]),
-                ],
+        _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
+        if "rollback_runtime" in plan:
+            _validate_plan_configs(
+                plan_dir, plan, "rollback_runtime", "rollback", "rollback_config", runner
             )
-            need(result.get("ok") is True, "candidate config validation failed")
         with closing(
             sqlite3.connect(Path(installation["state_db"]).as_uri() + "?mode=ro", uri=True)
         ) as db:
             need(
-                db.execute("PRAGMA user_version").fetchone()[0] == plan["state_schema"],
+                db.execute("PRAGMA user_version").fetchone()[0]
+                == plan.get("state_schema_before", plan["state_schema"]),
                 "schema changed",
             )
         need(not _busy(installation), "provider jobs busy")
@@ -1853,6 +2083,10 @@ def apply_window(
                 )
                 _sync_output(backup)
 
+            need(
+                _live_schema(installation) == plan.get("state_schema_before", plan["state_schema"]),
+                "schema changed under quiescence",
+            )
             _effect(window, "backup", backup_state, fault)
 
             def create_manifest() -> None:
@@ -1865,7 +2099,7 @@ def apply_window(
                         "--active-artifact",
                         plan["new_wheel"],
                         "--rollback-artifact",
-                        plan["old_wheel"],
+                        plan.get("rollback_wheel", plan["old_wheel"]),
                         "--config",
                         installation["hub_config"],
                         "--backup",
@@ -1884,9 +2118,13 @@ def apply_window(
                         "release-manifest",
                         "verify",
                         str(manifest),
-                        "--state",
-                        installation["state_db"],
                     ]
+                    + (
+                        ["--state", installation["state_db"]]
+                        if plan.get("state_schema_before", plan["state_schema"])
+                        == plan["state_schema"]
+                        else []
+                    )
                 ),
                 fault,
             )
@@ -1896,8 +2134,20 @@ def apply_window(
             _effect(window, "daemon-reload", manager.reload, fault)
             _check_window_dependencies(plan, manager)
             _verify_config_only(plan, manager, untouched, "new_runtime")
+            need(
+                _live_schema(installation) == plan.get("state_schema_before", plan["state_schema"]),
+                "schema changed before new runtime start",
+            )
             monitor_ok = _start(window, plan, manager, sleep, fault)
-            _verify(plan["new_runtime"], plan, manager, runner, untouched, sleep)
+            _verify(
+                plan["new_runtime"],
+                plan,
+                manager,
+                runner,
+                untouched,
+                sleep,
+                before_schema=plan.get("state_schema_before", plan["state_schema"]),
+            )
             outcome = "ACCEPTED" if monitor_ok else "CORE_HEALTHY_MONITOR_INCOMPLETE"
             _journal(window, outcome)
             return {"id": window.name, "outcome": outcome}
@@ -1941,6 +2191,7 @@ def main(
     parser.add_argument("action", choices=("plan", "apply", "deploy", "rollback", "status"))
     parser.add_argument("--installation", required=True)
     parser.add_argument("--release")
+    parser.add_argument("--rollback-release")
     parser.add_argument("--window")
     parser.add_argument("--plan")
     args = parser.parse_args(argv)
@@ -1948,11 +2199,17 @@ def main(
         installation = load_installation(Path(args.installation))
         service = manager or ServiceManager(runner)
         if args.action == "status":
-            need(not (args.release or args.window or args.plan), "status takes no other options")
-            print(json.dumps(last_window(installation)))
+            need(
+                not (args.release or args.rollback_release or args.window or args.plan),
+                "status takes no other options",
+            )
+            print(json.dumps(window_status(installation)))
             return 0
         if args.action == "rollback":
-            need(args.window and not (args.release or args.plan), "rollback requires --window")
+            need(
+                args.window and not (args.release or args.rollback_release or args.plan),
+                "rollback requires --window",
+            )
             result = rollback_window(installation, args.window, service, runner, sleep)
         else:
             if args.action in ("plan", "deploy"):
@@ -1966,7 +2223,14 @@ def main(
                 old = discover_installation(
                     installation, runner, inspector, runtime_owner, manager=service
                 )
-                new = prepare_stage(installation, old, args.release, runner, python=python)
+                new = prepare_stage(
+                    installation,
+                    old,
+                    args.release,
+                    runner,
+                    python=python,
+                    rollback_release=args.rollback_release,
+                )
                 plan_dir = create_plan(installation, old, new, runner)
                 if args.action == "plan":
                     print(
@@ -1981,7 +2245,10 @@ def main(
                     )
                     return 0
             else:
-                need(args.plan and not (args.release or args.window), "apply requires --plan")
+                need(
+                    args.plan and not (args.release or args.rollback_release or args.window),
+                    "apply requires --plan",
+                )
                 plan_dir = Path(args.plan)
             digest = (
                 json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"]
