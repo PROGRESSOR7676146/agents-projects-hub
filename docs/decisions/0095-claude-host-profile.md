@@ -15,7 +15,9 @@ the pinned native CLI directly, as the same UID, from the registered project roo
 with the owner’s HOME and native `bypassPermissions`. No Hub permission hook,
 socket, card, restricted tool list or stream tool rejection applies. Claude’s
 configuration and conversations use a Hub-managed per-session directory under
-`provider_home`. The configured route must be CPA; incompatible credential
+`provider_home`, so user-level settings, hooks and instructions of the owner's
+own CLI configuration are not inherited; project, local and managed settings load.
+The configured route must be CPA; incompatible credential
 selectors and settings must refuse before launch. The profile and storage are
 pinned to each conversation; a change requires `/new`. A failed confined launch
 must never fall back to `host`.

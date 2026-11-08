@@ -101,5 +101,7 @@ proves neither the account nor the absence of paid fallback.
 ## Later decision
 
 [ADR 0095](0095-claude-host-profile.md) adds a CPA-only `host` profile. It
-retains native customizations while refusing route-changing settings; the
+loads project, local and managed settings, refusing route-changing ones, but
+uses a fresh per-session Claude configuration directory, so user-level settings,
+hooks and instructions from the owner's own CLI configuration are not inherited; the
 settings restriction above remains in force for the other profiles.

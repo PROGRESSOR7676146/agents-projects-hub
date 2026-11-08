@@ -176,6 +176,22 @@ class ClaudeHostBindingTests(unittest.TestCase):
         self.assertNotEqual(binding.session_id, native)
         native = binding.session_id
         fixture.home.mkdir(mode=0o700)
+        (fixture.home / native).mkdir(mode=0o700)
+        (fixture.home / native).chmod(0o500)
+        with self.assertRaises(ProviderUnavailableError) as unsafe:
+            with module.hosted_claude_launch(
+                config,
+                state,
+                config.agents[0],
+                job,
+                token,
+                native,
+                fixture.fixture.root,
+                is_new=True,
+            ):
+                self.fail("read-only session storage accepted")
+        self.assertEqual(unsafe.exception.code, "claude_host_unverified")
+        (fixture.home / native).chmod(0o700)
         with (
             patch.object(module, "load_tlive_permission_config") as transport,
             patch.object(module, "PermissionServer") as socket_server,
@@ -259,3 +275,47 @@ class ClaudeHostStopTests(unittest.TestCase):
         self.assertEqual(recorded, [True])
         controls.assert_state(worker, job_id, uncertain=False)
         self.assertIsNone(adapter._active_process)
+
+
+class ClaudeHostReviewTests(unittest.TestCase):
+    def test_host_capability_needs_bypass_not_confined_controls(self):
+        from hermes_codex_router.claude_cli_capabilities import _has_required_advertisement
+        from tests.test_claude_cli_capabilities import HELP
+
+        bypass = HELP.replace(
+            "Values: default, dontAsk, plan", "Values: default, plan, bypassPermissions"
+        )
+        unconfined = bypass.replace("  --permission-prompts <mode>", "  --other-prompts <mode>")
+        self.assertTrue(_has_required_advertisement(unconfined.encode(), host=True))
+        self.assertFalse(_has_required_advertisement(unconfined.encode()))
+        self.assertFalse(_has_required_advertisement(HELP.encode(), host=True))
+        self.assertFalse(_has_required_advertisement(bypass.encode(), host=True, image_input=True))
+
+    def test_host_structured_input_requires_image_capability(self):
+        from hermes_codex_router.claude_host_profile import ClaudeHostConfig
+
+        root = Path.cwd()
+        host = ClaudeHostConfig(root, root / "session", Path("/usr/bin/true"))
+        adapter = ExternalCliAdapter("claude")
+        with (
+            patch("hermes_codex_router.external_runtime.validate_host_route_settings"),
+            patch.object(
+                adapter, "_verified_claude_argv", side_effect=ProviderUnavailableError("x", "x")
+            ) as verified,
+            patch.object(adapter, "_run_claude_process") as run,
+        ):
+            with self.assertRaises(ProviderUnavailableError):
+                adapter._run_owned_claude_turn(
+                    ("claude",),
+                    cwd=root,
+                    environment={},
+                    timeout=1,
+                    expected_session_id=None,
+                    on_visible_assistant=None,
+                    on_process_started=None,
+                    sandbox=host,
+                    input_data=b"{}\n",
+                    correction_input=object(),  # type: ignore[arg-type]
+                )
+        self.assertTrue(verified.call_args.kwargs["image_input"])
+        run.assert_not_called()

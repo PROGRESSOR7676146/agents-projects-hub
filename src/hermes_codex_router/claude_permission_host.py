@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -387,7 +388,7 @@ def hosted_claude_launch(
                 home.is_symlink()
                 or not home.is_dir()
                 or home.stat().st_uid != os.geteuid()
-                or home.stat().st_mode & 0o077
+                or stat.S_IMODE(home.stat().st_mode) != 0o700
             ):
                 raise ValueError("unsafe host session storage")
             if (home / ".credentials.json").exists() or (home / ".credentials.json").is_symlink():

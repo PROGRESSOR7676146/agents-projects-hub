@@ -858,6 +858,7 @@ class ExternalCliAdapter:
                     (str(sandbox.claude_executable), *argv[1:]),
                     cwd=cwd,
                     environment=environment,
+                    image_input=input_data is not None,
                     host=True,
                 )
                 if argv[0] != str(sandbox.claude_executable):
