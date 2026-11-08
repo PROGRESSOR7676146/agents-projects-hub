@@ -163,8 +163,9 @@ text, target ID or deployment data.
 
 The buttons share one exact, ten-minute capability. It is bound to that owner, the
 Hub-bot preview message, warning, numeric chat/topic and complete saved
-delivery snapshot. Pressing it only lets later already-queued work pass this
-one FIFO wait. The old delivery remains unknown; Hub does not resend it, replay
+delivery snapshot. Pressing **Continue without confirmed delivery** only lets
+later already-queued work pass this one FIFO wait. The copy button does not release
+the queue. The old delivery remains unknown; Hub does not resend it, replay
 the provider, create a receipt, or relax stop, approval, writer, native
 uncertainty, session, root, capacity or full-control checks.
 

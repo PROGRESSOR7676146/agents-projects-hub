@@ -133,3 +133,15 @@ class DocumentationContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueueRecoveryDocumentationTests(unittest.TestCase):
+    def test_shared_capability_explains_which_button_releases_queue(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        text = (root / "docs/operations/QUEUE_RECOVERY.md").read_text(encoding="utf-8")
+        paragraph = text.split("The buttons share one exact, ten-minute capability.", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        normalized = " ".join(paragraph.split())
+        self.assertIn("Pressing **Continue without confirmed delivery**", normalized)
+        self.assertIn("copy button does not release the queue", normalized)

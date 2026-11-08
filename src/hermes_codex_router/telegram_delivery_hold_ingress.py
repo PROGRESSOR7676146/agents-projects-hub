@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import artifact_capabilities
+from .delivery_retry import proven_delivery_rejection
 from .hub_config import AgentDefinition, HubConfig
 from .routing import parse_command
 from .state import HubState, StateError
@@ -268,7 +269,7 @@ def try_handle_telegram_delivery_hold_callback(
                         mime_type="text/markdown",
                     )
         except TelegramError as error:
-            if error.failure_class == "api_rejection" and error.status_code in (400, 403):
+            if error.private_chat_unavailable:
                 try:
                     service.telegram.send_html(
                         callback.chat_id,
@@ -278,6 +279,8 @@ def try_handle_telegram_delivery_hold_callback(
                 except TelegramError:
                     pass
                 service.telegram.answer_callback(callback.callback_id, "Личный чат недоступен.")
+            elif proven_delivery_rejection(error):
+                service.telegram.answer_callback(callback.callback_id, "Telegram отклонил копию.")
             else:
                 service.telegram.answer_callback(
                     callback.callback_id, "Копия могла не доставиться; нажмите ещё раз."

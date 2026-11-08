@@ -61,6 +61,7 @@ class TelegramError(RuntimeError):
         failure_class: str = "unknown",
         status_code: int | None = None,
         retry_after: int | None = None,
+        private_chat_unavailable: bool = False,
     ) -> None:
         super().__init__(message)
         self.operation = operation if operation in self._OPERATIONS else "unknown"
@@ -71,6 +72,11 @@ class TelegramError(RuntimeError):
             and not isinstance(status_code, bool)
             and 100 <= status_code <= 599
             else None
+        )
+        self.private_chat_unavailable = (
+            private_chat_unavailable is True
+            and self.failure_class == "api_rejection"
+            and self.status_code in (400, 403)
         )
         self.retry_after = (
             retry_after
@@ -151,6 +157,21 @@ def _rejection_status(document: object) -> int | None:
     return status if type(status) is int and 400 <= status <= 599 else None
 
 
+def _private_chat_unavailable(document: object, status: int | None) -> bool:
+    """Keep only a boolean from exact, known Telegram descriptions."""
+    if not isinstance(document, dict):
+        return False
+    description = document.get("description")
+    if not isinstance(description, str):
+        return False
+    return (status, description) in {
+        (403, "Forbidden: bot can't initiate conversation with a user"),
+        (403, "Forbidden: bot was blocked by the user"),
+        (400, "Bad Request: chat not found"),
+        (403, "Forbidden: user is deactivated"),
+    }
+
+
 def _api_result(method: str, document: object) -> Any:
     if isinstance(document, dict) and document.get("ok") is True:
         return document.get("result")
@@ -161,6 +182,7 @@ def _api_result(method: str, document: object) -> Any:
         failure_class="api_rejection" if status is not None else "invalid_response",
         status_code=status,
         retry_after=_retry_after(document),
+        private_chat_unavailable=_private_chat_unavailable(document, status),
     )
 
 
@@ -170,6 +192,7 @@ def _transport_error(
     operation = _operation(method)
     status_code: int | None = None
     retry_after: int | None = None
+    private_chat_unavailable = False
     not_sent = (
         native_send_proof
         and isinstance(exc, urllib.error.URLError)
@@ -190,6 +213,9 @@ def _transport_error(
             and rejected < 500
             and rejected != 408
             else "api_http"
+        )
+        private_chat_unavailable = failure_class == "api_rejection" and _private_chat_unavailable(
+            document, status_code
         )
     elif isinstance(exc, urllib.error.URLError):
         reason = exc.reason.error if isinstance(exc.reason, _InitialConnectNotSent) else exc.reason
@@ -218,6 +244,7 @@ def _transport_error(
         failure_class=failure_class,
         status_code=status_code,
         retry_after=retry_after,
+        private_chat_unavailable=private_chat_unavailable,
     )
 
 
