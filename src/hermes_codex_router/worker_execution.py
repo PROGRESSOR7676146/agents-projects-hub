@@ -13,6 +13,7 @@ from .artifacts import (
 )
 from .claude_corrections import ClaudeCorrectionCallbacks
 from .claude_file_sandbox import FileToolSandboxConfig
+from .claude_host_profile import ClaudeHostConfig
 from .claude_image_input import VerifiedClaudeImage
 from .claude_permission_wait import PermissionWaitClock
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
@@ -453,7 +454,7 @@ def invoke_external_provider_turn(
     claude_session_binding: ClaudeSessionBinding | None = None,
     on_visible_assistant: VisibleAssistantCallback | None = None,
     on_claude_process_started: Callable[[], None] | None = None,
-    claude_sandbox: FileToolSandboxConfig | None = None,
+    claude_sandbox: FileToolSandboxConfig | ClaudeHostConfig | None = None,
     claude_permission_wait: PermissionWaitClock | None = None,
     claude_images: tuple[VerifiedClaudeImage, ...] = (),
     pending_stop_request: Callable[[], str | None] | None = None,

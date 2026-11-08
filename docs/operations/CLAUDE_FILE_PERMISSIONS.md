@@ -337,3 +337,19 @@ the immutable artifact hash before a deployment can be accepted.
 Name the exact clean revision reported by every required component. Store live
 identities, receipts and transcripts outside Git. A provider invocation is not
 approved merely by completing this runbook, and offline tests do not close this gate.
+
+## Explicit host profile
+
+Local `claude_file_permissions` may select `{ "profile": "host",
+"provider_home": "/home/example/claude-sessions" }`. The existing private
+provider directory must be owned by the worker and inaccessible to other users.
+Hub creates one separate Claude configuration directory per native session.
+`host` runs directly in the registered project with the owner’s HOME and UID,
+full native tools and bypassed permissions; no Hub permission socket or card
+is involved. It requires CPA and refuses conflicting route settings. Other
+profiles retain their boundaries and never fall back to `host`. Changing profile
+or storage requires `/new`; doctor reports incompatible saved sessions.
+
+This is an unrestricted execution mode: Claude can access credentials, files,
+processes and services available to the owner. Review [ADR 0095](../decisions/0095-claude-host-profile.md)
+for consequences. Source tests do not establish installed or live acceptance.

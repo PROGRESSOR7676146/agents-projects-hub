@@ -29,7 +29,13 @@ OpenCode, Antigravity и native tools Hermes. Их sandbox/tool flags не до�
 запрет передачи доступных данных; scoped проверка authority-bearing endpoints
 конкретного запуска остаётся обязательной по REQ-SEC-008.
 
-Запрет модельного approval сохраняется как правило продукта. Human-only receipts,
+Для явно выбранного локально профиля Claude `host` владелец принял исключение:
+процесс работает с UID и HOME владельца без namespace и без запросов разрешений
+(ADR 0095). Он может читать и менять файлы, credentials и состояние Hub, запускать
+команды и обращаться к сети с полномочиями владельца. Ошибка confined-профиля
+никогда не переключает его на `host`.
+
+Для confined-профилей human-only receipts,
 namespace, immutable runtime, private-state/key exclusion и существующие
 проверки конкретного запуска сохраняются. При отказе границы нет запуска
 обычного CLI в обход. Полный контракт —
@@ -89,7 +95,7 @@ receipts автоматически. При компрометации треб�
 
 | Угроза | Ответ |
 |---|---|
-| Prompt injection просит открыть другой каталог | Tool не принимает путь; registry lookup fail-closed |
+| Prompt injection просит открыть другой каталог | Registry ограничивает корень проекта; `host` может читать и менять другие доступные владельцу пути |
 | Пользователь создаёт тему с именем проекта | Имя не binding; неизвестный numeric thread ID не маршрутизируется |
 | Повтор Telegram update | Уникальный update/request ID, возврат прежнего receipt |
 | Подмена/переименование темы | Требуется локально подтверждённый rebind |
@@ -98,7 +104,7 @@ receipts автоматически. При компрометации треб�
 | Два Codex одновременно правят один worktree | Lease одной lane; параллельность только через отдельный worktree |
 | Router перезапущен во время approval | Pending approval не восстанавливается как разрешённый; fail closed |
 | App-server protocol изменился | Version/capability probe; остановка вместо fallback к screen scraping |
-| Компрометация Telegram | Sandbox/approval всё ещё ограничивают ущерб; локальный kill switch и отзыв bot token |
+| Компрометация Telegram | Для confined-профилей sandbox/approval ограничивают ущерб; `host` даёт полный доступ владельца. Локальный kill switch и отзыв bot token |
 
 ## Kill switch и recovery
 

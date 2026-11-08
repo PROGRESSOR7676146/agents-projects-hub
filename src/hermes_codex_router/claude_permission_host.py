@@ -16,6 +16,7 @@ from typing import Any, Iterator
 from .claude_bash_grants import BASH_GRANTS
 from .claude_file_policy import validate_file_tool_input
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from .claude_host_profile import ClaudeHostConfig
 from .claude_permission_protocol import (
     canonical_json,
     canonical_uuid,
@@ -41,7 +42,7 @@ from .worker_execution import resolve_external_worker_target, revalidate_worker_
 
 @dataclass(frozen=True, slots=True)
 class HostedClaudeLaunch:
-    sandbox: FileToolSandboxConfig
+    sandbox: FileToolSandboxConfig | ClaudeHostConfig
     permission_wait: PermissionWaitClock = field(default_factory=PermissionWaitClock)
 
 
@@ -366,6 +367,41 @@ def hosted_claude_launch(
         ) from None
     if settings is None:
         yield None
+        return
+    if settings.profile == "host":
+        try:
+            executable = shutil.which(agent.executable or "claude")
+            home_base = settings.provider_home
+            if (
+                executable is None
+                or home_base.is_symlink()
+                or not home_base.is_dir()
+                or home_base.resolve() != home_base
+                or home_base.stat().st_uid != os.geteuid()
+                or home_base.stat().st_mode & 0o077
+            ):
+                raise ValueError("unsafe host session storage")
+            home = home_base / session_id
+            home.mkdir(mode=0o700, exist_ok=True)
+            if (
+                home.is_symlink()
+                or not home.is_dir()
+                or home.stat().st_uid != os.geteuid()
+                or home.stat().st_mode & 0o077
+            ):
+                raise ValueError("unsafe host session storage")
+            if (home / ".credentials.json").exists() or (home / ".credentials.json").is_symlink():
+                raise ValueError("host session contains native credentials")
+            launch = journal.open_launch(job.job_id, token, session_id, root, profile="host")
+        except (OSError, ValueError, StateError):
+            raise ProviderUnavailableError(
+                "claude_host_unverified",
+                "Claude host session could not be prepared. The turn was not started.",
+            ) from None
+        try:
+            yield HostedClaudeLaunch(ClaudeHostConfig(root, home, Path(executable).resolve()))
+        finally:
+            journal.close_launch(launch)
         return
     refusal: str | None = None
     with tempfile.TemporaryDirectory(prefix="hub-claude-permission-") as directory:

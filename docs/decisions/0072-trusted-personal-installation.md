@@ -97,3 +97,8 @@ Source review, canonical/hosted gates and scoped live authorization stay separat
 The [stabilization plan](../operations/STABILIZATION_PLAN.md#trusted-installation-execution)
 owns sequence and checkpoint reporting; runbooks own procedures rather than a
 second behavioral contract.
+
+## Later decision
+
+[ADR 0095](0095-claude-host-profile.md) adds an explicit unconfined, prompt-free
+`host` profile; this decision remains in force for confined profiles.

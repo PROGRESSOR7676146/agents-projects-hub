@@ -15,6 +15,8 @@ and releases use semantic versioning while the public API is still evolving.
   local recovery remain effective; `release-info` reports the capability.
 - Fresh managed Codex server creation no longer waits on historical delivery or
   execution uncertainty; active work, control and custody gates still apply.
+- Add an explicit Claude `host` profile with owner-equivalent, prompt-free local
+  execution and separately stored Hub conversations (ADR 0095).
 
 ## [0.11.5] - 2026-11-07
 

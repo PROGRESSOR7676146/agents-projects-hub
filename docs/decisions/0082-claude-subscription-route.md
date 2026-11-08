@@ -97,3 +97,9 @@ authenticating another way, and the extra-usage setting off on every account.
 When projects are bound, it must show one turn per account with the account
 identified, all tied to the exact deployed revision. A successful turn alone
 proves neither the account nor the absence of paid fallback.
+
+## Later decision
+
+[ADR 0095](0095-claude-host-profile.md) adds a CPA-only `host` profile. It
+retains native customizations while refusing route-changing settings; the
+settings restriction above remains in force for the other profiles.
