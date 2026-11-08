@@ -27,9 +27,11 @@ from .codex_failure import (
 )
 from .codex_notifications import retain_turn_notification
 from .codex_permissions import (
+    CodexFullAccessBinding,
     CodexPermissionBinding,
     CodexPermissionPolicyDriftError,
     CodexPermissionProfileError,
+    is_full_sandbox,
     validate_permission_profile_id,
     verify_managed_selection,
 )
@@ -206,7 +208,7 @@ class CodexAppServerClient:
         self._approval_policy = approval_policy
         self._model_provider = model_provider
         self._permission_profile = validate_permission_profile_id(permission_profile)
-        self._permission_binding: CodexPermissionBinding | None = None
+        self._permission_binding: CodexPermissionBinding | CodexFullAccessBinding | None = None
         self._permission_drifted = False
         self._permission_preparing = False
         self._completed_connection = CompletedConnectionProof(enabled=retire_completed_connection)
@@ -340,6 +342,9 @@ class CodexAppServerClient:
         self._preparation_settings.clear()
         if self._permission_profile is None:
             return {"sandbox": "workspace-write"}
+        if self._permission_profile == "full":
+            self._permission_preparing = True
+            return {"sandbox": "danger-full-access"}
         verify_managed_selection(self._request, self._permission_profile, cwd)
         self._permission_preparing = True
         return {"permissions": self._permission_profile}
@@ -347,13 +352,17 @@ class CodexAppServerClient:
     def _bind_permission_selection(self, result: dict[str, Any], thread_id: str, cwd: Path) -> None:
         if self._permission_profile is None:
             return  # Legacy validation already ran before the sandbox check.
-        binding = CodexPermissionBinding(
-            thread_id,
-            cwd,
-            self._permission_profile,
-            self._approval_policy,
-            self._model_provider or "openai",
-        )
+        binding: CodexPermissionBinding | CodexFullAccessBinding
+        if self._permission_profile == "full":
+            binding = CodexFullAccessBinding(thread_id, cwd, self._model_provider or "openai")
+        else:
+            binding = CodexPermissionBinding(
+                thread_id,
+                cwd,
+                self._permission_profile,
+                self._approval_policy,
+                self._model_provider or "openai",
+            )
         binding.validate(result)
         for params in self._preparation_settings:
             if params.get("threadId") == thread_id:
@@ -736,7 +745,7 @@ class CodexAppServerClient:
             if self._permission_profile is None:
                 _validate_legacy_permission_profile(result)
             sandbox_is_safe = (
-                sandbox == {"type": "dangerFullAccess"}
+                is_full_sandbox(sandbox)
                 if self._permission_profile == "full"
                 else sandbox == "workspace-write"
                 or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
@@ -804,7 +813,7 @@ class CodexAppServerClient:
             if self._permission_profile is None:
                 _validate_legacy_permission_profile(result)
             if not (
-                sandbox == {"type": "dangerFullAccess"}
+                is_full_sandbox(sandbox)
                 if self._permission_profile == "full"
                 else sandbox == "workspace-write"
                 or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
@@ -843,7 +852,9 @@ class CodexAppServerClient:
         ):
             raise CodexPermissionProfileError()
         permission_params: dict[str, Any] = (
-            {"permissions": self._permission_profile}
+            {"sandboxPolicy": {"type": "dangerFullAccess"}}
+            if self._permission_profile == "full"
+            else {"permissions": self._permission_profile}
             if self._permission_profile is not None
             else {
                 "sandboxPolicy": {

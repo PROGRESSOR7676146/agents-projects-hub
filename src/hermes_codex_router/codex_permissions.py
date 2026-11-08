@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CodexPermissionBinding",
+    "CodexFullAccessBinding",
+    "is_full_sandbox",
     "CodexPermissionPolicyDriftError",
     "CodexPermissionProfileError",
     "MissingPermissionContext",
@@ -138,10 +140,8 @@ class CodexPermissionBinding:
             # Managed definitions are intentionally opaque: native metadata
             # reports a null parent even when requirements extends :workspace.
             and "extends" in profile
-            and profile["extends"]
-            in (None, ":full-access" if self.profile == "full" else ":workspace")
+            and profile["extends"] in (None, ":workspace")
             and settings.get("approvalPolicy") == self.approval_policy
-            and (self.profile != "full" or self.approval_policy == "never")
             and settings.get("approvalsReviewer") == "user"
             and settings.get("modelProvider") == self.model_provider
         ):
@@ -159,12 +159,6 @@ class CodexPermissionBinding:
         # Reject visible broadening; this projection still does not reveal the
         # complete managed definition or read boundaries.
         sandbox = settings.get("sandboxPolicy", settings.get("sandbox"))
-        if self.profile == "full":
-            if sandbox != {"type": "dangerFullAccess"} or (
-                "sandbox" in settings and settings["sandbox"] != sandbox
-            ):
-                raise CodexPermissionProfileError()
-            return
         if not (
             isinstance(sandbox, dict)
             and sandbox.get("type") == "workspaceWrite"
@@ -186,3 +180,36 @@ class CodexPermissionBinding:
                     raise CodexPermissionProfileError()
             except (OSError, RuntimeError) as error:
                 raise CodexPermissionProfileError() from error
+
+
+def is_full_sandbox(value: object) -> bool:
+    return value == {"type": "dangerFullAccess"} or value == "danger-full-access"
+
+
+@dataclass(frozen=True, slots=True)
+class CodexFullAccessBinding:
+    thread_id: str
+    root: Path
+    model_provider: str
+
+    def validate(self, settings: object) -> None:
+        if not isinstance(settings, dict):
+            raise CodexPermissionProfileError()
+        if (
+            settings.get("approvalPolicy") != "never"
+            or settings.get("modelProvider") != self.model_provider
+        ):
+            raise CodexPermissionProfileError()
+        cwd = settings.get("cwd")
+        try:
+            if (
+                not isinstance(cwd, str)
+                or not Path(cwd).is_absolute()
+                or Path(cwd).resolve(strict=True) != self.root
+            ):
+                raise CodexPermissionProfileError()
+        except (OSError, RuntimeError) as error:
+            raise CodexPermissionProfileError() from error
+        fields = [settings[key] for key in ("sandbox", "sandboxPolicy") if key in settings]
+        if not fields or not all(is_full_sandbox(value) for value in fields):
+            raise CodexPermissionProfileError()

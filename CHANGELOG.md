@@ -19,6 +19,8 @@ and releases use semantic versioning while the public API is still evolving.
   execution and separately stored Hub conversations (ADR 0095).
 - Local Codex `full` selects full access without approval requests, with exact
   runtime checks and explicit new sessions when changing profile (ADR 0096).
+- Local Codex `full` selects legacy sandbox full access without approval requests,
+  with per-thread runtime checks and explicit new sessions when changing profile (ADR 0096).
 
 ## [0.11.5] - 2026-11-07
 

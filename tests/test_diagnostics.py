@@ -180,7 +180,7 @@ class DiagnosticsTests(unittest.TestCase):
             checks = cast(list[dict[str, object]], report["checks"])
             check = next(item for item in checks if item["name"] == "codex_full_profile")
             self.assertIn("no Codex approvals", str(check["detail"]))
-            self.assertIn("not confirmed", str(check["detail"]))
+            self.assertIn("verified per thread at start/resume", str(check["detail"]))
             sessions = next(item for item in checks if item["name"] == "codex_full_sessions")
             self.assertIn("incompatible=0", str(sessions["detail"]))
 

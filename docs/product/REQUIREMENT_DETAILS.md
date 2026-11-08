@@ -275,8 +275,9 @@ default; exact selection on start/resume/submit with no legacy overrides.
 Generation/job/checkpoint/connect snapshot it; missing context refuses, explicit
 legacy null distinct and migration stays legacy. Confirmation pins root/provider/
 profile/policy/reviewer, rejects visible network/outside-project/implicit temp writes.
-Only locally selected `full` instead requires `never` and an exact `dangerFullAccess`
-projection, for either transport; unexpected approval requests are declined. It requires
+Only locally selected `full` instead uses legacy sandbox selection without managed metadata,
+requires `never` and an exact `dangerFullAccess` projection for either transport;
+unexpected approval requests are declined. It requires
 an explicitly new generation when changing an existing conversation (ADR 0096).
 A null parent does not attest the definition. Preparation changes rechecked; later drift
 interrupts boundedly but stays uncertain until exact terminal. Managed steering/

@@ -161,7 +161,7 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
             Check(
                 "codex_full_profile",
                 True,
-                "locally selected full; no Codex approvals; Codex configuration not confirmed",
+                "locally selected full; no Codex approvals; full access verified per thread at start/resume",
                 required=False,
             )
         )

@@ -149,12 +149,13 @@ refuse before inference; exact-session failure MUST NOT create a replacement.
   rejected.
   - The local `full` profile alone MUST select `danger-full-access` and `never` for both transports;
     Telegram and the project registry MUST NOT select it. Runtime confirmation MUST match the full
-    sandbox projection, profile, root, provider and policy or refuse (ADR 0096).
-  - An explicit managed profile MUST be passively verified as the sole allowed default and selected
+    sandbox projection, root, provider and policy or refuse (ADR 0096); it uses legacy sandbox
+    selection and does not require managed profile metadata.
+  - Any other explicit managed profile MUST be passively verified as the sole allowed default and selected
     unchanged for start/resume/turns, without legacy overrides.
   - Session, job, checkpoint and connect authorization MUST pin the selection; missing context
     refuses work, legacy stays legacy, and configuration changes require a new generation.
-  - Confirmation MUST match root/provider/profile/policy/reviewer; other profiles reject visible
+  - Managed profile confirmation MUST match root/provider/profile/policy/reviewer; those profiles reject visible
     network, outside-project or implicit temporary writes. Preparation changes require rechecking.
   - Later policy drift MUST trigger bounded interruption while retaining uncertainty until exact
     terminal proof; exact resume MUST NOT replace threads.
