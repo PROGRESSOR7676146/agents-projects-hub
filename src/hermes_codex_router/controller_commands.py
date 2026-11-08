@@ -139,9 +139,14 @@ class ControllerCommandOrchestrator:
                 "Execution uncertainty and other safety checks remain independent."
             )
         if delivery_controls["outstanding"]:
+            recovery_action = (
+                "reply /delivery to the exact Hub warning or inspect the local delivery-hold preview."
+                if self.config.hub_delivery_hold_recovery_enabled
+                else "inspect the local delivery-hold preview."
+            )
             detail += (
                 f"\nUnknown Telegram delivery hold(s): {delivery_controls['outstanding']}. "
-                "Later delivery is blocked; inspect the local delivery-hold preview."
+                f"Later delivery is blocked; {recovery_action}"
             )
         queue_only = delivery_controls["queue_only"]
         if queue_only:

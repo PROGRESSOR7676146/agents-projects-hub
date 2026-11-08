@@ -27,7 +27,8 @@ WITH target AS (
            e.terminal_status, e.observed_at AS terminal_at,
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
-           dh.outbox_id IS NOT NULL AS delivery_hold_recorded,
+           (dh.outbox_id IS NOT NULL OR rdh.outbox_id IS NOT NULL) AS delivery_hold_recorded,
+           COALESCE(dh.authority,rdh.authority) AS delivery_hold_authority,
            dc.disposition_id IS NOT NULL AS delivery_control_recorded,
            {final_control_reconciled("o")} AS delivery_control_reconciled,
            a.decision AS owner_decision, a.reason AS owner_reason,
@@ -51,6 +52,7 @@ WITH target AS (
                                   AND o.sender_agent_id=j.agent_id
                                   AND o.chat_id=j.chat_id AND o.thread_id=topic.thread_id
     LEFT JOIN telegram_delivery_hold_dispositions dh ON dh.outbox_id=o.outbox_id
+    LEFT JOIN telegram_delivery_hold_remote_dispositions rdh ON rdh.outbox_id=o.outbox_id
     LEFT JOIN telegram_delivery_control_dispositions dc ON dc.outbox_id=o.outbox_id
     WHERE j.job_id=?
 ), artifacts AS (
@@ -208,7 +210,10 @@ class OutcomeJournalStateFacade:
                     else None
                 ),
                 "delivery_hold": (
-                    "released_by_owner"
+                    "released_by_telegram_owner"
+                    if row["delivery_hold_released"]
+                    and row["delivery_hold_authority"] == "telegram_owner_callback"
+                    else "released_by_owner"
                     if row["delivery_hold_released"]
                     else "disposition_binding_changed"
                     if row["delivery_hold_recorded"] and row["delivery_status"] == "unknown"
@@ -216,6 +221,7 @@ class OutcomeJournalStateFacade:
                     if row["delivery_status"] == "unknown"
                     else None
                 ),
+                "delivery_hold_authority": row["delivery_hold_authority"],
                 "parts_total": row["part_count"],
                 "parts_receipted": row["receipt_count"],
                 "receipts_complete": receipts_complete,

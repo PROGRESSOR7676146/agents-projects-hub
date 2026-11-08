@@ -142,6 +142,37 @@ immediately under ordinary scheduling; it never resends the old message or calls
 the provider itself. Existing session/writer, connect/adoption and relocation
 checks remain independent. See [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md).
 
+### Hub-owner recovery of a delivery hold
+
+Schema56 adds a second, narrower route after its exact reviewed release is
+deployed. It is not live acceptance evidence and must not be used before the
+separate deployment/owner Telegram acceptance gate is complete.
+
+Only the configured Hub bot in external queue/outbox mode can offer it, and
+only after its exact positive numeric Telegram bot ID is configured locally
+alongside its username. A configured owner replies with exactly `/delivery` to
+the current delivered Hub delivery-wait warning in that same forum topic—no
+arguments, attachments, forward, direct chat or provider-bot warning. Hub then
+shows a short preview with part/receipt counts and one **Continue without
+confirmed delivery** button. The preview does not reveal a path, digest, result
+text, target ID or deployment data.
+
+The button is one exact, ten-minute capability. It is bound to that owner, the
+Hub-bot preview message, warning, numeric chat/topic and complete saved
+delivery snapshot. Pressing it only lets later already-queued work pass this
+one FIFO wait. The old delivery remains unknown; Hub does not resend it, replay
+the provider, create a receipt, or relax stop, approval, writer, native
+uncertainty, session, root, capacity or full-control checks.
+
+If the preview or button says unavailable, expired or changed, do not reuse a
+copied button/callback or edit state. Reinspect the current warning and, if it
+is still eligible, make a fresh `/delivery` Reply. An ambiguous preview send
+leaves no usable capability and receives no automatic retry. A same-owner repeat
+of a successfully recorded press reports the original decision; another owner,
+chat, topic, warning or preview message cannot consume it. The local
+`delivery-hold` CLI remains a distinct local-authority route and cannot relabel
+or replace a Hub callback decision.
+
 ## Component restart boundaries
 
 After inspecting the failed unit and preserving its logs privately, restart

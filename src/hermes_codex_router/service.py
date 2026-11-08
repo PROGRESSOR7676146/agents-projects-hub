@@ -122,12 +122,17 @@ from .telegram import (
     TelegramError,
     TopicCallback,
     TopicMessage,
+    _InternalSyntheticTopicUpdate,
     is_topic_edit,
     parse_direct_callback,
     parse_direct_message,
     parse_topic_callback,
     parse_topic_message,
     parse_topic_rename,
+)
+from .telegram_delivery_hold_ingress import (
+    try_handle_telegram_delivery_hold_callback,
+    try_handle_telegram_delivery_hold_command,
 )
 from .telegram_interaction import (
     telegram_contract_version,
@@ -1960,10 +1965,9 @@ class ProjectHubService:
                     synthetic_message["message_thread_id"] = callback.thread_id
                     synthetic_message["is_topic_message"] = True
                 return self.handle_update(
-                    {
-                        "update_id": synthetic_message_id,
-                        "message": synthetic_message,
-                    }
+                    _InternalSyntheticTopicUpdate(
+                        update_id=synthetic_message_id, message=synthetic_message
+                    )
                 )
             if callback.data.startswith("new:"):
                 _, action, expected_session_id = callback.data.split(":", 2)
@@ -2714,22 +2718,22 @@ class ProjectHubService:
         ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
         if direct_messages_only:
             callback = parse_direct_callback(update)
-        elif ingress_identity == "hub":
-            callback = parse_topic_callback(update) or parse_direct_callback(update)
         else:
             callback = parse_topic_callback(update) or parse_direct_callback(update)
         if callback is not None:
+            if (handled := try_handle_telegram_delivery_hold_callback(self, callback)) is not None:
+                return handled
             return self._handle_callback(callback)
         if direct_messages_only:
             message = parse_direct_message(update)
-        elif ingress_identity == "hub":
-            message = parse_topic_message(update) or parse_direct_message(update)
         else:
             message = parse_topic_message(update) or parse_direct_message(update)
         if message is None:
             return False
         if not self.config.is_authorized(message.sender_id, message.chat_id, message.thread_id):
             return False
+        if (handled := try_handle_telegram_delivery_hold_command(self, message)) is not None:
+            return handled
         from .assessment_inputs import is_assessment_command
         from .controller_assessment import ControllerAssessmentOrchestrator
 

@@ -93,8 +93,10 @@ def evaluate_reliability_alerts(
                     + "inspect saved receipts before any resend. Provider work is unchanged."
                     + (
                         " Later deliveries in the affected topic are blocked; a result-ready "
-                        "head also blocks new execution there. Inspect the local delivery-hold preview for owner reconciliation "
-                        "before deciding whether to continue without confirmed delivery."
+                        "head also blocks new execution there. A configured Hub may offer its "
+                        "exact-warning owner reconciliation control; otherwise inspect the local "
+                        "delivery-hold preview for owner reconciliation before deciding whether "
+                        "to continue without confirmed delivery."
                         if known_holds and key == "unknown_delivery"
                         else ""
                     ),

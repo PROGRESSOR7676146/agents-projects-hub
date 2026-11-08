@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-10-10
+Last updated: 2026-11-08
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -115,3 +115,4 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0090: Native installed backup input](0090-installed-backup-input.md) — artifact-bound readback and inspectable SQLite snapshots; installation publication and full recovery adoption remain separate.
 - [0091: Workstation project without a trust scan](0091-workstation-project-not-trust-scanned.md) — `workstation` admits hardlinks, special files and large trees in the project like Codex; bind aliases with the session HOME still refuse; installed and live-accepted on 0.11.5.
 - [0092: Session hygiene and agent-run procedures](0092-session-hygiene-and-agent-run-procedures.md) — each session removes the worktrees, branches, kits and processes it created; agents run every technical procedure, and a step that still needs the owner is a tracked defect.
+- [0093: Hub-owner delivery-hold recovery](0093-hub-owner-delivery-hold-recovery.md) — a configured Telegram owner can release only one exact unknown saved-result FIFO hold through a Hub-bound preview/callback; delivery remains unknown and deployment/acceptance are pending.

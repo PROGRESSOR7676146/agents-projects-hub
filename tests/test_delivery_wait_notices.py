@@ -57,6 +57,7 @@ class DeliveryWaitNoticeTests(TestCase):
             "continue without confirmed delivery",
         ):
             self.assertIn(fragment, args[2])
+        self.assertNotIn("/delivery", args[2])
         self.assertEqual(self.state.get_telegram_outbox_for_job(self.job.job_id), before)
         self.assertEqual(self.state.get_provider_job(tail.job_id).status, "queued")
         self.assertIsNone(self.state.lease_provider_job("codex", "example-worker"))
@@ -169,7 +170,9 @@ class DeliveryWaitSenderTests(TestCase):
         self.other = sender_fixtures.Bot()
         config = replace(
             self.fixture.config,
-            hub_bot=HubTelegramBot("example_hub_bot", self.fixture.base / "unused-token"),
+            hub_bot=HubTelegramBot(
+                "example_hub_bot", self.fixture.base / "unused-token", telegram_user_id=700
+            ),
         )
         self.sender = TelegramOutboxSender(
             config,
@@ -189,6 +192,7 @@ class DeliveryWaitSenderTests(TestCase):
         self.assertTrue(self.sender.run_cycle())
         self.assertEqual(len(self.hub.sent), 1)
         self.assertIn("unconfirmed", self.hub.sent[0][2])
+        self.assertIn("/delivery", self.hub.sent[0][2])
         self.assertEqual(
             self.sender.state.get_telegram_outbox_for_job(self.job_id).status, "unknown"
         )

@@ -236,7 +236,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value._codex_client = None
             value.usernames = {"codex": "project_codex_bot"}
 
-            self.assertTrue(value.handle_update(update(0, "/menu")))
+            self.assertTrue(value.handle_update(update(100, "/menu")))
             self.assertEqual(
                 callback_values(telegram.markups[-1]),
                 [
@@ -248,7 +248,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                     "menu:return",
                 ],
             )
-            self.assertTrue(value.handle_update(callback(0, "cb-menu-status", "menu:status")))
+            self.assertTrue(value.handle_update(callback(101, "cb-menu-status", "menu:status")))
             self.assertIn("No active agent session", telegram.sent[-1][2])
             self.assertTrue(value.handle_update(update(1, "/status", sender_id=987654321)))
             self.assertFalse(

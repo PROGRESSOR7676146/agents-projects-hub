@@ -60,6 +60,9 @@ class HubTelegramBot:
 
     telegram_username: str
     token_file: Path
+    # Usernames are display/routing labels.  A remote authority capability
+    # additionally needs Telegram's stable numeric bot identity.
+    telegram_user_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +197,22 @@ class HubConfig:
             return self.claude_worker_count
         return 1
 
+    @property
+    def hub_delivery_hold_recovery_enabled(self) -> bool:
+        """Whether this configuration can offer the Hub-only recovery control.
+
+        Per-topic target eligibility and the running Hub ingress identity remain
+        separate checks at the command boundary.
+        """
+        hub_bot_id = self.hub_bot.telegram_user_id if self.hub_bot is not None else None
+        return (
+            type(hub_bot_id) is int
+            and hub_bot_id > 0
+            and self.dispatch_mode == "queue"
+            and self.queue_runtime == "external"
+            and self.outbox_runtime == "external"
+        )
+
     def project_for_chat(self, chat_id: int) -> ProjectBinding:
         for project in self.projects:
             if project.telegram_chat_id == chat_id:
@@ -317,7 +336,7 @@ def _parse_owners(root: dict[str, Any]) -> list[int]:
     raw_owners = root.get("owner_user_ids")
     if not isinstance(raw_owners, list) or not raw_owners:
         raise HubConfigError("owner_user_ids must be a non-empty array")
-    if not all(isinstance(value, int) and value > 0 for value in raw_owners):
+    if not all(type(value) is int and value > 0 for value in raw_owners):
         raise HubConfigError("owner_user_ids must contain positive integers")
     if len(set(raw_owners)) != len(raw_owners):
         raise HubConfigError("owner_user_ids contains duplicates")
@@ -778,7 +797,15 @@ def _parse_hub_bot(
                 "hub_bot",
                 validate_secret=validate_secret,
             ),
+            telegram_user_id=(
+                hub_data.get("telegram_user_id")
+                if type(hub_data.get("telegram_user_id")) is int
+                and hub_data["telegram_user_id"] > 0
+                else None
+            ),
         )
+        if "telegram_user_id" in hub_data and hub_bot.telegram_user_id is None:
+            raise HubConfigError("hub_bot.telegram_user_id must be a positive integer")
         if any(agent.token_file == hub_bot.token_file for agent in agents):
             raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
     return hub_bot

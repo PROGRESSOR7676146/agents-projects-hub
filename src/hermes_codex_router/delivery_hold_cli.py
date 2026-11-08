@@ -63,6 +63,9 @@ def run(args: argparse.Namespace) -> int:
                 if preview.hold_status == "outstanding"
                 else "Already released by a recorded owner decision; delivery remains unknown."
                 if preview.hold_status == "released_by_owner"
+                else "Already released by a recorded Telegram owner decision; delivery remains unknown. "
+                "The local CLI cannot replace it."
+                if preview.hold_status == "released_by_telegram_owner"
                 else "A recorded decision no longer matches this binding; the hold remains and no new decision can replace it."
             ),
         )
