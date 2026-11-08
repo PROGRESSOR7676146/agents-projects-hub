@@ -161,8 +161,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#durable-queue-and-co
     client was never called; native terminality alone MUST NOT clear an unsettled sender.
   - Exact owner resolution plus independently matching terminal proof MAY administratively close a
     blocker after reads end, while preserving unknown history, fence, budget and no-replay rules.
-  - All admission, transfer, adoption, relocation, lane/drain and server-start paths MUST use the
-    same closure rules; unresolved work blocks only its own scope.
+  - Admission, transfer, adoption, relocation and lane/drain paths MUST use the same closure
+    rules; unresolved work blocks only its own scope. Fresh server creation is independent of
+    historical delivery and execution uncertainty and MUST NOT resolve it; unsettled senders and
+    read claims except those left on final jobs still block server start.
   - Covering stops MUST retain completed text privately without publication/replay; real pending
     stops take priority over precautions and steering.
   - Ingress, egress and native loss MUST remain distinct; aggregate health, typing or

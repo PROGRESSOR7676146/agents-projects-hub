@@ -84,7 +84,7 @@ class CodexServerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pin mismatch: codex_binary"):
             service.verify_pins(self.manifest)
 
-    def test_active_uncertain_work_and_unsettled_controls_refuse_start(self):
+    def test_active_work_and_control_owners_still_refuse_start(self):
         from tests import test_codex_turn_controls as fixtures
 
         for scenario in ("executing", "unknown", "terminal", "reader", "sender", "local"):
@@ -113,7 +113,7 @@ class CodexServerServiceTests(unittest.TestCase):
                             send_owner_token_hash='example-owner',interrupt_source='protective'""")
                     if scenario == "local":
                         db.execute("UPDATE agent_sessions SET writer_mode='local'")
-                if scenario == "terminal":
+                if scenario in {"unknown", "terminal"}:
                     service.require_idle_state(f.fixture.config.state_path)
                 else:
                     with self.assertRaisesRegex(ValueError, "active or unknown"):

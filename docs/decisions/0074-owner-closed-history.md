@@ -10,11 +10,13 @@ change uncertain jobs to completed, or reconstruct unavailable historical work.
 The owning contracts are [REQ-OPS-005](../product/PERSISTENCE_AND_RECOVERY.md)
 and [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md).
 
-The independent-server admission guard previously ignored archived owner-resolved
-jobs and effective final-delivery consent. It now interprets those existing
-records without modifying them. Current queued, retry-wait, leased and executing
-work, unresolved current generations, active read claims and local writers
-remain blockers. A start receipt still cannot establish native-client custody.
+The independent-server guard originally interpreted archived owner-resolved jobs
+and effective final-delivery consent without modifying them. Amendment, 2026-11-09:
+fresh server creation is independent of historical delivery and execution uncertainty,
+whether resolved or not. It never resolves, resumes, replays or confirms either.
+Queued, retry-wait, leased and executing work, unsettled controls, active read
+claims and local writers remain blockers. A start receipt still cannot establish
+native-client custody.
 
 An uncertain interrupt of an independently proven terminal exact turn cannot
 become authority for another turn. An explicit owner resolution can therefore
@@ -40,9 +42,9 @@ rollback must not erase owner decisions or other newer state.
 
 ## Evidence and limits
 
-Offline tests cover archived resolved/unresolved history, live generations,
-retry work, exact terminal control closure and its retained raw unknown/fence,
-read claims, local writers and exact final-delivery consent. Existing control
+Offline tests cover resolved/unresolved history, unknown delivery, active work,
+exact terminal control closure and its retained raw unknown/fence, read claims,
+local writers and exact final-delivery consent. Existing control
 race and fence tests remain mandatory. Independent source review and exact-head
 publication gates precede use. These fixtures establish no installed revision,
 human Telegram delivery or server cutover.

@@ -82,20 +82,11 @@ private exact-source, backup and rollback receipts outside Git.
    ```
 
    The guard opens only existing current-schema Hub state read-only. It refuses
-   queued/in-flight work and saved results awaiting delivery, indeterminate work lacking exact retained
-   terminal proof, unsettled control owners/claims, local writers, existing
-   sockets or same-UID app-servers, unknown process custody and pin mismatches.
-   An owner resolution alone does not substitute for native terminal evidence.
-   For an unarchived job already resolved `externally_completed`, it can also
-   read the manifest's Codex HOME history without starting Codex. Exactly one
-   private native rollout must match the saved thread and root, contain the
-   exact turn's start, matching root context and completion, and have no open
-   native turn. The reader supports native `session_meta`, `turn_context`,
-   `task_started`, `task_complete` and `turn_aborted` JSONL records; it refuses
-   missing, ambiguous, changed or unsupported evidence. Bounds are 256 MiB per
-   file, 4 MiB per record and 4,096 turns. No history content is imported,
-   printed or persisted, and the job, session and control evidence stay intact.
-   It does not discover private configuration or read credentials.
+   queued/in-flight work, unsettled control owners, read claims except those
+   left on final jobs, local writers, existing sockets or same-UID app-servers,
+   unknown process custody and pin mismatches. Fresh server creation is independent of historical
+   delivery and execution uncertainty; it never resolves, resumes, replays or
+   confirms either. Jobs, delivery records and control fences remain intact.
 4. Stage the independent unit (the installer only copies it) and explicitly
    install the reviewed `systemd/tlive.service.d/30-external-codex.conf` opt-in
    in the operator's unit drop-in directory. Preserve any stronger local
@@ -487,22 +478,12 @@ working while tlive cannot attach.
    still apply. Socket removal or server disappearance proves no native turn
    terminality. Retain current state/history, origin/root binding and send fences.
 
-If `leased`/`executing` or unproven `indeterminate` work blocks the new plan, keep
-Codex unavailable and assign the incident to the installation owner, with the Hub
-maintainer responsible for a reviewed recovery path. Existing supported exact
-terminal reconciliation uses native read-only protocol on an available owning
-server. The guard's narrow read-only native-history check above can satisfy only
-an exact already-owner-resolved completion; it imports no terminal proof into Hub.
-Other owner resolutions, reboot/PID exit, a copied transcript or direct SQLite
-edits cannot satisfy an unarchived job's service gate.
-Exit requires supported durable reconciliation leaving no queued, leased,
-executing or result-ready Codex rows; retained exact thread/turn/root terminal
-evidence for indeterminate rows; settled controls and quiescent writers, so the
-guard passes,
-or a separately reviewed and authorized recovery implementation that can obtain
-that proof without productive replay. Until then, record the availability blocker
-and preserve uncertainty; do not launch a substitute server/stdio writer on the
-same root or invent evidence. Stale-socket cleanup solves only path custody.
+If queued, leased or executing work, an unsettled control, a read claim on a
+non-final job or an active local writer blocks the new plan, preserve the evidence and use the
+supported recovery path for that blocker. Historical delivery and execution
+uncertainty alone do not block fresh server creation and remain unresolved;
+starting grants no replay or delivery authority and does not release any root,
+writer or send fence. Stale-socket cleanup solves only path custody.
 
 ## Rollback and acceptance limits
 

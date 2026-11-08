@@ -47,8 +47,9 @@ class OwnerClosedHistoryTests(unittest.TestCase):
     def test_archived_resolved_history_passes_without_inventing_terminality(self):
         self.uncertain()
         self.archive()
-        with self.assertRaises(ValueError):
-            require_idle_state(self.path)
+        before = self.db.serialize()
+        require_idle_state(self.path)
+        self.assertEqual(self.db.serialize(), before)
         self.state.resolve_indeterminate_job(self.job_id, "acknowledged")
         before = self.db.serialize()
         require_idle_state(self.path)
@@ -58,14 +59,15 @@ class OwnerClosedHistoryTests(unittest.TestCase):
             self.db.execute("SELECT * FROM provider_turn_terminal_evidence").fetchone()
         )
 
-    def test_resolution_of_current_session_alone_does_not_assert_idle(self):
+    def test_resolution_of_current_session_does_not_change_start(self):
         self.uncertain()
         self.state.resolve_indeterminate_job(self.job_id, "superseded")
-        with self.assertRaises(ValueError):
-            require_idle_state(self.path)
+        before = self.db.serialize()
+        require_idle_state(self.path)
+        self.assertEqual(self.db.serialize(), before)
 
     def test_active_and_retry_work_still_blocks_after_archive(self):
-        for status in ("queued", "retry_wait", "leased", "executing", "result_ready"):
+        for status in ("queued", "retry_wait", "leased", "executing"):
             with self.subTest(status=status):
                 with self.db:
                     self.db.execute(
@@ -197,6 +199,26 @@ class OwnerClosedHistoryTests(unittest.TestCase):
             require_idle_state(self.path)
         self.assertIsNotNone(persistent_root_blocker(self.db, topic_id=self.job.topic_id))
 
+    def test_historical_delivery_and_execution_cannot_hide_queued_work(self):
+        f = outbox_fixtures.TelegramOutboxSenderTests()
+        f.setUp()
+        self.addCleanup(f.tearDown)
+        ready = f.ready_outbox("codex", 151)
+        uncertain = f.ready_outbox("codex", 152)
+        queued = f.ready_outbox("codex", 153)
+        state = HubState.open(f.config.state_path, codex_permission_profile=None)
+        self.addCleanup(state.close)
+        with state._connection as db:
+            db.execute("UPDATE telegram_outbox SET status='unknown' WHERE job_id=?", (ready,))
+            db.execute(
+                "UPDATE provider_jobs SET status='indeterminate' WHERE job_id=?", (uncertain,)
+            )
+            db.execute("UPDATE provider_jobs SET status='queued' WHERE job_id=?", (queued,))
+        before = state._connection.serialize()
+        with self.assertRaisesRegex(ValueError, "queued job"):
+            require_idle_state(f.config.state_path)
+        self.assertEqual(state._connection.serialize(), before)
+
     def test_exact_final_delivery_consent_releases_only_saved_delivery_wait(self):
         f = outbox_fixtures.TelegramOutboxSenderTests()
         f.setUp()
@@ -211,8 +233,10 @@ class OwnerClosedHistoryTests(unittest.TestCase):
                 "UPDATE topics SET execution_scope='root:/home/example/project'"
             )
             state._connection.execute("UPDATE telegram_outbox SET status='unknown'")
-        with self.assertRaises(ValueError):
-            require_idle_state(f.config.state_path)
+        before = state._connection.serialize()
+        require_idle_state(f.config.state_path)
+        self.assertEqual(state._connection.serialize(), before)
+        self.assertEqual(state.get_telegram_outbox_for_job(job_id).status, "unknown")
         preview = state.preview_delivery_control("final_outbox", outbox.outbox_id)
         state.reconcile_delivery_control(
             "final_outbox",

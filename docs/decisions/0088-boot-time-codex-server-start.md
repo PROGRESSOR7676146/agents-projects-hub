@@ -73,13 +73,18 @@ shipped first; phases 2 and 3 complete it.
    kills or repairs, and the phase 1 alert tells the owner. Keeping Codex
    workers off their stdio fallback after a refusal is not part of this ADR.
 
+Amendment, 2026-11-09: the idle gate for fresh server creation no longer
+consults historical delivery or execution uncertainty. Starting neither resolves
+nor resumes, replays or confirms it. Queued/in-flight work, unsettled controls,
+read claims except those left on final jobs, non-Telegram writers and all
+custody, pin and receipt gates remain in force.
+
 ## Consequences
 
 - Phase 1 alone already removes the silent case: after a reboot the owner
   learns that Codex and tlive approval are down.
-- After phases 2 and 3, a clean reboot with no unknown Codex work brings the
-  server back without the owner. Every case the manual procedure refuses is
-  still refused and alerted.
+- After phases 2 and 3, a clean reboot satisfying the start gates brings the
+  server back without the owner. A refused start is alerted.
 - No Telegram, provider or LLM call, no replay and no new authority is added.
 
 ## Limits

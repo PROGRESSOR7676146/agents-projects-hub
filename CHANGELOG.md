@@ -10,6 +10,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Default off the artifact-level Telegram delivery-hold recovery capability for
   the schema56-compatible 0.11.6 rollback target. Existing remote decisions and
   local recovery remain effective; `release-info` reports the capability.
+- Fresh managed Codex server creation no longer waits on historical delivery or
+  execution uncertainty; active work, control and custody gates still apply.
 
 ## [0.11.5] - 2026-11-07
 
