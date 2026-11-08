@@ -354,6 +354,7 @@ class TelegramOutboxSender:
                     self.state.task_notices,
                     sender_agent_ids=self.agent_ids,
                     now=now if now is not None else datetime.now(timezone.utc),
+                    hub_owner_recovery_enabled=self.config.hub_delivery_hold_recovery_enabled,
                 )
             except Exception as error:
                 survived("outbox_sender.delivery_wait_notices", error)

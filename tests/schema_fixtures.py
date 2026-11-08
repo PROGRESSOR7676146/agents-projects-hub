@@ -136,7 +136,7 @@ def legacy_selection_columns(path: Path):
 
 def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema54 proof from fictional historical fixtures."""
-    remove_claude_corrections_schema(connection)
+    remove_delivery_hold_telegram_schema(connection)
     tables = ("telegram_send_receipts", "telegram_send_attempts")
     existing = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -148,6 +148,31 @@ def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TRIGGER IF EXISTS telegram_outbox_purpose_replace")
     if "purpose" in {row[1] for row in connection.execute("PRAGMA table_info(telegram_outbox)")}:
         connection.execute("ALTER TABLE telegram_outbox DROP COLUMN purpose")
+    for table in tables:
+        if table in existing:
+            connection.execute(f"DROP TABLE {table}")
+
+
+def remove_delivery_hold_telegram_schema(connection: sqlite3.Connection) -> None:
+    """Remove only empty schema56 structures from fictional historical fixtures."""
+    remove_claude_corrections_schema(connection)
+    tables = (
+        "telegram_delivery_hold_remote_dispositions",
+        "telegram_delivery_hold_callback_tokens",
+    )
+    existing = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    for table in tables:
+        if table in existing:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    for trigger in (
+        "telegram_delivery_hold_remote_topic_binding_guard",
+        "telegram_delivery_hold_dispositions_no_remote_conflict",
+        "telegram_delivery_hold_remote_dispositions_no_legacy_conflict",
+    ):
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    connection.execute("DROP VIEW IF EXISTS telegram_delivery_hold_remote_full_controls")
     for table in tables:
         if table in existing:
             connection.execute(f"DROP TABLE {table}")

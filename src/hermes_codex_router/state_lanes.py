@@ -8,6 +8,7 @@ from .delivery_control_predicates import (
     legacy_hold_has_full_control,
     result_ready_control_reconciled,
 )
+from .delivery_hold_predicates import remote_hold_has_full_control
 from .state_errors import StateError
 from .state_values import _bounded, _now
 
@@ -190,9 +191,13 @@ class LaneState:
             raise StateError("native control operation has not confirmed quiescence")
         if binding_change and (
             self._connection.execute(
-                f"SELECT 1 FROM telegram_delivery_hold_dispositions hold WHERE topic_id=? "
-                f"AND NOT {legacy_hold_has_full_control('hold')} LIMIT 1",
-                (topic_id,),
+                f"""SELECT 1 FROM telegram_delivery_hold_dispositions hold WHERE topic_id=?
+                    AND NOT {legacy_hold_has_full_control("hold")}
+                    UNION ALL
+                    SELECT 1 FROM telegram_delivery_hold_remote_dispositions hold WHERE topic_id=?
+                    AND NOT {remote_hold_has_full_control("hold")}
+                    LIMIT 1""",
+                (topic_id, topic_id),
             ).fetchone()
             is not None
         ):

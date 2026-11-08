@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import LimitWindow, RateLimits
 from hermes_codex_router.controller_commands import (
@@ -16,6 +17,7 @@ from hermes_codex_router.controller_commands import (
 from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
+    HubTelegramBot,
     ProjectBinding,
     TerminalSettings,
 )
@@ -167,6 +169,38 @@ class ControllerCommandTests(unittest.TestCase):
         self.assertNotIn("window", decision.text)
         self.assertNotIn("%", decision.text)
         self.assertNotIn("Account", decision.text)
+
+    def test_status_advertises_hub_delivery_recovery_only_when_that_path_is_configured(
+        self,
+    ) -> None:
+        self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
+        controls = {
+            "saved_results_awaiting_delivery": 0,
+            "nonblocking_notices": 0,
+            "outstanding": 1,
+            "queue_only": 0,
+            "final_reconciled": 0,
+            "progress_reconciled": 0,
+        }
+        with patch.object(self.state.delivery, "topic_delivery_controls", return_value=controls):
+            local_only = self.orchestrator.status(self.topic, None)
+        self.assertNotIn("/delivery", local_only.text)
+        self.assertIn("local delivery-hold preview", local_only.text)
+
+        hub_config = replace(
+            self.config,
+            hub_bot=HubTelegramBot(
+                "example_hub_bot", self.base / "hub-token", telegram_user_id=700
+            ),
+            dispatch_mode="queue",
+            queue_runtime="external",
+            outbox_runtime="external",
+            external_worker_agent_ids=("codex",),
+        )
+        hub_commands = ControllerCommandOrchestrator(hub_config, self.state)
+        with patch.object(self.state.delivery, "topic_delivery_controls", return_value=controls):
+            hub_status = hub_commands.status(self.topic, None)
+        self.assertIn("/delivery", hub_status.text)
 
     def test_accounts_ignores_a_retired_codex_pool_snapshot(self) -> None:
         # State written by a release with multi-auth may still hold its last snapshot.

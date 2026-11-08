@@ -138,6 +138,15 @@ state; missing/older schemas are refused without migration or credentials.
 Populated43-to44 backups and DDL faults preserve all existing evidence.
 No live inference, Telegram or service
 change occurs. This is offline source/fault evidence, not deployment acceptance.
+Schema56 Hub recovery fixtures (`tests.test_telegram_delivery_hold_ux` and
+`tests.test_telegram_delivery_hold_migration`) exercise the actual Hub command
+and callback path against fictional state. They cover configured-owner-only
+ingress, exact numeric Hub-bot warning/callback origin, malformed numeric identities,
+opaque expiry, full-snapshot stale refusal, fault rollback, same-owner
+idempotence, concurrent callbacks, restart after preview binding, FIFO-only
+continuation and immutable populated schema55 upgrade/DDL rollback. They do not
+send Telegram traffic, invoke a provider, prove a receipt, or establish deployed
+Telegram acceptance.
 
 Ingress continuity fixtures (`tests.test_telegram_ingress_continuity`,
 `tests.test_codex_ingress_assessments` and

@@ -39,6 +39,7 @@ class DeliveryHoldPreview:
     receipted_parts: int
     control_effect: str = "outstanding"
     disposition_snapshot: str | None = None
+    disposition_authority: str | None = None
     control_consequences: tuple[str, ...] = ()
     remaining_boundaries: tuple[str, ...] = (
         "native_execution_uncertainty",
@@ -147,9 +148,14 @@ class DeliveryHoldState:
 
     def preview(self, outbox_id: str) -> DeliveryHoldPreview:
         binding, target = self._target(outbox_id)
-        prior = self.db.execute(
+        local_prior = self.db.execute(
             "SELECT * FROM telegram_delivery_hold_dispositions WHERE outbox_id=?", (outbox_id,)
         ).fetchone()
+        remote_prior = self.db.execute(
+            "SELECT * FROM telegram_delivery_hold_remote_dispositions WHERE outbox_id=?",
+            (outbox_id,),
+        ).fetchone()
+        prior = local_prior or remote_prior
         released = bool(
             self.db.execute(
                 f"SELECT {outbox_delivery_hold_released('o')} FROM telegram_outbox o WHERE o.outbox_id=?",
@@ -171,7 +177,9 @@ class DeliveryHoldState:
             snapshot=self._digest(target),
             hold_status=(
                 "released_by_owner"
-                if released
+                if released and local_prior is not None
+                else "released_by_telegram_owner"
+                if released and remote_prior is not None
                 else "disposition_binding_changed"
                 if prior is not None
                 else "outstanding"
@@ -179,6 +187,7 @@ class DeliveryHoldState:
             part_count=len(target["parts"]),
             receipted_parts=sum(p["telegram_message_id"] is not None for p in target["parts"]),
             disposition_snapshot=prior["snapshot"] if prior is not None else None,
+            disposition_authority=prior["authority"] if prior is not None else None,
             control_effect="delivery_wait_reconciled" if reconciled else "outstanding",
             control_consequences=("delivery_wait_reconciled_by_separate_owner_decision",)
             if reconciled
@@ -212,6 +221,14 @@ class DeliveryHoldState:
         prior = self.db.execute(
             "SELECT * FROM telegram_delivery_hold_dispositions WHERE outbox_id=?", (outbox_id,)
         ).fetchone()
+        remote = self.db.execute(
+            "SELECT 1 FROM telegram_delivery_hold_remote_dispositions WHERE outbox_id=?",
+            (outbox_id,),
+        ).fetchone()
+        if remote is not None:
+            raise self.error(
+                "delivery hold already has an immutable Telegram owner callback decision"
+            )
         if prior is not None:
             if prior["snapshot"] != expected_snapshot:
                 raise self.error("delivery hold already has a different immutable disposition")

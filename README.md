@@ -313,6 +313,9 @@ have an external worker, the standalone sender must own outbox delivery, and
 the corresponding `agents-projects-hub@AGENT.service` may be enabled to retain
 that provider's private-chat endpoint. The Hub controller reads only the Hub
 credential and never owns a provider runtime or response token.
+The deliberately default-off Hub `/delivery` recovery control additionally
+requires a positive `hub_bot.telegram_user_id` matching the Hub bot's Telegram
+identity; a configured username alone never enables that remote capability.
 Hermes remains owned by its native gateway and uses the included drop-in. Copy
 the desired objects from `config/external-agents.example.json` into the local
 `agents` array; the primary example does not require unused external bot

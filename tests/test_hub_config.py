@@ -82,6 +82,11 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_rejects_boolean_owner_id(self) -> None:
+        """A JSON boolean must not normalize into Telegram owner identity 1."""
+        with self.assertRaisesRegex(HubConfigError, "owner_user_ids"):
+            load_hub_config(self.write_config(owner_user_ids=[True]))
+
     def test_loaded_shared_socket_link_recovers_after_daemon_replacement(self) -> None:
         previous = self.base / "old.sock"
         current = self.base / "new.sock"
@@ -332,6 +337,48 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.hub_bot.telegram_username, "project_hub_bot")
         self.assertEqual(config.hub_bot.token_file, hub_token.resolve())
         self.assertNotIsInstance(config.hub_bot, type(config.require_agent("codex")))
+
+    def test_hub_delivery_recovery_requires_an_exact_numeric_hub_bot_id(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+        common = {
+            "telegram_username": "project_hub_bot",
+            "token_file": str(hub_token),
+        }
+        without_id = load_hub_config(
+            self.write_config(
+                hub_bot=common,
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
+            )
+        )
+        self.assertFalse(without_id.hub_delivery_hold_recovery_enabled)
+        configured = load_hub_config(
+            self.write_config(
+                hub_bot={**common, "telegram_user_id": 700},
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
+            )
+        )
+        self.assertTrue(configured.hub_delivery_hold_recovery_enabled)
+        assert configured.hub_bot is not None
+        self.assertEqual(configured.hub_bot.telegram_user_id, 700)
+        for invalid in (True, 0, -1, "700"):
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaisesRegex(HubConfigError, "hub_bot.telegram_user_id"),
+            ):
+                load_hub_config(
+                    self.write_config(
+                        hub_bot={**common, "telegram_user_id": invalid},
+                        dispatch_mode="queue",
+                        queue_runtime="external",
+                        outbox_runtime="external",
+                    )
+                )
 
     def test_hub_bot_rejects_coupled_inline_or_embedded_runtime(self) -> None:
         hub_token = self.base / "hub-token"

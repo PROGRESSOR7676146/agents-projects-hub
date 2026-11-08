@@ -116,8 +116,10 @@ class DeliveryReceipts:
                WHERE (target_kind='final_outbox' AND outbox_id=? AND ?='final')
                   OR (target_kind='progress_delivery' AND progress_id=? AND ?='progress')
                UNION ALL SELECT 1 FROM telegram_delivery_hold_dispositions
+               WHERE outbox_id=? AND ?='final'
+               UNION ALL SELECT 1 FROM telegram_delivery_hold_remote_dispositions
                WHERE outbox_id=? AND ?='final'""",
-            (target, kind, target, kind, target, kind),
+            (target, kind, target, kind, target, kind, target, kind),
         ).fetchone():
             return False
         table, key = (
@@ -204,6 +206,8 @@ class DeliveryReceipts:
                   AND NOT EXISTS (SELECT 1 FROM telegram_delivery_control_dispositions d
                        WHERE d.outbox_id=t.{key} OR d.progress_id=t.{key})
                   AND NOT EXISTS (SELECT 1 FROM telegram_delivery_hold_dispositions h
+                       WHERE h.outbox_id=t.{key})
+                  AND NOT EXISTS (SELECT 1 FROM telegram_delivery_hold_remote_dispositions h
                        WHERE h.outbox_id=t.{key})
                 ORDER BY a.sequence LIMIT 64"""
         cursor_key = (kind, senders)

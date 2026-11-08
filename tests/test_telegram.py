@@ -6,6 +6,7 @@ import ssl
 import tempfile
 import unittest
 import urllib.error
+from copy import deepcopy
 from email.message import Message
 from pathlib import Path
 from unittest.mock import call as mock_call
@@ -263,6 +264,49 @@ class TelegramUpdateTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         assert parsed is not None
         self.assertEqual((parsed.chat_id, parsed.thread_id), (-1001234567890, 77))
+
+    def test_rejects_non_numeric_topic_message_identity_fields(self) -> None:
+        """Explicit malformed input must not normalize into an owner/topic binding."""
+        update: dict[str, object] = {
+            "update_id": 10,
+            "message": {
+                "message_id": 20,
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "chat": {"id": -1001234567890, "type": "supergroup"},
+                "from": {"id": 123456789, "is_bot": False},
+                "text": "/delivery",
+            },
+        }
+        mutations = (
+            ("update_id", None, "10"),
+            ("message", "message_id", "20"),
+            ("message", "message_id", 0),
+            ("message", "message_id", -1),
+            ("message", "message_thread_id", "77"),
+            ("message", "message_thread_id", True),
+            ("message", "chat.id", "-1001234567890"),
+            ("message", "from.id", True),
+        )
+        for container, field, value in mutations:
+            with self.subTest(container=container, field=field, value=value):
+                malformed = deepcopy(update)
+                if container == "update_id":
+                    malformed["update_id"] = value
+                else:
+                    message = malformed["message"]
+                    assert isinstance(message, dict)
+                    if field == "chat.id":
+                        chat = message["chat"]
+                        assert isinstance(chat, dict)
+                        chat["id"] = value
+                    elif field == "from.id":
+                        sender = message["from"]
+                        assert isinstance(sender, dict)
+                        sender["id"] = value
+                    else:
+                        message[field] = value
+                self.assertIsNone(parse_topic_message(malformed))
 
     def test_rejects_dm_non_topic_and_bot_messages(self) -> None:
         base = {
@@ -572,6 +616,45 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.data, "model:gpt-5.6-sol")
         self.assertEqual(parsed.thread_id, 73)
+
+    def test_rejects_non_numeric_callback_identity_fields(self) -> None:
+        """An explicit malformed topic identity must not become a bound callback."""
+        update: dict[str, object] = {
+            "update_id": 12,
+            "callback_query": {
+                "id": "callback-1",
+                "from": {"id": 123456789},
+                "data": "model:gpt-5.6-sol",
+                "message": {
+                    "message_id": 90,
+                    "message_thread_id": 73,
+                    "chat": {"id": -1001234567890, "type": "supergroup"},
+                },
+            },
+        }
+        mutations = (
+            ("from", "id", True),
+            ("message", "message_id", "90"),
+            ("message", "message_id", 0),
+            ("message", "message_id", -1),
+            ("message", "message_thread_id", "73"),
+            ("message", "message_thread_id", True),
+            ("message", "chat.id", "-1001234567890"),
+        )
+        for container, field, value in mutations:
+            with self.subTest(container=container, field=field, value=value):
+                malformed = deepcopy(update)
+                callback = malformed["callback_query"]
+                assert isinstance(callback, dict)
+                target = callback[container]
+                assert isinstance(target, dict)
+                if field == "chat.id":
+                    chat = target["chat"]
+                    assert isinstance(chat, dict)
+                    chat["id"] = value
+                else:
+                    target[field] = value
+                self.assertIsNone(parse_topic_callback(malformed))
 
     def test_send_document_multipart(self) -> None:
         import tempfile

@@ -11,15 +11,29 @@ from .delivery_hold_predicates import job_blocks_topic_fifo
 if TYPE_CHECKING:
     from .task_lifecycle import TaskLifecycleState
 
-DELIVERY_WAIT_EXPLANATION = (
-    "The earlier result is saved, but its Telegram delivery is unconfirmed. "
-    "At this observation, later work in this topic is blocked. The owner can "
-    "investigate the saved delivery, or explicitly continue without confirmed delivery "
-    "through the local delivery-hold preview/apply. This queue-only decision retains "
-    "session and writer restrictions; separate delivery-control consent can reconcile "
-    "those delivery waits. Hub will not resend the result or repeat provider work "
-    "automatically. Check /status for the current state; /stop does not reconcile this delivery."
-)
+
+def delivery_wait_explanation(*, hub_owner_recovery_enabled: bool) -> str:
+    """Describe only recovery controls that this notice can actually offer."""
+    recovery = (
+        "by replying /delivery to this exact Hub warning, or through the separate local "
+        "delivery-hold preview/apply"
+        if hub_owner_recovery_enabled
+        else "through the separate local delivery-hold preview/apply"
+    )
+    return (
+        "The earlier result is saved, but its Telegram delivery is unconfirmed. "
+        "At this observation, later work in this topic is blocked. The owner can "
+        f"investigate the saved delivery, or explicitly continue without confirmed delivery {recovery}. "
+        "This queue-only decision retains session and writer restrictions; separate delivery-control "
+        "consent can reconcile those delivery waits. Hub will not resend the result or repeat provider "
+        "work automatically. Check /status for the current state; /stop does not reconcile this delivery."
+    )
+
+
+# Queue-visibility snapshots have no Hub configuration and therefore must not
+# promise a callback command. The sender asks for the Hub-specific wording only
+# on the compatible configured route.
+DELIVERY_WAIT_EXPLANATION = delivery_wait_explanation(hub_owner_recovery_enabled=False)
 
 
 def _blocking_result() -> str:
@@ -39,6 +53,7 @@ def prepare_delivery_waits(
     sender_agent_ids: tuple[str, ...],
     *,
     now: datetime,
+    hub_owner_recovery_enabled: bool = False,
 ) -> int:
     """One bounded pass in the facade-owned transaction; deduplicate before send."""
     placeholders = ",".join("?" for _ in sender_agent_ids)
@@ -52,6 +67,7 @@ def prepare_delivery_waits(
         "ORDER BY o.created_at,o.outbox_id LIMIT 32",
         sender_agent_ids,
     ).fetchall()
+    explanation = delivery_wait_explanation(hub_owner_recovery_enabled=hub_owner_recovery_enabled)
     for row in rows:
         notices.prepare_notice_in_transaction(
             event_key=f"delivery-wait:{row['outbox_id']}",
@@ -60,7 +76,7 @@ def prepare_delivery_waits(
             chat_id=int(row["chat_id"]),
             thread_id=int(row["thread_id"]),
             reply_to_message_id=int(row["message_id"]),
-            telegram_html=DELIVERY_WAIT_EXPLANATION,
+            telegram_html=explanation,
             now=now,
         )
     return len(rows)

@@ -249,6 +249,7 @@ class TopicMessage:
     text: str
     reply_to_username: str | None = None
     reply_to_message_id: int | None = None
+    reply_to_sender_id: int | None = None
     is_forwarded: bool = False
     text_source: str = "text"
     attachments: tuple[IncomingAttachment, ...] = ()
@@ -321,6 +322,12 @@ class TopicCallback:
     thread_id: int
     sender_id: int
     data: str
+    message_sender_username: str | None = None
+    message_sender_id: int | None = None
+
+
+class _InternalSyntheticTopicUpdate(dict[str, Any]):
+    """Process-local callback command route, never a decoded Telegram update."""
 
 
 def _telegram_nonnegative_int(value: object) -> int:
@@ -441,23 +448,20 @@ def _selected_quote(message: dict[str, Any]) -> str | None:
 
 def _reply_address(
     message: dict[str, Any], *, topic_anchor: object = None
-) -> tuple[str | None, int | None]:
+) -> tuple[str | None, int | None, int | None]:
     """Plain Reply addressing; selected quotes and forum roots stay context."""
     reply = message.get("reply_to_message")
     if not isinstance(reply, dict) or isinstance(message.get("quote"), dict):
-        return None, None
+        return None, None, None
     message_id = reply.get("message_id")
     if type(message_id) is not int or message_id <= 0 or message_id == topic_anchor:
-        return None, None
+        return None, None, None
     author = reply.get("from")
-    username = (
-        author["username"]
-        if isinstance(author, dict)
-        and author.get("is_bot") is True
-        and isinstance(author.get("username"), str)
-        else None
-    )
-    return username, message_id
+    if not isinstance(author, dict) or author.get("is_bot") is not True:
+        return None, message_id, None
+    username = author["username"] if isinstance(author.get("username"), str) else None
+    sender_id = author["id"] if type(author.get("id")) is int and author["id"] > 0 else None
+    return username, message_id, sender_id
 
 
 def _topic_anchor_name(message: dict[str, Any], thread_id: object) -> str | None:
@@ -470,15 +474,32 @@ def _topic_anchor_name(message: dict[str, Any], thread_id: object) -> str | None
 
 
 def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
+    """Parse an external topic message.
+
+    Callback controls use a negative, process-local message identity so they
+    cannot collide with a real Telegram message. Only the service constructs
+    the private update subclass for that already-authorized route; decoded
+    transport input still requires a positive Telegram message ID.
+    """
     message = update.get("message")
-    if not isinstance(message, dict) or message.get("from", {}).get("is_bot"):
+    if not isinstance(message, dict):
         return None
     chat = message.get("chat")
     sender = message.get("from")
+    if not isinstance(sender, dict) or sender.get("is_bot"):
+        return None
     attachments, unavailable_materials = _incoming_materials(message)
     parsed_text = _message_text(message, has_material=bool(attachments or unavailable_materials))
     raw_thread_id = message.get("message_thread_id")
-    reply_to_username, reply_to_message_id = _reply_address(message, topic_anchor=raw_thread_id)
+    if "message_thread_id" not in message:
+        thread_id = 1
+    elif type(raw_thread_id) is int and raw_thread_id > 0:
+        thread_id = raw_thread_id
+    else:
+        return None
+    reply_to_username, reply_to_message_id, reply_to_sender_id = _reply_address(
+        message, topic_anchor=raw_thread_id
+    )
     is_forwarded = isinstance(message.get("forward_origin"), dict) or any(
         key in message
         for key in (
@@ -488,28 +509,37 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
             "forward_date",
         )
     )
-    # Telegram omits message_thread_id for the General forum topic. Keep a
-    # stable local numeric identity without pretending it is an API thread id.
-    thread_id = raw_thread_id if isinstance(raw_thread_id, int) else 1
     if (
         not isinstance(chat, dict)
         or chat.get("type") != "supergroup"
         or (not message.get("is_topic_message") and not chat.get("is_forum"))
-        or not isinstance(sender, dict)
-        or not isinstance(sender.get("id"), int)
+        or (
+            (type(update.get("update_id")) is not int or update["update_id"] < 0)
+            and type(update) is not _InternalSyntheticTopicUpdate
+        )
+        or type(message.get("message_id")) is not int
+        or (
+            message["message_id"] <= 0
+            and not (type(update) is _InternalSyntheticTopicUpdate and message["message_id"] < 0)
+        )
+        or type(chat.get("id")) is not int
+        or chat["id"] == 0
+        or type(sender.get("id")) is not int
+        or sender["id"] <= 0
         or parsed_text is None
     ):
         return None
     return TopicMessage(
-        update_id=int(update["update_id"]),
-        message_id=int(message["message_id"]),
-        chat_id=int(chat["id"]),
+        update_id=update["update_id"],
+        message_id=message["message_id"],
+        chat_id=chat["id"],
         thread_id=thread_id,
         chat_title=str(chat.get("title") or chat["id"]),
-        sender_id=int(sender["id"]),
+        sender_id=sender["id"],
         text=parsed_text[0],
         reply_to_username=reply_to_username,
         reply_to_message_id=reply_to_message_id,
+        reply_to_sender_id=reply_to_sender_id,
         is_forwarded=is_forwarded,
         text_source=parsed_text[1],
         attachments=attachments,
@@ -546,7 +576,7 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
     raw_thread_id = message.get("message_thread_id")
     # Private Reply IDs support exact saved notices, without changing provider
     # addressing. An explicit private-topic root remains only an anchor.
-    _, reply_to_message_id = _reply_address(message, topic_anchor=raw_thread_id)
+    _, reply_to_message_id, reply_to_sender_id = _reply_address(message, topic_anchor=raw_thread_id)
     return TopicMessage(
         update_id=int(update["update_id"]),
         message_id=int(message["message_id"]),
@@ -557,6 +587,7 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         text=parsed_text[0],
         reply_to_username=None,
         reply_to_message_id=reply_to_message_id,
+        reply_to_sender_id=reply_to_sender_id,
         is_forwarded=isinstance(message.get("forward_origin"), dict)
         or any(
             key in message
@@ -593,20 +624,48 @@ def parse_topic_callback(update: dict[str, Any]) -> TopicCallback | None:
     if (
         not isinstance(chat, dict)
         or chat.get("type") != "supergroup"
-        or not isinstance(sender.get("id"), int)
+        or type(sender.get("id")) is not int
+        or sender["id"] <= 0
+        or type(message.get("message_id")) is not int
+        or message["message_id"] <= 0
+        or type(chat.get("id")) is not int
+        or chat["id"] == 0
         or not isinstance(data, str)
         or not isinstance(callback_id, str)
     ):
         return None
     raw_thread_id = message.get("message_thread_id")
-    thread_id = raw_thread_id if isinstance(raw_thread_id, int) else 1
+    if "message_thread_id" not in message:
+        thread_id = 1
+    elif type(raw_thread_id) is int and raw_thread_id > 0:
+        thread_id = raw_thread_id
+    else:
+        return None
+    message_author = message.get("from")
+    message_sender_username = (
+        message_author["username"]
+        if isinstance(message_author, dict)
+        and message_author.get("is_bot") is True
+        and isinstance(message_author.get("username"), str)
+        else None
+    )
+    message_sender_id = (
+        message_author["id"]
+        if isinstance(message_author, dict)
+        and message_author.get("is_bot") is True
+        and type(message_author.get("id")) is int
+        and message_author["id"] > 0
+        else None
+    )
     return TopicCallback(
         callback_id=callback_id,
-        message_id=int(message["message_id"]),
-        chat_id=int(chat["id"]),
+        message_id=message["message_id"],
+        chat_id=chat["id"],
         thread_id=thread_id,
-        sender_id=int(sender["id"]),
+        sender_id=sender["id"],
         data=data,
+        message_sender_username=message_sender_username,
+        message_sender_id=message_sender_id,
     )
 
 
@@ -632,6 +691,22 @@ def parse_direct_callback(update: dict[str, Any]) -> TopicCallback | None:
     ):
         return None
     raw_thread_id = message.get("message_thread_id")
+    message_author = message.get("from")
+    message_sender_username = (
+        message_author["username"]
+        if isinstance(message_author, dict)
+        and message_author.get("is_bot") is True
+        and isinstance(message_author.get("username"), str)
+        else None
+    )
+    message_sender_id = (
+        message_author["id"]
+        if isinstance(message_author, dict)
+        and message_author.get("is_bot") is True
+        and type(message_author.get("id")) is int
+        and message_author["id"] > 0
+        else None
+    )
     return TopicCallback(
         callback_id=callback_id,
         message_id=int(message["message_id"]),
@@ -639,6 +714,8 @@ def parse_direct_callback(update: dict[str, Any]) -> TopicCallback | None:
         thread_id=raw_thread_id if isinstance(raw_thread_id, int) else 1,
         sender_id=int(sender["id"]),
         data=data,
+        message_sender_username=message_sender_username,
+        message_sender_id=message_sender_id,
     )
 
 

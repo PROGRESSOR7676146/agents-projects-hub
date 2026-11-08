@@ -65,7 +65,10 @@ class WorkRetryState:
         status = row["status"]
         delivery = self.db.execute(
             f"SELECT {outbox_delivery_hold_released('o')} AS released, "
-            f"{final_control_reconciled('o')} AS reconciled FROM telegram_outbox o "
+            f"{final_control_reconciled('o')} AS reconciled, EXISTS ("
+            "SELECT 1 FROM telegram_delivery_hold_remote_dispositions remote "
+            "WHERE remote.outbox_id=o.outbox_id) AS remote_release "
+            "FROM telegram_outbox o "
             "WHERE o.job_id=? AND o.status='unknown'",
             (row["job_id"],),
         ).fetchone()
@@ -75,9 +78,12 @@ class WorkRetryState:
                 + (
                     "The owner reconciled this delivery wait without confirming receipt; independent control checks remain. "
                     if delivery["reconciled"]
-                    else "The owner allowed queue continuation without confirmed delivery. "
+                    else "A configured Telegram owner allowed queue continuation without confirmed delivery. "
+                    if delivery["released"] and delivery["remote_release"]
+                    else "The local owner allowed queue continuation without confirmed delivery. "
                     if delivery["released"]
-                    else "A delivery hold remains; inspect the local delivery-hold preview. "
+                    else "A delivery hold remains; use its configured Hub recovery control, if "
+                    "available, or inspect the local delivery-hold preview. "
                 )
                 + "Saved execution evidence and independent safety boundaries remain unchanged; "
                 "the old message is not automatically resent. Inspect /status." + common

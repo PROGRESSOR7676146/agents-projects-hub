@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import TypedDict
 from unittest.mock import patch
 
-from hermes_codex_router import migrations as migrations_module
 from hermes_codex_router import state_stop as state_stop_module
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState, StateError
@@ -449,84 +448,89 @@ class ProviderJobQueueTests(unittest.TestCase):
                 from tests.schema_fixtures import project_historical_database
 
                 source_path = path.with_name(f"example-current-{delivery_status}.db")
-                with patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 48):
-                    legacy = HubState.open(source_path, codex_permission_profile=None)
-                    try:
-                        topic = legacy.observe_topic(
-                            project_id="example-project",
-                            chat_id=self.topic.chat_id,
-                            thread_id=78,
-                            title="Fictional legacy topic",
-                        )
-                        session = legacy.activate_agent(
-                            topic.topic_id, "codex", "example-model", "high"
-                        )
-                        job, _ = legacy.enqueue_provider_job(
-                            idempotency_key="fictional:legacy-stop",
-                            chat_id=topic.chat_id,
-                            message_id=770,
-                            topic_id=topic.topic_id,
-                            agent_id="codex",
-                            session_id=session.session_id,
-                            session_generation=session.generation,
-                            model=session.model,
-                            effort=session.effort,
-                            payload_text="Fictional work",
-                        )
-                        leased = legacy.lease_provider_job("codex", "fictional-worker")
-                        assert leased is not None and leased.lease_token is not None
-                        legacy.mark_provider_job_executing(job.job_id, leased.lease_token)
-                        original, _, _ = legacy.request_emergency_stop(
-                            topic_id=topic.topic_id,
-                            chat_id=topic.chat_id,
-                            message_id=771,
-                            target_agent_id="codex",
-                        )
-                        timestamp = datetime.now(timezone.utc).isoformat()
-                        receipt = 774 if delivery_status == "delivered" else None
-                        attempt_count = 0 if delivery_status == "pending" else 1
-                        lease_owner = "fictional-sender" if delivery_status == "sending" else None
-                        lease_token = "fictional-token" if delivery_status == "sending" else None
-                        lease_expires = timestamp if delivery_status == "sending" else None
-                        with legacy._connection:
-                            legacy._connection.execute(
-                                """INSERT INTO telegram_outbox
+                schema48_path = path.with_name(f"example-schema48-{delivery_status}.db")
+                legacy = HubState.open(source_path, codex_permission_profile=None)
+                try:
+                    topic = legacy.observe_topic(
+                        project_id="example-project",
+                        chat_id=self.topic.chat_id,
+                        thread_id=78,
+                        title="Fictional legacy topic",
+                    )
+                    session = legacy.activate_agent(
+                        topic.topic_id, "codex", "example-model", "high"
+                    )
+                    job, _ = legacy.enqueue_provider_job(
+                        idempotency_key="fictional:legacy-stop",
+                        chat_id=topic.chat_id,
+                        message_id=770,
+                        topic_id=topic.topic_id,
+                        agent_id="codex",
+                        session_id=session.session_id,
+                        session_generation=session.generation,
+                        model=session.model,
+                        effort=session.effort,
+                        payload_text="Fictional work",
+                    )
+                    leased = legacy.lease_provider_job("codex", "fictional-worker")
+                    assert leased is not None and leased.lease_token is not None
+                    legacy.mark_provider_job_executing(job.job_id, leased.lease_token)
+                    original, _, _ = legacy.request_emergency_stop(
+                        topic_id=topic.topic_id,
+                        chat_id=topic.chat_id,
+                        message_id=771,
+                        target_agent_id="codex",
+                    )
+                    timestamp = datetime.now(timezone.utc).isoformat()
+                    receipt = 774 if delivery_status == "delivered" else None
+                    attempt_count = 0 if delivery_status == "pending" else 1
+                    lease_owner = "fictional-sender" if delivery_status == "sending" else None
+                    lease_token = "fictional-token" if delivery_status == "sending" else None
+                    lease_expires = timestamp if delivery_status == "sending" else None
+                    with legacy._connection:
+                        legacy._connection.execute(
+                            """INSERT INTO telegram_outbox
                                    (outbox_id,job_id,sender_agent_id,chat_id,thread_id,
                                     telegram_html,status,attempt_count,available_at,
                                     telegram_message_id,created_at,updated_at,
                                     lease_owner,lease_token,lease_expires_at)
                                    VALUES ('fictional-outbox',?,'hub',?,?,'Legacy stop.',?,?,?,?,?,?,?,?,?)""",
-                                (
-                                    job.job_id,
-                                    topic.chat_id,
-                                    topic.thread_id,
-                                    delivery_status,
-                                    attempt_count,
-                                    timestamp,
-                                    receipt,
-                                    timestamp,
-                                    timestamp,
-                                    lease_owner,
-                                    lease_token,
-                                    lease_expires,
-                                ),
-                            )
-                            legacy._insert_telegram_outbox_parts("fictional-outbox", "Legacy stop.")
-                            if receipt is not None:
-                                legacy._connection.execute(
-                                    "UPDATE telegram_outbox_parts SET telegram_message_id=? WHERE outbox_id=?",
-                                    (receipt, "fictional-outbox"),
-                                )
-                        alias, _, _ = legacy.request_emergency_stop(
-                            topic_id=topic.topic_id,
-                            chat_id=topic.chat_id,
-                            message_id=772,
-                            target_agent_id="codex",
+                            (
+                                job.job_id,
+                                topic.chat_id,
+                                topic.thread_id,
+                                delivery_status,
+                                attempt_count,
+                                timestamp,
+                                receipt,
+                                timestamp,
+                                timestamp,
+                                lease_owner,
+                                lease_token,
+                                lease_expires,
+                            ),
                         )
-                    finally:
-                        legacy.close()
+                        legacy._insert_telegram_outbox_parts("fictional-outbox", "Legacy stop.")
+                        if receipt is not None:
+                            legacy._connection.execute(
+                                "UPDATE telegram_outbox_parts SET telegram_message_id=? WHERE outbox_id=?",
+                                (receipt, "fictional-outbox"),
+                            )
+                    alias, _, _ = legacy.request_emergency_stop(
+                        topic_id=topic.topic_id,
+                        chat_id=topic.chat_id,
+                        message_id=772,
+                        target_agent_id="codex",
+                    )
+                finally:
+                    legacy.close()
 
-                project_historical_database(source_path, path, 35)
+                # Current state code may only construct against its current
+                # schema.  Build an actual schema-48 artifact first, then the
+                # schema-35 legacy input that exercises the lifecycle
+                # migration.  Neither step relabels current DDL as old.
+                project_historical_database(source_path, schema48_path, 48)
+                project_historical_database(schema48_path, path, 35)
                 migrated = HubState.open(path, codex_permission_profile=None)
                 try:
                     canonical_notices = migrated.task_notices.notices_for_stop(original)

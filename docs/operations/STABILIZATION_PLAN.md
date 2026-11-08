@@ -226,6 +226,7 @@ acceptance.
 | Managed Codex profile continuity (schema 39) | REQ-SEC-001, ADR 0055/0072 | Exact start/resume/restart selection, approvals and scoped negative checks; local routes remain unsupported; global helper/admin isolation is not claimed |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
 | Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
+| Hub-owner unknown-delivery recovery (schema 56) | REQ-QUEUE-005, ADR 0093 | Exact delivered-Hub-warning Reply, configured owner and numeric Hub callback origin, expiry/stale refusal, one FIFO release with unknown delivery retained, and no resend/provider replay |
 | Preacceptance Codex approval observations (schema 40) | REQ-QUEUE-012, REQ-QUEUE-013 | Human wait before native acknowledgement, exact promotion, worker-epoch restart and preserved unknown sends |
 | Durable root blockers (schema 35) | REQ-WRITER-008 | Blocked input, held job, owner decision |
 | Exact Codex turn recovery (schema 34) | REQ-QUEUE-004 | Uncertain turn, read-only proof, continuation |

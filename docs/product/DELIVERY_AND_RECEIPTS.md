@@ -5,7 +5,8 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
 
 ## 23. Telegram result and progress delivery
 
-- **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Saved results
+- **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender; schema56 Hub
+  recovery source candidate):** Saved results
   MUST survive independently of Telegram delivery; retrying delivery MUST NOT repeat provider work
   or imply execution success.
   - A durable outbox MUST preserve ordered text/artifacts and acknowledge context only after
@@ -50,6 +51,23 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
     the original decision and current effect.
   - Preview MUST explain retained session-control, scope-transfer and drain restrictions; local OS
     authority MUST NOT be described as Telegram-authenticated identity.
+  - With a configured Hub, its exact configured numeric Telegram bot identity, and external
+    queue/outbox, a configured Telegram owner MAY Reply with the exact argument-free `/delivery`
+    command to the one delivered Hub delivery-wait warning in its numeric topic. Forwarded,
+    augmented, direct-chat, foreign-bot or acceptance-actor input MUST create neither productive
+    fallback nor recovery authority. Missing numeric Hub-bot identity keeps this remote control
+    disabled.
+  - Hub recovery MUST use a distinct `telegram_owner_callback` ledger, never `local_owner_cli` or
+    same-UID inference. A bounded opaque single-use callback capability MUST be issued only for a
+    complete exact snapshot and bound to the configured owner, Hub-Bot message origin, numeric
+    chat/topic, delivered warning, positively returned preview message, outbox/job/result and every
+    ordered part/receipt/artifact record. The capability expires in ten minutes; an ambiguous preview
+    send MUST remain unusable without retrying it.
+  - Callback apply MUST use one transaction to recheck the current configured owner, Hub origin,
+    actor/chat/topic/message bindings and complete snapshot before appending the immutable remote
+    decision. Expired, stale, foreign, cross-topic/message or conflicting callbacks MUST fail closed;
+    an exact repeat by the same bound owner returns only its original decision. Telegram preview and
+    callback text MUST expose no local paths, digests, deployment data or capability value.
   - Queue-only consent MAY release only that exact delivery/FIFO barrier; it MUST NOT change unknown
     evidence, saved work, permissions, stop/holds, writers, native uncertainty or other control
     guards.
@@ -80,6 +98,6 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
     create one independent durable source-topic Hub notice, even without a successor.
   - Discovery/send MUST recheck exact bindings and effective blockage, suppress stale unattempted
     notices, preserve attempted/unknown evidence and avoid starving unrelated delivery.
-  - The notice MUST explain investigation and exact local consent restrictions, remain truthful as a
-    saved observation, and grant no mutation, replay, resend, delivery confirmation or control
-    authority.
+  - The notice MUST explain investigation and exact queue-only recovery restrictions, remain
+    truthful as a saved observation, and grant no mutation, replay, resend, delivery confirmation or
+    control authority.

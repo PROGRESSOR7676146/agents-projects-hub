@@ -29,6 +29,7 @@ CONTROL_COMMANDS = frozenset(
         "model",
         "agent",
         "connect",
+        "delivery",
     }
 )
 

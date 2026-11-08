@@ -112,6 +112,7 @@ class DeliveryStateFacade:
         *,
         sender_agent_ids: tuple[str, ...],
         now: datetime,
+        hub_owner_recovery_enabled: bool = False,
     ) -> int:
         if notices.db is not self._connection:
             raise self._state_error("delivery notices require the owning state connection")
@@ -121,7 +122,13 @@ class DeliveryStateFacade:
             self._bounded(agent, name="sender agent", maximum=64) for agent in sender_agent_ids
         )
         with self._transaction():
-            return prepare_delivery_waits(self._connection, notices, agents, now=now)
+            return prepare_delivery_waits(
+                self._connection,
+                notices,
+                agents,
+                now=now,
+                hub_owner_recovery_enabled=hub_owner_recovery_enabled,
+            )
 
     def _bounded(self, value: str, *, name: str, maximum: int) -> str:
         normalized = value.strip()

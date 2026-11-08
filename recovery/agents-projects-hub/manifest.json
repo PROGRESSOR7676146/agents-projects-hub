@@ -8,7 +8,8 @@
   ],
   "runbook": "RUNBOOK.md",
   "maintained_release": "0.11.5",
-  "state_schema": 55,
+  "source_status": "unpublished schema-56 source candidate; not deployment inventory",
+  "state_schema": 56,
   "max_age_days": 30,
   "required_units": [
     "agents-projects-hub.service",
