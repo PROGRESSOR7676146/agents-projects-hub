@@ -12,6 +12,7 @@ with a new record.
 
 | Decision | Current outcome | Source |
 | --- | --- | --- |
+| Local Codex full access | Explicit local `full` uses full access and no approval requests, with fail-closed runtime verification. | [ADR 0096](0096-codex-full-access-profile.md) |
 | Impact-classified incidents and owner paging | The monitor separates work-stopping incidents from noise and pages the owner only for them; analysis starts only from the owner's «Разобрать», never automatically. | [ADR 0084](0084-impact-classified-incidents-and-owner-paging.md) |
 | Late receipts and notice ordering | Exact late receipt evidence survives lease expiry; new unknown execution notices do not block later saved finals. | [ADR 0069](0069-late-receipts-and-notice-ordering.md) |
 | Proven-not-sent Telegram retry | Native initial socket failures may retry through existing fenced delivery; post-connect and historical unknown evidence stays conservative. | [ADR 0068](0068-proven-not-sent-telegram-retry.md) |
@@ -21,7 +22,7 @@ with a new record.
 | Context | No automatic handoff or unseen-dialogue injection; bounded visible history is supplied only by explicit user request. | [ADR 0009](0009-explicit-context-no-automatic-handoff.md) |
 | Provider identity | One bot identity per runtime, not per model or account. | Product requirements and tests |
 | Codex accounts | Official Codex login only; the multi-auth integration is retired and its configuration keys are rejected. | [ADR 0047](0047-retire-codex-multi-auth.md) |
-| Headless Codex approvals | Shared sockets use companion-backed `on-request`; isolated stdio fallback denies escalation instead of waiting on an unreachable approval channel. | [ADR 0006](0006-headless-codex-fallback-approvals.md) |
+| Headless Codex approvals | By default shared sockets use companion-backed `on-request`; isolated stdio denies escalation. Local `full` is the ADR 0096 exception. | [ADR 0006](0006-headless-codex-fallback-approvals.md), [ADR 0096](0096-codex-full-access-profile.md) |
 | Shared Codex socket boot | Readiness requires a successful Unix connection; stale socket inodes cannot release tlive ordering. | [ADR 0007](0007-connectable-shared-socket-readiness.md) |
 | Resident Codex proxy lifetime (superseded) | systemd owned the multi-auth proxy helper's cleanup; retired with the integration. | [ADR 0008](0008-resident-codex-proxy-lifetime.md), superseded by [ADR 0047](0047-retire-codex-multi-auth.md) |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |

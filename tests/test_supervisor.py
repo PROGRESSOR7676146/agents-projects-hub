@@ -21,6 +21,26 @@ class SupervisorFallbackTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_full_uses_never_on_both_transports(self) -> None:
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock",
+            manage_process=False,
+            stdio_executable=self.fallback,
+            permission_profile="full",
+        )
+        with patch("hermes_codex_router.supervisor.CodexAppServerClient") as client:
+            for mode in ("socket", "stdio-fallback"):
+                supervisor._initialized_client(
+                    Mock(),
+                    transport_mode=mode,
+                    approval_policy="on-request" if mode == "socket" else "never",
+                )
+                self.assertEqual(client.call_args.kwargs["approval_policy"], "never")
+        supervisor.permission_profile = None
+        with patch("hermes_codex_router.supervisor.CodexAppServerClient") as client:
+            supervisor._initialized_client(Mock(), transport_mode="socket")
+            self.assertEqual(client.call_args.kwargs["approval_policy"], "on-request")
+
     def test_explicit_control_deadline_bounds_connect_and_initialize_without_fallback(self) -> None:
         supervisor = CodexAppServerSupervisor(
             self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback

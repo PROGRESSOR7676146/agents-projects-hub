@@ -197,6 +197,8 @@ class CodexAppServerClient:
     ) -> None:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
+        if permission_profile == "full" and approval_policy != "never":
+            raise ValueError("full Codex permission profile requires never approval policy")
         self._transport = transport
         self._transport_mode: Literal["socket", "stdio-fallback"] | None = transport_mode
         self._response_drain = CodexResponseDrain()
@@ -733,8 +735,11 @@ class CodexAppServerClient:
             sandbox = result.get("sandbox")
             if self._permission_profile is None:
                 _validate_legacy_permission_profile(result)
-            sandbox_is_safe = sandbox == "workspace-write" or (
-                isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
+            sandbox_is_safe = (
+                sandbox == {"type": "dangerFullAccess"}
+                if self._permission_profile == "full"
+                else sandbox == "workspace-write"
+                or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
             )
             if not sandbox_is_safe:
                 raise RpcError("thread/start returned an unsafe sandbox")
@@ -799,7 +804,9 @@ class CodexAppServerClient:
             if self._permission_profile is None:
                 _validate_legacy_permission_profile(result)
             if not (
-                sandbox == "workspace-write"
+                sandbox == {"type": "dangerFullAccess"}
+                if self._permission_profile == "full"
+                else sandbox == "workspace-write"
                 or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
             ):
                 raise RpcError("thread/resume returned an unsafe sandbox")

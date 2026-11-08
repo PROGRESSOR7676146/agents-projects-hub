@@ -83,6 +83,21 @@ class ManagedCodexLaunchTests(unittest.TestCase):
                 codex_socket_path=self.service.config.codex_socket_path,
             )
 
+    def test_full_refuses_unverified_local_and_terminal_launches(self) -> None:
+        with self.assertRaises(LocalTransferError):
+            local_resume_command(
+                "codex",
+                None,
+                "example-thread",
+                self.project.root,
+                permission_profile="full",
+                codex_socket_path=self.service.config.codex_socket_path,
+            )
+        with self.assertRaises(RegistryError):
+            build_codex_resume_argv(
+                thread_id="example-thread", cwd=self.project.root, permission_profile="full"
+            )
+
     def test_terminal_adapters_refuse_managed_launch_before_process_inspection(self) -> None:
         with self.assertRaises(RegistryError):
             build_codex_resume_argv(

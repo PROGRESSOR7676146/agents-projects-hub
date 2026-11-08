@@ -116,8 +116,55 @@ def _telegram_contract_checks(
     return checks
 
 
+def _codex_full_session_check(state: HubState) -> Check:
+    row = state._connection.execute(
+        "SELECT COUNT(*) FROM agent_sessions WHERE agent_id='codex' "
+        "AND status IN ('active','satellite') AND codex_permission_profile IS NOT 'full'"
+    ).fetchone()
+    incompatible = int(row[0])
+    return Check(
+        "codex_full_sessions",
+        incompatible == 0,
+        f"incompatible={incompatible}; use /new to change access profile",
+        required=False,
+    )
+
+
+def _command_and_service_checks(config: HubConfig) -> list[Check]:
+    checks: list[Check] = []
+    checks.extend([_command("git"), _command("codex"), _command("tmux")])
+    for agent in config.agents:
+        if agent.service_unit is not None:
+            checks.append(_service_check(agent.service_unit))
+        if agent.runtime in {"gemini", "antigravity", "opencode", "claude"}:
+            executable = agent.executable or (
+                "agy" if agent.runtime == "antigravity" else agent.runtime
+            )
+            if Path(executable).is_absolute():
+                path = Path(executable)
+                checks.append(
+                    Check(
+                        f"command:{agent.agent_id}",
+                        path.is_file() and bool(path.stat().st_mode & 0o111),
+                        str(path),
+                    )
+                )
+            else:
+                checks.append(_command(executable))
+    return checks
+
+
 def run_doctor(config: HubConfig) -> dict[str, object]:
     checks: list[Check] = []
+    if config.codex_permission_profile == "full":
+        checks.append(
+            Check(
+                "codex_full_profile",
+                True,
+                "locally selected full; no Codex approvals; Codex configuration not confirmed",
+                required=False,
+            )
+        )
     registry = None
     try:
         registry = load_registry(config.registry_path)
@@ -145,6 +192,8 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                 )
             )
             checks.extend(_telegram_contract_checks(state.telegram_contract_provenance()))
+            if config.codex_permission_profile == "full":
+                checks.append(_codex_full_session_check(state))
             claude_agents = tuple(
                 agent.agent_id for agent in config.agents if agent.runtime == "claude"
             )
@@ -178,25 +227,7 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
     except Exception as exc:
         checks.append(Check("state", False, str(exc)))
 
-    checks.extend([_command("git"), _command("codex"), _command("tmux")])
-    for agent in config.agents:
-        if agent.service_unit is not None:
-            checks.append(_service_check(agent.service_unit))
-        if agent.runtime in {"gemini", "antigravity", "opencode", "claude"}:
-            executable = agent.executable or (
-                "agy" if agent.runtime == "antigravity" else agent.runtime
-            )
-            if Path(executable).is_absolute():
-                path = Path(executable)
-                checks.append(
-                    Check(
-                        f"command:{agent.agent_id}",
-                        path.is_file() and bool(path.stat().st_mode & 0o111),
-                        str(path),
-                    )
-                )
-            else:
-                checks.append(_command(executable))
+    checks.extend(_command_and_service_checks(config))
     for agent_id, settings in config.provider_telemetry.items():
         telemetry = probe_antigravity_telemetry(settings)
         checks.append(

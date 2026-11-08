@@ -207,7 +207,7 @@ Named tmux `/terminal` takeover; `/release` returns unchanged thread.
 ### REQ-WRITER-005
 
 Supported semantic tlive: Codex/Claude. Hub Codex marker is approval-only:
-no prompt/completion mirroring or reply continuation.
+no prompt/completion mirroring or reply continuation. Local Codex `full` requests no approvals.
 
 ### REQ-WRITER-006
 
@@ -275,7 +275,10 @@ default; exact selection on start/resume/submit with no legacy overrides.
 Generation/job/checkpoint/connect snapshot it; missing context refuses, explicit
 legacy null distinct and migration stays legacy. Confirmation pins root/provider/
 profile/policy/reviewer, rejects visible network/outside-project/implicit temp writes.
-Null parent proves no inheritance. Preparation changes rechecked; later drift
+Only locally selected `full` instead requires `never` and an exact `dangerFullAccess`
+projection, for either transport; unexpected approval requests are declined. It requires
+an explicitly new generation when changing an existing conversation (ADR 0096).
+A null parent does not attest the definition. Preparation changes rechecked; later drift
 interrupts boundedly but stays uncertain until exact terminal. Managed steering/
 inline/pilot/local/tmux unsupported before effects. Metadata proves continuity,
 not full definition/read/authority/helper isolation; no extra host-wide gate.

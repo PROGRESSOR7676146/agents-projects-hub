@@ -214,7 +214,7 @@ class CodexAppServerSupervisor:
         try:
             client = CodexAppServerClient(
                 transport,
-                approval_policy=approval_policy,
+                approval_policy="never" if self.permission_profile == "full" else approval_policy,
                 model_provider=self.model_provider,
                 permission_profile=self.permission_profile,
                 retire_completed_connection=retire_completed_connection,

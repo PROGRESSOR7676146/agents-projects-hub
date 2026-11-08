@@ -140,6 +140,50 @@ class DiagnosticsTests(unittest.TestCase):
             "agent=opencode status=satellite provider_bound=no acknowledged=v0",
         )
 
+    def test_full_profile_reports_unconfirmed_and_incompatible_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with closing(HubState.open(root / "state.db", codex_permission_profile=None)) as state:
+                topic = state.observe_topic(
+                    project_id="example",
+                    chat_id=1,
+                    thread_id=1,
+                    title="example",
+                    execution_root=root,
+                )
+                state.activate_agent(topic.topic_id, "codex", "example-model", "low")
+                check = diagnostics._codex_full_session_check(state)
+                self.assertFalse(check.ok)
+                self.assertIn("incompatible=1", check.detail)
+                self.assertIn("/new", check.detail)
+
+    def test_doctor_reports_local_full_as_unconfirmed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            HubState.open(root / "state.db", codex_permission_profile=None).close()
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=root / "projects.json",
+                state_path=root / "state.db",
+                codex_socket_path=root / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(),
+                agents=(),
+                codex_permission_profile="full",
+            )
+            with patch("hermes_codex_router.diagnostics.probe_codex_config_proxy") as probe:
+                probe.return_value.ok = True
+                probe.return_value.detail = "example"
+                report = run_doctor(config)
+            checks = cast(list[dict[str, object]], report["checks"])
+            check = next(item for item in checks if item["name"] == "codex_full_profile")
+            self.assertIn("no Codex approvals", str(check["detail"]))
+            self.assertIn("not confirmed", str(check["detail"]))
+            sessions = next(item for item in checks if item["name"] == "codex_full_sessions")
+            self.assertIn("incompatible=0", str(sessions["detail"]))
+
 
 class CodexListenerStateTests(unittest.TestCase):
     """A leftover socket file after a crash or reboot is not a running server."""

@@ -17,6 +17,8 @@ and releases use semantic versioning while the public API is still evolving.
   execution uncertainty; active work, control and custody gates still apply.
 - Add an explicit Claude `host` profile with owner-equivalent, prompt-free local
   execution and separately stored Hub conversations (ADR 0095).
+- Local Codex `full` selects full access without approval requests, with exact
+  runtime checks and explicit new sessions when changing profile (ADR 0096).
 
 ## [0.11.5] - 2026-11-07
 

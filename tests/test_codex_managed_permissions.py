@@ -410,5 +410,91 @@ class ManagedCodexPermissionTests(unittest.TestCase):
         self.assertEqual(self.start_turn(client), "example-turn")
 
 
+class FullCodexPermissionTests(ManagedCodexPermissionTests):
+    def full_metadata(self) -> dict:
+        return {
+            **self.metadata("never"),
+            "activePermissionProfile": {"id": "full", "extends": ":full-access"},
+            "sandbox": {"type": "dangerFullAccess"},
+        }
+
+    def full_transport(self, metadata: dict | None = None) -> FakeTransport:
+        transport = self.transport(self.full_metadata() if metadata is None else metadata)
+        transport.incoming[0]["result"]["data"] = [{"id": "full", "allowed": True}]
+        transport.incoming[1]["result"]["requirements"] = {
+            "defaultPermissions": "full",
+            "allowedPermissionProfiles": {"full": True},
+        }
+        return transport
+
+    def test_full_start_resume_and_turn_are_exact(self) -> None:
+        for resume in (False, True):
+            transport = self.full_transport()
+            client = CodexAppServerClient(
+                transport, initialized=True, approval_policy="never", permission_profile="full"
+            )
+            self.open_thread(client, resume=resume)
+            self.start_turn(client)
+            for message in transport.sent[2:]:
+                params = message["params"]
+                self.assertEqual(
+                    (params["permissions"], params["approvalPolicy"]), ("full", "never")
+                )
+                self.assertNotIn("sandbox", params)
+                self.assertNotIn("sandboxPolicy", params)
+
+    def test_full_rejects_mismatch(self) -> None:
+        with self.assertRaises(ValueError):
+            CodexAppServerClient(
+                FakeTransport([]), permission_profile="full", approval_policy="on-request"
+            )
+        for field in (
+            {"approvalPolicy": "on-request"},
+            {"sandbox": {"type": "workspaceWrite"}},
+            {"sandboxPolicy": {"type": "workspaceWrite"}},
+            {"activePermissionProfile": {"id": "other", "extends": ":full-access"}},
+            {"cwd": str(self.root.parent)},
+            {"modelProvider": "other"},
+        ):
+            with self.subTest(field=field):
+                transport = self.full_transport({**self.full_metadata(), **field})
+                client = CodexAppServerClient(
+                    transport, initialized=True, approval_policy="never", permission_profile="full"
+                )
+                with self.assertRaises((CodexPermissionProfileError, RpcError)):
+                    self.open_thread(client)
+                self.assertNotIn("turn/start", [message["method"] for message in transport.sent])
+
+    def test_full_drift_and_unexpected_approval_refuse(self) -> None:
+        transport = self.full_transport()
+        transport.incoming.extend(
+            [
+                {
+                    "method": "thread/settings/updated",
+                    "params": {
+                        "threadId": "example-thread",
+                        "threadSettings": {
+                            **self.full_metadata(),
+                            "sandboxPolicy": {"type": "workspaceWrite"},
+                        },
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(
+            transport, initialized=True, approval_policy="never", permission_profile="full"
+        )
+        self.open_thread(client)
+        self.start_turn(client)
+        with self.assertRaises(CodexTurnError):
+            client.wait_for_turn("example-turn")
+        self.assertTrue(
+            client._handle_server_request(
+                {"id": 99, "method": "item/commandExecution/requestApproval"}
+            )
+        )
+        self.assertEqual(transport.sent[-1], {"id": 99, "result": {"decision": "decline"}})
+
+
 if __name__ == "__main__":
     unittest.main()

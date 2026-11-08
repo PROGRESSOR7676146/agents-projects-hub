@@ -58,6 +58,14 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(RegistryError, "unsafe or unsupported sandbox"):
             load_registry(self.write_registry(sandbox="danger-full-access"))
 
+    def test_registry_profile_field_cannot_select_full(self) -> None:
+        project = load_registry(
+            self.write_registry(codex_permission_profile="full")
+        ).require_project("project_one")
+        self.assertEqual(project.sandbox, "workspace-write")
+        self.assertEqual(project.approval_policy, "on-request")
+        self.assertFalse(hasattr(project, "codex_permission_profile"))
+
     def test_rejects_never_approval_policy(self) -> None:
         with self.assertRaisesRegex(RegistryError, "unsafe or unsupported approval policy"):
             load_registry(self.write_registry(approval_policy="never"))

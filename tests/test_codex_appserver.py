@@ -877,6 +877,20 @@ class CodexAppServerTests(unittest.TestCase):
         client.wait_for_turn("turn-9")
         self.assertEqual(transport.sent, [])
 
+    def test_full_socket_declines_unexpected_approval(self) -> None:
+        transport = FakeTransport([])
+        client = CodexAppServerClient(
+            transport,
+            initialized=True,
+            approval_policy="never",
+            permission_profile="full",
+            transport_mode="socket",
+        )
+        self.assertTrue(
+            client._handle_server_request({"id": 1, "method": "item/fileChange/requestApproval"})
+        )
+        self.assertEqual(transport.sent, [{"id": 1, "result": {"decision": "decline"}}])
+
     def test_stdio_fallback_declines_unexpected_approval_instead_of_deadlocking(self) -> None:
         transport = FakeTransport(
             [

@@ -206,7 +206,7 @@ timers, which stay model-free.
 - Telegram input selects only an immutable `project_id`; never accept a filesystem path from chat.
 - Resolve and validate every project root against local `allowed_roots` before starting or resuming a session.
 - Construct subprocess argv as arrays. Never concatenate prompts, paths or session IDs into a shell command.
-- Default Codex policy is `workspace-write` plus `on-request`. Never add `danger-full-access` or automatic approval.
+- Default Codex policy is `workspace-write` plus `on-request`. Only the explicit local `full` profile may use `danger-full-access` and `never` (ADR 0096); never automatically answer Allow.
 - Hermes is not an approval authority. Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - A Telegram topic is keyed by numeric `(chat_id, message_thread_id)`; its title is display metadata, not identity.
 - Never forward hidden reasoning, credentials, environment dumps or raw terminal screen contents.
