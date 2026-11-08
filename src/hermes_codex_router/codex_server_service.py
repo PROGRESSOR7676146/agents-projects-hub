@@ -15,8 +15,6 @@ import time
 from pathlib import Path
 
 from .codex_control_predicates import unsettled_control
-from .codex_rollout_completion import completed_rollout_turns
-from .delivery_control_predicates import result_ready_control_reconciled
 from .release_identity import CURRENT_RELEASE
 from .state_connection import connect_existing
 from .state_errors import StateError
@@ -320,21 +318,11 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
     db.row_factory = sqlite3.Row
     try:
         db.execute("BEGIN")
-        # Archived, explicitly owner-resolved history is closed for admission;
-        # it remains uncertain evidence, never native terminality or replay proof.
+        # Historical delivery and execution uncertainty cannot carry a server.
         busy = db.execute(
-            "SELECT j.job_id,j.status FROM provider_jobs j WHERE j.agent_id='codex' AND ("
-            "j.status IN ('queued','retry_wait','leased','executing') OR "
-            f"(j.status='result_ready' AND NOT {result_ready_control_reconciled('j')}) OR "
-            "(j.status='indeterminate' AND NOT EXISTS "
-            "(SELECT 1 FROM provider_turn_terminal_evidence e JOIN provider_execution_checkpoints c "
-            "ON c.job_id=e.job_id AND c.provider_thread_id=e.provider_thread_id "
-            "AND c.provider_turn_id=e.provider_turn_id AND c.project_root=e.project_root WHERE e.job_id=j.job_id) "
-            "AND NOT EXISTS (SELECT 1 FROM provider_job_resolutions r JOIN agent_sessions s "
-            "ON s.session_id=j.session_id WHERE r.job_id=j.job_id AND s.status='archived' "
-            "AND s.agent_id=j.agent_id AND s.generation=j.session_generation "
-            "AND r.resolution IN ('acknowledged','superseded','externally_completed'))))"
-        ).fetchall()
+            "SELECT status FROM provider_jobs WHERE agent_id='codex' "
+            "AND status IN ('queued','retry_wait','leased','executing') LIMIT 1"
+        ).fetchone()
         # A late-read claim can authorize a send only while its job is indeterminate,
         # and a final job never returns there. Such a leftover claim cannot authorize a send.
         controls = db.execute(
@@ -352,33 +340,10 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
             raise ValueError("active or unknown Codex work blocks service start: turn control")
         if writers:
             raise ValueError("active or unknown Codex work blocks service start: native writer")
-        completions: dict[tuple[str, str], frozenset[str]] = {}
-        for job in busy:
-            if codex_home is None or job["status"] != "indeterminate":
-                raise ValueError(
-                    f"active or unknown Codex work blocks service start: {job['status']} job"
-                )
-            checkpoint = db.execute(
-                "SELECT c.provider_thread_id,c.provider_turn_id,c.project_root "
-                "FROM provider_jobs j JOIN provider_execution_checkpoints c USING(job_id) "
-                "JOIN provider_job_resolutions r USING(job_id) "
-                "JOIN agent_sessions s ON s.session_id=j.session_id "
-                "WHERE j.job_id=? AND r.resolution='externally_completed' "
-                "AND s.agent_id=j.agent_id AND s.generation=j.session_generation "
-                "AND s.provider_session_id=c.provider_thread_id",
-                (job["job_id"],),
-            ).fetchone()
-            if checkpoint is None or not checkpoint["provider_turn_id"]:
-                raise ValueError(
-                    "active or unknown Codex work blocks service start: indeterminate job"
-                )
-            key = checkpoint["provider_thread_id"], checkpoint["project_root"]
-            if key not in completions:
-                completions[key] = completed_rollout_turns(codex_home, *key)
-            if checkpoint["provider_turn_id"] not in completions[key]:
-                raise ValueError(
-                    "active or unknown Codex work blocks service start: indeterminate job"
-                )
+        if busy:
+            raise ValueError(
+                f"active or unknown Codex work blocks service start: {busy['status']} job"
+            )
     finally:
         db.close()
 

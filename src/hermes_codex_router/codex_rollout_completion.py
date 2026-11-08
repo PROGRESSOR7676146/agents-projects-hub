@@ -1,7 +1,7 @@
-"""Read-only completion evidence for the explicit external-server start gate.
+"""Read-only native completion evidence; not used for server start.
 
 Native JSONL is not a replay/import format. Unsupported or incomplete history
-refuses start; no response, reasoning or tool content leaves this reader.
+returns no proof; no response, reasoning or tool content leaves this reader.
 """
 
 from __future__ import annotations

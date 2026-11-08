@@ -30,9 +30,12 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     automatic repair.
   - Snapshots MUST exclude inputs, prompts, paths, credentials and callback tokens; restart or
     ambiguous evidence MUST NOT establish health.
-  - Attach-only tlive MUST never spawn/stop the server; migration/start MUST refuse active/unknown
-    work, unsettled controls, unowned servers/sockets or mismatched artifacts without killing
-    processes or deleting sockets.
+  - Attach-only tlive MUST never spawn/stop the server. Migration MUST refuse active/unknown work.
+    Fresh server start MUST refuse queued or in-flight work, unsettled controls, read claims except
+    those left on final jobs, and non-Telegram writers. Both paths MUST refuse unowned servers or
+    sockets and mismatched artifacts without killing processes or deleting sockets. Fresh server
+    creation MUST be independent of historical delivery and execution uncertainty; it MUST NOT
+    resolve, resume, replay or confirm either.
   - An opt-in boot start MAY replace the operator receipt only for the first start attempt of
     a boot, after its own same-UID inventory finds no server or native client. It MAY remove
     only an owned link at the exact manifest socket path whose target is gone and which
@@ -41,10 +44,6 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
   - Exact owner closure for an archived session's uncertain job and effective full-control delivery
     consent MAY remove only their own admission blockers; they MUST NOT prove execution/delivery or
     release other senders/writers.
-  - An exact `externally_completed` resolution MAY remove an unarchived job's server-start blocker
-    only with matching completed thread/turn/root evidence in unchanged private native history.
-    This read-only check MUST preserve jobs, sessions and uncertainty, grant no replay or delivery
-    authority, and MUST NOT waive other work, control owners/readers, writers or custody checks.
   - Exact source/rollback identity, operator-native custody and separate live acceptance remain
     required.
 - **REQ-OPS-006 (Implemented):** Bounded deduplicated operational alerts MUST use only the
