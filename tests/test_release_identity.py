@@ -41,14 +41,14 @@ class ReleaseIdentityTests(unittest.TestCase):
         rendered = json.loads(output.getvalue())
         self.assertEqual(rendered["package_version"], pyproject["project"]["version"])
         self.assertFalse(rendered["clean_tree"])
-        self.assertIs(rendered["remote_delivery_hold_recovery"], False)
+        self.assertIs(rendered["remote_delivery_hold_recovery"], True)
         output = io.StringIO()
         with (
-            patch("hermes_codex_router.artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY", True),
+            patch("hermes_codex_router.artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY", False),
             redirect_stdout(output),
         ):
             main(["release-info"])
-        self.assertIs(json.loads(output.getvalue())["remote_delivery_hold_recovery"], True)
+        self.assertIs(json.loads(output.getvalue())["remote_delivery_hold_recovery"], False)
         self.assertNotIn("path", rendered)
 
 

@@ -64,6 +64,9 @@ def _callback_update(
 
 class Schema56SafeRollbackTests(unittest.TestCase):
     def setUp(self) -> None:
+        capability = patch.object(artifact_capabilities, "REMOTE_DELIVERY_HOLD_RECOVERY", False)
+        capability.start()
+        self.addCleanup(capability.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.hub = HubHarness(Path(self.temporary.name))
@@ -243,6 +246,14 @@ class Schema56SafeRollbackTests(unittest.TestCase):
         apply.assert_not_called()
         self.assertIn("unavailable in this build", answer.call_args.args[1])
         self.assertIn("delivery-hold", answer.call_args.args[1])
+        with (
+            patch.object(self.hub.telegram, "send_html") as send,
+            patch.object(self.hub.telegram, "answer_callback") as copy_answer,
+        ):
+            copy_callback = callback.replace("dho:a:", "dho:c:", 1)
+            self.assertTrue(self.hub.service.handle_update(_callback_update(1, copy_callback)))
+        send.assert_not_called()
+        self.assertIn("unavailable in this build", copy_answer.call_args.args[1])
         with self.assertRaisesRegex(StateError, "unavailable in this build"):
             self.state.apply_telegram_delivery_hold_callback(
                 callback.removeprefix("dho:a:"),

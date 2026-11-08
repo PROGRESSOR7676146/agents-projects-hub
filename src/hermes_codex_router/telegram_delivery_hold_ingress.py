@@ -7,7 +7,11 @@ no provider, sender, receipt or retry authority.
 
 from __future__ import annotations
 
+import html
+import os
 import sqlite3
+import tempfile
+from pathlib import Path
 from typing import Protocol
 
 from . import artifact_capabilities
@@ -15,7 +19,12 @@ from .hub_config import AgentDefinition, HubConfig
 from .routing import parse_command
 from .state import HubState, StateError
 from .telegram import TelegramBotApi, TelegramError, TopicCallback, TopicMessage
-from .telegram_delivery_hold_state import CALLBACK_ORIGIN, CALLBACK_PREFIX, preview_text
+from .telegram_delivery_hold_state import (
+    CALLBACK_ORIGIN,
+    CALLBACK_PREFIX,
+    COPY_CALLBACK_PREFIX,
+    preview_text,
+)
 
 UNAVAILABLE = (
     "Remote delivery recovery is unavailable in this build. Use the local delivery-hold command."
@@ -159,7 +168,13 @@ def try_handle_telegram_delivery_hold_command(
                             "text": "Continue without confirmed delivery",
                             "callback_data": preview.callback_data,
                         }
-                    ]
+                    ],
+                    [
+                        {
+                            "text": "Send me a copy of the saved answer",
+                            "callback_data": preview.copy_callback_data,
+                        }
+                    ],
                 ]
             },
         )
@@ -190,7 +205,8 @@ def try_handle_telegram_delivery_hold_callback(
     service: _HubDeliveryHoldService, callback: TopicCallback
 ) -> bool | None:
     """Apply a bound owner callback without the generic callback receipt gate."""
-    if not callback.data.startswith(CALLBACK_PREFIX):
+    is_copy = callback.data.startswith(COPY_CALLBACK_PREFIX)
+    if not is_copy and not callback.data.startswith(CALLBACK_PREFIX):
         return None
     if not artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY:
         service.telegram.answer_callback(callback.callback_id, UNAVAILABLE)
@@ -209,7 +225,71 @@ def try_handle_telegram_delivery_hold_callback(
             callback.callback_id, "This recovery preview is unavailable"
         )
         return True
-    token = callback.data.removeprefix(CALLBACK_PREFIX)
+    token = callback.data.removeprefix(COPY_CALLBACK_PREFIX if is_copy else CALLBACK_PREFIX)
+    if is_copy:
+        try:
+            result, title, has_attachments = service.state.read_telegram_delivery_hold_private_copy(
+                token,
+                owner_user_id=callback.sender_id,
+                owner_user_ids=service.config.owner_user_ids,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                callback_message_id=callback.message_id,
+                hub_bot_user_id=hub_bot.telegram_user_id,
+                callback_origin=CALLBACK_ORIGIN,
+            )
+        except (StateError, sqlite3.Error):
+            service.telegram.answer_callback(
+                callback.callback_id, "Предпросмотр недоступен. Ответьте /delivery ещё раз."
+            )
+            return True
+        label = (
+            f"Копия сохранённого ответа из темы «{html.escape(title[:128])}». "
+            "Доставка оригинала не подтверждена; оригинал уже может быть в теме."
+            + (" Вложения оригинала не включены." if has_attachments else "")
+        )
+        try:
+            body = label + "\n\n" + html.escape(result)
+            if len(body.encode("utf-16-le")) // 2 <= 3500:
+                service.telegram.send_html(callback.sender_id, 1, body)
+            else:
+                with tempfile.TemporaryDirectory(prefix="hub-delivery-copy-") as directory:
+                    path = Path(directory) / "saved-answer.md"
+                    # The private temporary directory is mode 0700; the file is also 0600.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "w", encoding="utf-8", newline="") as file:
+                        file.write(result)
+                    service.telegram.send_document(
+                        callback.sender_id,
+                        1,
+                        path,
+                        caption=label,
+                        file_name="saved-answer.md",
+                        mime_type="text/markdown",
+                    )
+        except TelegramError as error:
+            if error.failure_class == "api_rejection" and error.status_code in (400, 403):
+                try:
+                    service.telegram.send_html(
+                        callback.chat_id,
+                        callback.thread_id,
+                        "Откройте личный чат с ботом, нажмите Start, затем нажмите кнопку ещё раз.",
+                    )
+                except TelegramError:
+                    pass
+                service.telegram.answer_callback(callback.callback_id, "Личный чат недоступен.")
+            else:
+                service.telegram.answer_callback(
+                    callback.callback_id, "Копия могла не доставиться; нажмите ещё раз."
+                )
+            return True
+        except OSError:
+            service.telegram.answer_callback(
+                callback.callback_id, "Не удалось подготовить копию; нажмите ещё раз."
+            )
+            return True
+        service.telegram.answer_callback(callback.callback_id, "Копия отправлена в личный чат.")
+        return True
     try:
         disposition = service.state.apply_telegram_delivery_hold_callback(
             token,
