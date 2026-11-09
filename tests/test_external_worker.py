@@ -152,6 +152,13 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         assert health is not None
         self.assertEqual(health.error_code, "codex_approvals_unavailable")
 
+        worker.config = replace(worker.config, codex_permission_profile="full")
+        worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertIsNone(health.error_code)
+        worker.config = config
+
         worker.supervisor.transport_mode = "socket"
         with patch.object(Path, "is_socket", return_value=True):
             worker._publish_health()

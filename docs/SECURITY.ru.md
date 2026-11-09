@@ -10,7 +10,7 @@
 
 ## Границы доверия
 
-Telegram — удалённый транспорт, не файловая ACL. Hermes аутентифицирует разрешённый Telegram user/chat; router повторно проверяет origin metadata. Только локальный реестр определяет доступные каталоги. Codex sandbox ограничивает фактический файловый доступ, а approval policy — действия, требующие человека. tlive переносит запрос решения, но не делегирует его Hermes.
+Telegram — удалённый транспорт, не файловая ACL. Hermes аутентифицирует разрешённый Telegram user/chat; router повторно проверяет origin metadata. Локальный реестр маршрутизирует проекты, но не ограничивает доступ процесса. По умолчанию Codex sandbox и approval ограничивают действия; локальный профиль `full` отключает эти ограничения и подтверждения (ADR 0096). tlive переносит возникающие запросы решения, но не делегирует их Hermes.
 
 ## Поддерживаемая модель доверия
 
@@ -72,8 +72,8 @@ receipts автоматически. При компрометации треб�
    перебираются перед запуском: hardlink, спецфайлы и большие деревья
    допускаются, а запись через hardlink может изменить файл вне проекта
    (ADR 0091).
-7. Разрешены `read-only` и `workspace-write`; `danger-full-access` запрещён. MVP использует `on-request`.
-8. Hermes не может отвечать на approval автоматически. Решение принимает пользователь в Codex/tlive; timeout/неопределённость означает deny/no action.
+7. Реестр допускает только `read-only` и `workspace-write` с `on-request`. Только локальный профиль Codex `full` допускает `danger-full-access` с `never` согласно ADR 0096.
+8. Hermes не может отвечать на approval автоматически. Возникающие запросы решает пользователь в Codex/tlive; timeout/неопределённость означает deny/no action. Локальный Codex `full` не запрашивает подтверждения; неожиданные запросы отклоняются.
 9. Telegram `update_id` и router `request_id` обеспечивают exactly-once dispatch при повторной доставке.
 10. Один активный turn на lane; очередь имеет размер/TTL, `/stop` не означает delete.
 11. Логи не содержат токены, environment dump, hidden reasoning и полный terminal buffer. Prompt хранится как digest, если полный текст не нужен для recovery.
@@ -104,7 +104,7 @@ receipts автоматически. При компрометации треб�
 | Два Codex одновременно правят один worktree | Lease одной lane; параллельность только через отдельный worktree |
 | Router перезапущен во время approval | Pending approval не восстанавливается как разрешённый; fail closed |
 | App-server protocol изменился | Version/capability probe; остановка вместо fallback к screen scraping |
-| Компрометация Telegram | Для confined-профилей sandbox/approval ограничивают ущерб; `host` даёт полный доступ владельца. Локальный kill switch и отзыв bot token |
+| Компрометация Telegram | Для confined-профилей sandbox/approval ограничивают ущерб. При Claude `host` или Codex `full` злоумышленник может действовать с правами владельца без подтверждения; allowlist маршрутизирует, но не изолирует. Локальный kill switch и отзыв bot token ограничивают продолжение атаки |
 
 ## Kill switch и recovery
 

@@ -81,6 +81,22 @@ class ManagedPermissionIngressTests(unittest.TestCase):
             self.service.handle_update(callback(message_id + 1, "example-new", confirmation))
         )
 
+    def test_full_requires_explicit_new_before_queueing(self) -> None:
+        self.change_profile("full")
+        self.assertTrue(self.service.handle_update(fixtures.update(1, "Example task")))
+        self.assert_refusal()
+        self.confirm_new(2)
+        active = self.service.state.active_session(self.topic.topic_id)
+        assert active is not None
+        self.assertEqual(active.codex_permission_profile, "full")
+        self.assertTrue(self.service.handle_update(fixtures.update(4, "Example task")))
+        self.assertEqual(
+            self.service.state.provider_jobs_for_topic(self.topic.topic_id)[
+                0
+            ].codex_permission_profile,
+            "full",
+        )
+
     def test_stale_active_recovers_through_owner_new_callback(self) -> None:
         self.change_profile()
         self.assertTrue(self.service.handle_update(fixtures.update(1, "Old example task")))

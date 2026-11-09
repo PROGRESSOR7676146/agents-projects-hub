@@ -239,9 +239,15 @@ class CodexQueueWorkerTests(unittest.TestCase):
             worker.close()
 
     def test_changed_profile_refuses_queued_job_before_materials_staging_or_client(self) -> None:
+        self.assert_changed_profile_refused("example-project-policy")
+
+    def test_full_refuses_legacy_queued_job_before_provider_work(self) -> None:
+        self.assert_changed_profile_refused("full")
+
+    def assert_changed_profile_refused(self, profile: str) -> None:
         job_id = self.enqueue()
         worker = CodexQueueWorker(
-            replace(self.config, codex_permission_profile="example-project-policy"),
+            replace(self.config, codex_permission_profile=profile),
             registry=self.registry,
             supervisor=cast(Any, WorkerSupervisor(WorkerClient())),
         )

@@ -148,6 +148,28 @@ class HubConfigTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(HubConfigError):
                 load_hub_config(self.write_config(codex_permission_profile=value))
 
+    def test_full_profile_requires_external_codex_queue(self) -> None:
+        full = load_hub_config(
+            self.write_config(
+                codex_permission_profile="full",
+                dispatch_mode="queue",
+                queue_runtime="external",
+                external_worker_agent_ids=["codex"],
+            )
+        )
+        self.assertEqual(full.codex_permission_profile, "full")
+        for topology in (
+            {},
+            {"dispatch_mode": "queue"},
+            {
+                "dispatch_mode": "queue",
+                "queue_runtime": "external",
+                "external_worker_agent_ids": ["hermes"],
+            },
+        ):
+            with self.subTest(topology=topology), self.assertRaises(HubConfigError):
+                load_hub_config(self.write_config(codex_permission_profile="full", **topology))
+
     def test_rejects_unmasked_or_unknown_provider_account_hints(self) -> None:
         for value in (
             {"missing": ["abc"]},

@@ -84,6 +84,7 @@ class CodexPermissionStateTests(unittest.TestCase):
             {},
             {"codex_permission_profile": None},
             {"codex_permission_profile": "example-other-policy"},
+            {"codex_permission_profile": "full"},
         ):
             with (
                 self.subTest(kwargs=kwargs),
@@ -116,15 +117,13 @@ class CodexPermissionStateTests(unittest.TestCase):
             self.topic.topic_id, model="example-other-model", effort="high"
         )
         self.assertEqual(replaced.codex_permission_profile, PROFILE)
-        with closing(
-            HubState.open(self.path, codex_permission_profile="example-other-policy")
-        ) as changed:
+        with closing(HubState.open(self.path, codex_permission_profile="full")) as changed:
             with self.assertRaises(StateError):
                 changed.replace_active_session(
                     self.topic.topic_id, model="example-model", effort="low"
                 )
             new = changed.new_active_session(self.topic.topic_id)
-            self.assertEqual(new.codex_permission_profile, "example-other-policy")
+            self.assertEqual(new.codex_permission_profile, "full")
             self.assertEqual(
                 changed.get_session(original.session_id).codex_permission_profile, PROFILE
             )

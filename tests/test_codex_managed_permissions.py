@@ -410,5 +410,149 @@ class ManagedCodexPermissionTests(unittest.TestCase):
         self.assertEqual(self.start_turn(client), "example-turn")
 
 
+class FullCodexPermissionTests(ManagedCodexPermissionTests):
+    def full_metadata(self) -> dict:
+        return {
+            **self.metadata("never"),
+            "activePermissionProfile": None,
+            "sandbox": {"type": "dangerFullAccess"},
+        }
+
+    def full_transport(self, metadata: dict | None = None) -> FakeTransport:
+        return FakeTransport(
+            [
+                {"id": 1, "result": self.full_metadata() if metadata is None else metadata},
+                {"id": 2, "result": {"turn": {"id": "example-turn"}}},
+            ]
+        )
+
+    def test_full_start_resume_and_turn_are_exact(self) -> None:
+        for resume in (False, True):
+            for mode in ("socket", "stdio-fallback"):
+                with self.subTest(resume=resume, mode=mode):
+                    transport = self.full_transport()
+                    client = CodexAppServerClient(
+                        transport,
+                        initialized=True,
+                        approval_policy="never",
+                        permission_profile="full",
+                        transport_mode=mode,
+                    )
+                    self.open_thread(client, resume=resume)
+                    self.start_turn(client)
+                    self.assertEqual(
+                        [m["method"] for m in transport.sent],
+                        ["thread/resume" if resume else "thread/start", "turn/start"],
+                    )
+                    thread, turn = (m["params"] for m in transport.sent)
+                    self.assertEqual(thread["sandbox"], "danger-full-access")
+                    self.assertEqual(turn["sandboxPolicy"], {"type": "dangerFullAccess"})
+                    for params in (thread, turn):
+                        self.assertEqual(params["approvalPolicy"], "never")
+                        self.assertNotIn("permissions", params)
+
+    def test_full_accepts_documented_string_projection(self) -> None:
+        transport = self.full_transport({**self.full_metadata(), "sandbox": "danger-full-access"})
+        client = CodexAppServerClient(
+            transport, initialized=True, approval_policy="never", permission_profile="full"
+        )
+        self.open_thread(client)
+
+    def test_full_rejects_mismatch(self) -> None:
+        with self.assertRaises(ValueError):
+            CodexAppServerClient(
+                FakeTransport([]), permission_profile="full", approval_policy="on-request"
+            )
+        for field in (
+            {"approvalPolicy": "on-request"},
+            {"sandbox": {"type": "workspaceWrite"}},
+            {"sandboxPolicy": {"type": "workspaceWrite"}},
+            {"cwd": str(self.root.parent)},
+            {"modelProvider": "other"},
+        ):
+            for resume in (False, True):
+                with self.subTest(field=field, resume=resume):
+                    transport = self.full_transport({**self.full_metadata(), **field})
+                    client = CodexAppServerClient(
+                        transport,
+                        initialized=True,
+                        approval_policy="never",
+                        permission_profile="full",
+                    )
+                    with self.assertRaises((CodexPermissionProfileError, RpcError)):
+                        self.open_thread(client, resume=resume)
+                    self.assertNotIn(
+                        "turn/start", [message["method"] for message in transport.sent]
+                    )
+
+    def test_full_preparation_drift_refuses_before_turn(self) -> None:
+        for resume in (False, True):
+            transport = self.full_transport()
+            transport.incoming.appendleft(
+                {
+                    "method": "thread/settings/updated",
+                    "params": {
+                        "threadId": "example-thread",
+                        "threadSettings": {
+                            **self.full_metadata(),
+                            "sandboxPolicy": {"type": "workspaceWrite"},
+                        },
+                    },
+                }
+            )
+            client = CodexAppServerClient(
+                transport, initialized=True, approval_policy="never", permission_profile="full"
+            )
+            with self.subTest(resume=resume), self.assertRaises(CodexPermissionProfileError):
+                self.open_thread(client, resume=resume)
+            self.assertNotIn("turn/start", [message["method"] for message in transport.sent])
+
+    def test_full_drift_aborts_accepted_turn(self) -> None:
+        for field in (
+            {"sandboxPolicy": {"type": "workspaceWrite"}},
+            {"approvalPolicy": "on-request"},
+            {"cwd": str(self.root.parent)},
+            {"modelProvider": "other"},
+        ):
+            with self.subTest(field=field):
+                transport = self.full_transport()
+                transport.incoming.append(
+                    {
+                        "method": "thread/settings/updated",
+                        "params": {
+                            "threadId": "example-thread",
+                            "threadSettings": {**self.full_metadata(), **field},
+                        },
+                    }
+                )
+                client = CodexAppServerClient(
+                    transport, initialized=True, approval_policy="never", permission_profile="full"
+                )
+                self.open_thread(client)
+                self.start_turn(client)
+                with self.assertRaises(CodexTurnError):
+                    client.wait_for_turn("example-turn")
+
+    def test_full_unexpected_approvals_are_refused(self) -> None:
+        for mode in ("socket", "stdio-fallback"):
+            transport = self.full_transport()
+            client = CodexAppServerClient(
+                transport,
+                initialized=True,
+                approval_policy="never",
+                permission_profile="full",
+                transport_mode=mode,
+            )
+            for method, result in (
+                ("item/commandExecution/requestApproval", {"decision": "decline"}),
+                ("item/fileChange/requestApproval", {"decision": "decline"}),
+                ("item/permissions/requestApproval", {"permissions": [], "scope": "turn"}),
+                ("mcpServer/elicitation/request", {"action": "decline", "content": None}),
+            ):
+                with self.subTest(mode=mode, method=method):
+                    self.assertTrue(client._handle_server_request({"id": 99, "method": method}))
+                    self.assertEqual(transport.sent[-1], {"id": 99, "result": result})
+
+
 if __name__ == "__main__":
     unittest.main()

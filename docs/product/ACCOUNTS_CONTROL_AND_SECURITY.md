@@ -97,7 +97,7 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-secur
   interface.
 - **REQ-WRITER-005 (Accepted):** tlive MUST claim semantic integration only for supported providers;
   Hub-managed shared-server Codex sessions MUST allow approvals without mirroring or reply
-  continuation that creates a second writer.
+  continuation that creates a second writer. Locally selected `full` has no Codex approvals.
 
 ### Implemented minimal native transfer
 
@@ -134,7 +134,8 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-secur
   old binding without blind retry; stale, cancelled or expired controls create no generation, and
   the next later message resumes the chosen thread directly.
 - **REQ-WRITER-013 (Retired by ADR 0065):** Retired roles grant no permissions; writer/root
-  exclusion, sandbox and human approval remain mandatory, and project review instructions MUST NOT
+  exclusion and the applicable sandbox and human approval rules remain mandatory (ADR 0096 permits
+  only locally selected Codex `full` to run without approvals), and project review instructions MUST NOT
   imply isolation or approval.
 
 Explicit Codex routes MUST preserve original provider provenance, pin execution/local
@@ -143,23 +144,29 @@ refuse before inference; exact-session failure MUST NOT create a replacement.
 
 ## 12. Approval, sandbox, and secret requirements
 
-- **REQ-SEC-001 (Implemented):** Codex MUST retain workspace-write, human approval on companion
+- **REQ-SEC-001 (Implemented):** Except for locally configured `full`, Codex MUST retain workspace-write, human approval on companion
   sockets, and denied escalation on isolated stdio; bypass flags and automatic approval MUST be
   rejected.
-  - An explicit managed profile MUST be passively verified as the sole allowed default and selected
+  - The local `full` profile alone MUST select `danger-full-access` and `never` for both transports;
+    Telegram and the project registry MUST NOT select it. Runtime confirmation MUST match the full
+    sandbox projection, root, provider and policy or refuse (ADR 0096); it uses legacy sandbox
+    selection and does not require managed profile metadata.
+  - Any other explicit managed profile MUST be passively verified as the sole allowed default and selected
     unchanged for start/resume/turns, without legacy overrides.
   - Session, job, checkpoint and connect authorization MUST pin the selection; missing context
     refuses work, legacy stays legacy, and configuration changes require a new generation.
-  - Confirmation MUST match root/provider/profile/policy/reviewer and reject visible network,
-    outside-project or implicit temporary writes; preparation changes require rechecking.
+  - Managed profile confirmation MUST match root/provider/profile/policy/reviewer; those profiles reject visible
+    network, outside-project or implicit temporary writes. Preparation changes require rechecking.
   - Later policy drift MUST trigger bounded interruption while retaining uncertainty until exact
     terminal proof; exact resume MUST NOT replace threads.
   - Unsupported managed steering, inline/pilot and local/tmux execution MUST refuse before effects;
     selection metadata MUST NOT claim read, authority-data or helper isolation.
 - **REQ-SEC-002 (Implemented):** Hub and Hermes MUST NOT approve; Codex/tlive retains human approval
-  and first-valid-answer-wins.
+  and first-valid-answer-wins for requests that occur. Locally selected `full` requests no Codex approvals;
+  unexpected requests under `never` MUST be refused, never automatically allowed.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state or channel loss MUST
-  deny/no-op; providers MUST NOT approve one another. Human-only checks remain mandatory without
+  deny/no-op; providers MUST NOT approve one another. Human-only checks remain mandatory for requests
+  that occur, including other profiles, without
   claiming same-UID/admin tamper resistance.
 - **REQ-SEC-004 (Implemented):** Tokens MUST stay in private local files, never arguments, examples,
   logs, Git, documents or Telegram.
