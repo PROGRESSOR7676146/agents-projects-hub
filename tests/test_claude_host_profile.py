@@ -319,3 +319,106 @@ class ClaudeHostReviewTests(unittest.TestCase):
                 )
         self.assertTrue(verified.call_args.kwargs["image_input"])
         run.assert_not_called()
+
+
+class ClaudeHostStrayCleanupTests(unittest.TestCase):
+    def cgroup(self, temporary, relative, pids):
+        proc = Path(temporary) / "self-cgroup"
+        proc.write_text(f"0::{relative}\n")
+        directory = Path(temporary) / "root" / relative.lstrip("/")
+        directory.mkdir(parents=True)
+        (directory / "cgroup.procs").write_text("".join(f"{pid}\n" for pid in pids))
+        return proc, Path(temporary) / "root", directory / "cgroup.procs"
+
+    def test_kills_only_other_processes_in_the_worker_service_cgroup(self):
+        import signal
+
+        from hermes_codex_router.claude_host_profile import reap_cgroup_strays
+
+        with tempfile.TemporaryDirectory() as temporary:
+            proc, root, procs = self.cgroup(
+                temporary, "/user.slice/app.slice/example-worker@2.service", (10, 11, 12)
+            )
+            killed = []
+
+            def kill(pid, number):
+                killed.append((pid, number))
+                procs.write_text("10\n12\n" if number == signal.SIGTERM else "10\n")
+
+            left = reap_cgroup_strays(
+                proc_cgroup=proc,
+                cgroup_root=root,
+                environ={"INVOCATION_ID": "example"},
+                own_pid=10,
+                kill=kill,
+                sleep=lambda _: None,
+            )
+        self.assertEqual(left, 0)
+        self.assertNotIn(10, {pid for pid, _ in killed})
+        self.assertEqual(
+            sorted(killed),
+            sorted([(11, signal.SIGTERM), (12, signal.SIGTERM), (12, signal.SIGKILL)]),
+        )
+
+    def test_outside_a_service_nothing_is_killed(self):
+        from hermes_codex_router.claude_host_profile import reap_cgroup_strays
+
+        with tempfile.TemporaryDirectory() as temporary:
+            for relative, environ in (
+                ("/user.slice/app.slice/example-worker@2.service", {}),
+                ("/user.slice/user@1000.service", {"INVOCATION_ID": "example"}),
+                ("/user.slice/session-1.scope", {"INVOCATION_ID": "example"}),
+            ):
+                with self.subTest(relative=relative):
+                    sub = Path(temporary) / str(abs(hash(relative)))
+                    sub.mkdir()
+                    proc, root, _ = self.cgroup(str(sub), relative, (10, 11))
+                    killed = []
+                    reap_cgroup_strays(
+                        proc_cgroup=proc,
+                        cgroup_root=root,
+                        environ=environ,
+                        own_pid=10,
+                        kill=lambda pid, number: killed.append(pid),
+                        sleep=lambda _: None,
+                    )
+                    self.assertEqual(killed, [])
+
+    def test_stopped_host_turn_reaps_and_successful_turn_does_not(self):
+        from hermes_codex_router.claude_host_profile import ClaudeHostConfig
+        from hermes_codex_router.external_runtime import ExternalTurnInterrupted
+
+        root = Path.cwd()
+        host = ClaudeHostConfig(root, root / "session", Path("/usr/bin/true"))
+        adapter = ExternalCliAdapter("claude")
+        output = '{"type":"result","subtype":"success","is_error":false,"session_id":"00000000-0000-4000-8000-000000000001","result":"ok"}\n'
+        env = {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"}
+        for outcome in ("success", "stopped"):
+            with (
+                self.subTest(outcome=outcome),
+                patch.dict(os.environ, env, clear=True),
+                patch(
+                    "hermes_codex_router.external_runtime.pwd.getpwuid",
+                    return_value=__import__("types").SimpleNamespace(pw_dir="/home/example"),
+                ),
+                patch("hermes_codex_router.external_runtime.validate_host_route_settings"),
+                patch.object(adapter, "_verified_claude_argv", side_effect=lambda argv, **_: argv),
+                patch.object(
+                    adapter,
+                    "_run_claude_process",
+                    return_value=subprocess.CompletedProcess([], 0, output, ""),
+                    side_effect=None
+                    if outcome == "success"
+                    else ExternalTurnInterrupted("claude turn interrupted by user"),
+                ) as run,
+                patch("hermes_codex_router.external_runtime.reap_cgroup_strays") as reap,
+            ):
+                if outcome == "success":
+                    adapter.run_turn(cwd=root, prompt="hello", claude_sandbox=host)
+                    reap.assert_not_called()
+                    environment = run.call_args.kwargs["environment"]
+                    self.assertEqual(environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+                else:
+                    with self.assertRaises(ExternalTurnInterrupted):
+                        adapter.run_turn(cwd=root, prompt="hello", claude_sandbox=host)
+                    reap.assert_called_once_with()

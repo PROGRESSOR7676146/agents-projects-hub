@@ -37,3 +37,15 @@ the running process or malicious same-UID changes.
 
 This amends [ADR 0072](0072-trusted-personal-installation.md) and adds an
 explicit alternative to, without changing, [ADR 0081](0081-claude-workstation-host-view.md).
+
+## Amendment, 2026-11-09: turn boundary
+
+Live acceptance found two gaps between the native CLI and Hub's turn model. A
+Hub turn ends with its result, but the CLI can move long commands to background
+tasks that report after that result; `host` therefore sets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, as the confined profiles already do.
+The CLI also starts each command in its own process group, so stopping the CLI
+left the command running. When a `host` turn ends by stop, timeout or failure,
+the worker ends every other process in its own systemd service cgroup; each
+worker unit runs one turn at a time. A successful turn leaves processes alone,
+as the CLI does. Outside a systemd service nothing is reaped.

@@ -27,7 +27,12 @@ from .claude_corrections import ClaudeCorrectionCallbacks, ClaudeCorrectionInput
 from .claude_environment import claude_environment_prompt
 from .claude_file_policy import file_tool_argv, file_tool_event_policy, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
-from .claude_host_profile import ClaudeHostConfig, host_event_policy, validate_host_route_settings
+from .claude_host_profile import (
+    ClaudeHostConfig,
+    host_event_policy,
+    reap_cgroup_strays,
+    validate_host_route_settings,
+)
 from .claude_image_input import (
     MAX_CLAUDE_INPUT_BYTES,
     ClaudeImageInputError,
@@ -697,6 +702,8 @@ class ExternalCliAdapter:
                 ):
                     environment.pop(key)
             environment["CLAUDE_CONFIG_DIR"] = str(sandbox.provider_home)
+            # A Hub turn ends with its result; background tasks would outlive it.
+            environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             environment.pop("HUB_CLAUDE_PERMISSION_SOCKET", None)
         return environment
 
@@ -865,19 +872,24 @@ class ExternalCliAdapter:
                     raise ProviderUnavailableError(
                         "claude_host_unverified", "Claude executable changed."
                     )
-                return self._run_claude_process(
-                    argv,
-                    cwd=cwd,
-                    environment=environment,
-                    timeout=timeout,
-                    expected_session_id=expected_session_id,
-                    on_visible_assistant=on_visible_assistant,
-                    on_process_started=on_process_started,
-                    event_policy=host_event_policy,
-                    permission_wait=permission_wait,
-                    input_data=input_data,
-                    correction_input=correction_input,
-                )
+                try:
+                    return self._run_claude_process(
+                        argv,
+                        cwd=cwd,
+                        environment=environment,
+                        timeout=timeout,
+                        expected_session_id=expected_session_id,
+                        on_visible_assistant=on_visible_assistant,
+                        on_process_started=on_process_started,
+                        event_policy=host_event_policy,
+                        permission_wait=permission_wait,
+                        input_data=input_data,
+                        correction_input=correction_input,
+                    )
+                except BaseException:
+                    # Stop, timeout or failure: end commands the CLI left behind.
+                    reap_cgroup_strays()
+                    raise
         try:
             argv = (str(sandbox.claude_executable), *argv[1:])
             launch = wrap_file_tool_argv(argv, environment, cwd, sandbox)

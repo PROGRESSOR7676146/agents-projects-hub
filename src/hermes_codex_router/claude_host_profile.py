@@ -1,5 +1,9 @@
 """Explicit unconfined Claude launch selected by local configuration."""
 
+import os
+import signal
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,3 +53,52 @@ def validate_host_route_settings(root: Path, session_home: Path) -> None:
             for key in env
         ):
             raise ValueError("Claude settings can select credentials")
+
+
+def reap_cgroup_strays(
+    *,
+    proc_cgroup: Path = Path("/proc/self/cgroup"),
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+    environ: Mapping[str, str] = os.environ,
+    own_pid: int | None = None,
+    kill: Callable[[int, int], None] = os.kill,
+    sleep: Callable[[float], None] = time.sleep,
+    grace: float = 2.0,
+) -> int:
+    """Stop processes a stopped host turn left in this worker's service cgroup.
+
+    The native CLI starts commands in their own process group, so stopping the
+    CLI does not reach them. Each worker unit runs one turn at a time, so every
+    other process in its own service cgroup belongs to that turn. Outside a
+    systemd service this does nothing.
+    """
+    if not environ.get("INVOCATION_ID"):
+        return 0
+    try:
+        line = next(row for row in proc_cgroup.read_text().splitlines() if row.startswith("0::"))
+        relative = line.split("::", 1)[1].strip()
+        if not relative.endswith(".service") or relative.rsplit("/", 1)[-1].startswith("user@"):
+            return 0
+        procs = cgroup_root / relative.lstrip("/") / "cgroup.procs"
+        own = os.getpid() if own_pid is None else own_pid
+
+        def strays() -> set[int]:
+            return {int(pid) for pid in procs.read_text().split()} - {own}
+
+        targets = strays()
+    except (OSError, StopIteration, ValueError):
+        return 0
+    for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        for pid in targets:
+            try:
+                kill(pid, signal_number)
+            except (ProcessLookupError, PermissionError):
+                pass
+        sleep(grace)
+        try:
+            targets = strays()
+        except (OSError, ValueError):
+            return len(targets)
+        if not targets:
+            break
+    return len(targets)
