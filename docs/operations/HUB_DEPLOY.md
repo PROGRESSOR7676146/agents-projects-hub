@@ -58,7 +58,7 @@ candidate may not change a unit's dependency configuration. Before service
 effects and again after each reload, the tool reads effective dependency and
 reverse-dependency properties through the service manager and follows start and
 stop propagation, including indirect dependencies. It refuses a graph that can
-operate on an untouched or config-only unit (including through an alias) or cannot be read completely. One exception: a config-only `Type=oneshot` unit without `RemainAfterExit`, whose identity is disjoint from every untouched unit, may be started through `Wants=`, `Requires=` or `BindsTo=`, because every dependent start re-runs such a preparation helper by design; stop propagation and `Upholds=` still refuse. Unit names are read after `--` and unquoted with shell rules, since systemd quotes escaped names. Ordering-only
+operate on an untouched or config-only unit (including through an alias) or cannot be read completely. One exception: a config-only `Type=oneshot` unit without `RemainAfterExit`, whose identity is disjoint from every untouched unit, may be started through `Wants=`, `Requires=` or `BindsTo=`, because every dependent start re-runs such a preparation helper by design; stop propagation and `Upholds=` still refuse. Because each dependent start re-runs such a helper, convergence checks it by outcome (not `failed`, `Result=success`) rather than by unchanged service identity. Unit names are read after `--` and unquoted with shell rules, since systemd quotes escaped names. Ordering-only
 `After=` and `Before=` do not propagate service operations.
 
 For a prepared private plan, `apply --plan PLAN_DIRECTORY` rechecks the plan

@@ -1551,6 +1551,42 @@ class WindowTests(StageFixture):
         self.manager = FakeManager(self.install)
         self.manager.states["codex.service"] = "failed"
 
+    def rerun_helper_outcome(self, result_value):
+        self.prepare_config_only()
+        original_identity = self.manager.identity
+        original_property = self.manager.property
+        runs = []
+
+        def identity(unit):
+            value = original_identity(unit)
+            if unit == "socket-dir.service":
+                runs.append(unit)
+                value = {**value, "InvocationID": f"run-{len(runs)}"}
+            return value
+
+        def property_value(unit, name):
+            if unit == "socket-dir.service":
+                if name == "Type":
+                    return "oneshot"
+                if name == "RemainAfterExit":
+                    return "no"
+                if name == "Result":
+                    return result_value
+                if name == "ActiveState":
+                    return "inactive"
+            return original_property(unit, name)
+
+        self.manager.identity = identity
+        self.manager.property = property_value
+        return self.execute()["outcome"]
+
+    def test_rerun_oneshot_helper_identity_change_is_accepted(self):
+        self.assertEqual(self.rerun_helper_outcome("success"), "ACCEPTED")
+
+    def test_failing_rerun_oneshot_helper_is_never_accepted(self):
+        # It fails for the rollback runtime too, so recovery cannot be verified.
+        self.assertEqual(self.rerun_helper_outcome("exit-code"), "RECOVERY_REQUIRED")
+
     def test_config_only_rewritten_verified_and_rolled_back_without_lifecycle(self):
         self.prepare_config_only()
         paths = [
