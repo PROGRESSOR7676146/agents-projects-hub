@@ -321,104 +321,214 @@ class ClaudeHostReviewTests(unittest.TestCase):
         run.assert_not_called()
 
 
-class ClaudeHostStrayCleanupTests(unittest.TestCase):
-    def cgroup(self, temporary, relative, pids):
-        proc = Path(temporary) / "self-cgroup"
-        proc.write_text(f"0::{relative}\n")
-        directory = Path(temporary) / "root" / relative.lstrip("/")
-        directory.mkdir(parents=True)
-        (directory / "cgroup.procs").write_text("".join(f"{pid}\n" for pid in pids))
-        return proc, Path(temporary) / "root", directory / "cgroup.procs"
+class ClaudeHostScopeTests(unittest.TestCase):
+    def setUp(self):
+        from hermes_codex_router.claude_host_profile import ClaudeHostConfig
 
-    def test_kills_only_other_processes_in_the_worker_service_cgroup(self):
-        import signal
-
-        from hermes_codex_router.claude_host_profile import reap_cgroup_strays
-
-        with tempfile.TemporaryDirectory() as temporary:
-            proc, root, procs = self.cgroup(
-                temporary, "/user.slice/app.slice/example-worker@2.service", (10, 11, 12)
+        self.root = Path.cwd()
+        self.host = ClaudeHostConfig(self.root, self.root / "session", Path("/usr/bin/true"))
+        self.adapter = ExternalCliAdapter("claude")
+        self.output = '{"type":"result","subtype":"success","is_error":false,"session_id":"00000000-0000-4000-8000-000000000001","result":"ok"}\n'
+        self.env = {
+            "INVOCATION_ID": "example",
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+            "ANTHROPIC_AUTH_TOKEN": "example",
+        }
+        self.stack = __import__("contextlib").ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.dict(os.environ, self.env, clear=True))
+        self.stack.enter_context(
+            patch(
+                "hermes_codex_router.external_runtime.pwd.getpwuid",
+                return_value=__import__("types").SimpleNamespace(pw_dir="/home/example"),
             )
-            killed = []
-
-            def kill(pid, number):
-                killed.append((pid, number))
-                procs.write_text("10\n12\n" if number == signal.SIGTERM else "10\n")
-
-            left = reap_cgroup_strays(
-                proc_cgroup=proc,
-                cgroup_root=root,
-                environ={"INVOCATION_ID": "example"},
-                own_pid=10,
-                kill=kill,
-                sleep=lambda _: None,
+        )
+        self.stack.enter_context(
+            patch("hermes_codex_router.external_runtime.validate_host_route_settings")
+        )
+        self.verified = self.stack.enter_context(
+            patch.object(self.adapter, "_verified_claude_argv", side_effect=lambda argv, **_: argv)
+        )
+        self.which = self.stack.enter_context(
+            patch(
+                "hermes_codex_router.claude_host_profile.shutil.which",
+                side_effect=lambda name: "/usr/bin/" + name,
             )
-        self.assertEqual(left, 0)
-        self.assertNotIn(10, {pid for pid, _ in killed})
-        self.assertEqual(
-            sorted(killed),
-            sorted([(11, signal.SIGTERM), (12, signal.SIGTERM), (12, signal.SIGKILL)]),
+        )
+        self.systemctl = self.stack.enter_context(
+            patch(
+                "hermes_codex_router.claude_host_profile.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0, "inactive\n", ""),
+            )
+        )
+        self.process_run = self.stack.enter_context(
+            patch.object(
+                self.adapter,
+                "_run_claude_process",
+                return_value=subprocess.CompletedProcess([], 0, self.output, ""),
+            )
         )
 
-    def test_outside_a_service_nothing_is_killed(self):
-        from hermes_codex_router.claude_host_profile import reap_cgroup_strays
+    def turn(self):
+        return self.adapter.run_turn(cwd=self.root, prompt="hello", claude_sandbox=self.host)
 
-        with tempfile.TemporaryDirectory() as temporary:
-            for relative, environ in (
-                ("/user.slice/app.slice/example-worker@2.service", {}),
-                ("/user.slice/user@1000.service", {"INVOCATION_ID": "example"}),
-                ("/user.slice/session-1.scope", {"INVOCATION_ID": "example"}),
-            ):
-                with self.subTest(relative=relative):
-                    sub = Path(temporary) / str(abs(hash(relative)))
-                    sub.mkdir()
-                    proc, root, _ = self.cgroup(str(sub), relative, (10, 11))
-                    killed = []
-                    reap_cgroup_strays(
-                        proc_cgroup=proc,
-                        cgroup_root=root,
-                        environ=environ,
-                        own_pid=10,
-                        kill=lambda pid, number: killed.append(pid),
-                        sleep=lambda _: None,
-                    )
-                    self.assertEqual(killed, [])
+    def test_scope_prefix_binds_verified_claude_and_success_preserves_scope(self):
+        self.turn()
+        argv = self.process_run.call_args.args[0]
+        self.assertEqual(argv[:4], ("/usr/bin/systemd-run", "--user", "--scope", "--quiet"))
+        self.assertEqual(argv[4], "--collect")
+        self.assertRegex(argv[5], r"^--unit=hub-claude-host-[0-9a-f]{12}\.scope$")
+        self.assertEqual(argv[6:8], ("--", "/usr/bin/true"))
+        self.assertEqual(self.verified.call_args.args[0][0], "/usr/bin/true")
+        self.assertEqual(
+            self.process_run.call_args.kwargs["environment"][
+                "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+            ],
+            "1",
+        )
+        self.systemctl.assert_not_called()
 
-    def test_stopped_host_turn_reaps_and_successful_turn_does_not(self):
-        from hermes_codex_router.claude_host_profile import ClaudeHostConfig
+    def test_outside_systemd_unchanged(self):
+        os.environ.pop("INVOCATION_ID")
+        self.turn()
+        self.assertEqual(self.process_run.call_args.args[0][0], "/usr/bin/true")
+        self.which.assert_not_called()
+        self.systemctl.assert_not_called()
+
+    def test_stop_timeout_and_failure_kill_and_poll(self):
+        from hermes_codex_router.external_runtime import (
+            ExternalRuntimeError,
+            ExternalTurnInterrupted,
+        )
+
+        for failure in (
+            ExternalTurnInterrupted("stop"),
+            ExternalRuntimeError("timeout"),
+            ValueError("failure"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                self.systemctl.reset_mock()
+                self.process_run.side_effect = failure
+                with self.assertRaises(type(failure)):
+                    self.turn()
+                argv = self.process_run.call_args.args[0]
+                unit = argv[5].removeprefix("--unit=")
+                calls = [call.args[0] for call in self.systemctl.call_args_list]
+                self.assertEqual(
+                    calls,
+                    [
+                        [
+                            "/usr/bin/systemctl",
+                            "--user",
+                            "kill",
+                            "--signal=SIGKILL",
+                            "--kill-whom=all",
+                            "--",
+                            unit,
+                        ],
+                        [
+                            "/usr/bin/systemctl",
+                            "--user",
+                            "show",
+                            "-p",
+                            "ActiveState",
+                            "--value",
+                            "--",
+                            unit,
+                        ],
+                    ],
+                )
+
+    def test_terminal_failure_is_cleaned_up(self):
+        self.process_run.return_value = subprocess.CompletedProcess([], 1, self.output, "")
+        with self.assertRaises(Exception):
+            self.turn()
+        self.assertEqual(self.systemctl.call_count, 2)
+
+    def test_pending_cleanup_preserves_failure_and_blocks_until_inactive(self):
+        failure = ValueError("original")
+        self.process_run.side_effect = failure
+        self.systemctl.return_value = subprocess.CompletedProcess([], 0, "active\n", "")
+        with patch("hermes_codex_router.claude_host_profile.CLEANUP_TIMEOUT", 0):
+            with self.assertRaises(ValueError) as caught:
+                self.turn()
+        self.assertIs(caught.exception, failure)
+        self.process_run.reset_mock()
+        with self.assertRaises(ProviderUnavailableError) as pending:
+            self.turn()
+        self.assertEqual(pending.exception.code, "claude_host_cleanup_pending")
+        self.process_run.assert_not_called()
+        self.systemctl.return_value = subprocess.CompletedProcess([], 0, "inactive\n", "")
+        self.process_run.side_effect = None
+        self.turn()
+        self.assertEqual(self.process_run.call_count, 1)
+
+    def test_unverified_stopped_scope_does_not_claim_stop_proof(self):
         from hermes_codex_router.external_runtime import ExternalTurnInterrupted
 
-        root = Path.cwd()
-        host = ClaudeHostConfig(root, root / "session", Path("/usr/bin/true"))
-        adapter = ExternalCliAdapter("claude")
-        output = '{"type":"result","subtype":"success","is_error":false,"session_id":"00000000-0000-4000-8000-000000000001","result":"ok"}\n'
-        env = {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"}
-        for outcome in ("success", "stopped"):
-            with (
-                self.subTest(outcome=outcome),
-                patch.dict(os.environ, env, clear=True),
-                patch(
-                    "hermes_codex_router.external_runtime.pwd.getpwuid",
-                    return_value=__import__("types").SimpleNamespace(pw_dir="/home/example"),
-                ),
-                patch("hermes_codex_router.external_runtime.validate_host_route_settings"),
-                patch.object(adapter, "_verified_claude_argv", side_effect=lambda argv, **_: argv),
-                patch.object(
-                    adapter,
-                    "_run_claude_process",
-                    return_value=subprocess.CompletedProcess([], 0, output, ""),
-                    side_effect=None
-                    if outcome == "success"
-                    else ExternalTurnInterrupted("claude turn interrupted by user"),
-                ) as run,
-                patch("hermes_codex_router.external_runtime.reap_cgroup_strays") as reap,
-            ):
-                if outcome == "success":
-                    adapter.run_turn(cwd=root, prompt="hello", claude_sandbox=host)
-                    reap.assert_not_called()
-                    environment = run.call_args.kwargs["environment"]
-                    self.assertEqual(environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
-                else:
-                    with self.assertRaises(ExternalTurnInterrupted):
-                        adapter.run_turn(cwd=root, prompt="hello", claude_sandbox=host)
-                    reap.assert_called_once_with()
+        failure = ExternalTurnInterrupted("stop")
+        self.process_run.side_effect = failure
+        self.systemctl.return_value = subprocess.CompletedProcess([], 0, "active\n", "")
+        with patch("hermes_codex_router.claude_host_profile.CLEANUP_TIMEOUT", 0):
+            with self.assertRaises(ExternalTurnInterrupted) as caught:
+                self.turn()
+        self.assertIs(caught.exception, failure)
+
+    def test_poll_errors_remain_pending_and_disappearance_clears_it(self):
+        self.process_run.side_effect = ValueError("original")
+        self.systemctl.side_effect = OSError("unavailable")
+        with patch("hermes_codex_router.claude_host_profile.CLEANUP_TIMEOUT", 0):
+            with self.assertRaises(ValueError):
+                self.turn()
+        self.systemctl.side_effect = None
+        self.systemctl.return_value = subprocess.CompletedProcess([], 1, "", "bus unavailable")
+        with self.assertRaises(ProviderUnavailableError) as pending:
+            self.turn()
+        self.assertEqual(pending.exception.code, "claude_host_cleanup_pending")
+        self.systemctl.return_value = subprocess.CompletedProcess(
+            [], 1, "", f"Unit {next(iter(self.adapter._host_scopes.pending))} could not be found."
+        )
+        self.process_run.side_effect = None
+        self.turn()
+
+    def test_distinct_turns_get_distinct_scopes(self):
+        self.turn()
+        first = self.process_run.call_args.args[0][5]
+        self.turn()
+        self.assertNotEqual(first, self.process_run.call_args.args[0][5])
+        self.assertEqual(self.which.call_count, 2)
+
+    def test_active_scope_is_polled_until_inactive(self):
+        self.process_run.side_effect = ValueError("failure")
+        self.systemctl.side_effect = [
+            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 0, "active\n", ""),
+            subprocess.CompletedProcess([], 0, "inactive\n", ""),
+        ]
+        with patch("hermes_codex_router.claude_host_profile.time.sleep"):
+            with self.assertRaises(ValueError):
+                self.turn()
+        self.assertEqual(self.systemctl.call_count, 3)
+        self.assertFalse(self.adapter._host_scopes.pending)
+        for call in self.systemctl.call_args_list:
+            self.assertNotIn("ANTHROPIC_AUTH_TOKEN", call.kwargs["env"])
+
+    def test_invalid_unit_name_is_refused_before_launch(self):
+        invalid = __import__("types").SimpleNamespace(hex="invalid/scope")
+        with patch("hermes_codex_router.claude_host_profile.uuid.uuid4", return_value=invalid):
+            with self.assertRaises(ProviderUnavailableError) as error:
+                self.turn()
+        self.assertEqual(error.exception.code, "claude_host_unverified")
+        self.process_run.assert_not_called()
+        self.systemctl.assert_not_called()
+
+    def test_missing_systemd_tools_refuse(self):
+        for missing in ("systemd-run", "systemctl"):
+            with self.subTest(missing=missing):
+                self.which.side_effect = lambda name: (
+                    None if name == missing else "/usr/bin/" + name
+                )
+                with self.assertRaises(ProviderUnavailableError) as error:
+                    self.turn()
+                self.assertEqual(error.exception.code, "claude_host_unverified")
+                self.process_run.assert_not_called()

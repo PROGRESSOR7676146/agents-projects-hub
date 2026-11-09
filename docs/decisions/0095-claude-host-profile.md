@@ -11,7 +11,7 @@ The owner answers every request with Allow, so per-action prompts gave no real c
 ## Decision
 
 The owner explicitly selects `host` in local Claude configuration. Hub launches
-the pinned native CLI directly, as the same UID, from the registered project root,
+the pinned native CLI, as the same UID, from the registered project root,
 with the owner’s HOME and native `bypassPermissions`. No Hub permission hook,
 socket, card, restricted tool list or stream tool rejection applies. Claude’s
 configuration and conversations use a Hub-managed per-session directory under
@@ -46,6 +46,8 @@ tasks that report after that result; `host` therefore sets
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, as the confined profiles already do.
 The CLI also starts each command in its own process group, so stopping the CLI
 left the command running. When a `host` turn ends by stop, timeout or failure,
-the worker ends every other process in its own systemd service cgroup; each
-worker unit runs one turn at a time. A successful turn leaves processes alone,
-as the CLI does. Outside a systemd service nothing is reaped.
+the worker kills and checks the turn’s own transient systemd user scope. If
+cleanup cannot be verified, subsequent host turns are refused until that scope
+is inactive or gone. A successful turn leaves its processes alone, as the CLI
+does; systemd collects the scope when empty. Outside systemd the direct launch
+has no containment for commands that leave the CLI process group.

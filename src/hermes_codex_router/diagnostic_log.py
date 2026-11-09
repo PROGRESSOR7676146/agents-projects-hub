@@ -42,6 +42,7 @@ SITES = frozenset(
         "alerts.session_meta_read",
         "alerts.thread_metadata_read",
         "claude_permission_host.boundary_unverified",
+        "claude_host_scope.cleanup",
         "claude_recovery.artifact_cleanup",
         "codex_activity.retired",
         "codex_activity.retirement_callback",
