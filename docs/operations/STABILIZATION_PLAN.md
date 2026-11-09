@@ -156,6 +156,9 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   for a turn after `/new` that wrote a file outside the workspace with no
   approval request; the turn started only after the thread confirmed full
   access and `never`, and for resuming that thread.
+- Reply choice buttons (ADR 0097): an answer ending with `[[choices: …]]` shows
+  Hub-bot buttons in a project topic; one press arrives as the owner's reply,
+  a second press and old-session buttons are refused. Not yet installed.
 - Private copy of a saved answer with unknown delivery (ADR 0093): the owner
   receives the copy in the private chat; delivery status and queue hold stay
   unchanged. Not yet exercised: it needs a genuine active delivery hold.

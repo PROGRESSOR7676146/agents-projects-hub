@@ -58,7 +58,10 @@ def deliver_final_part(
     state_path: Path,
     now: datetime | None = None,
     clock: Callable[[], datetime] = utc_now,
+    choice_telegram: FinalDeliveryTelegram | None = None,
 ) -> FinalDeliveryResult:
+    # Buttons are answered through the bot that sent them. The Controller polls
+    # the Hub bot, so choice buttons use it rather than the provider bot.
     def current_time() -> datetime:
         return now if now is not None else clock()
 
@@ -116,12 +119,12 @@ def deliver_final_part(
                 caption=part.telegram_html or None,
                 file_name=part.file_name,
             )
-        elif (choices := parse_choice_part(part.telegram_html)) is not None:
-            message_id = telegram.send_html(
+        elif (choice := parse_choice_part(part.telegram_html)) is not None and choice[1]:
+            message_id = (choice_telegram or telegram).send_html(
                 outbox.chat_id,
                 outbox.thread_id,
                 CHOICE_PROMPT_HTML,
-                reply_markup=keyboard(choices),
+                reply_markup=keyboard(*choice),
             )
         else:
             message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, part.telegram_html)

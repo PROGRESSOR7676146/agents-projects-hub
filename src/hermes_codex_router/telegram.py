@@ -351,6 +351,27 @@ class TopicCallback:
     data: str
     message_sender_username: str | None = None
     message_sender_id: int | None = None
+    choice_labels: tuple[str, ...] = ()
+
+
+def _choice_labels(message: dict[str, Any]) -> tuple[str, ...]:
+    """Read Hub choice labels from the pressed bot message, in button order."""
+    markup = message.get("reply_markup")
+    rows = markup.get("inline_keyboard") if isinstance(markup, dict) else None
+    if not isinstance(rows, list):
+        return ()
+    labels: list[str] = []
+    for row in rows:
+        for button in row if isinstance(row, list) else ():
+            data = button.get("callback_data") if isinstance(button, dict) else None
+            if (
+                not isinstance(data, str)
+                or not data.startswith(f"ch:{len(labels)}:")
+                or not isinstance(button.get("text"), str)
+            ):
+                return ()
+            labels.append(button["text"])
+    return tuple(labels)
 
 
 class _InternalSyntheticTopicUpdate(dict[str, Any]):
@@ -693,6 +714,7 @@ def parse_topic_callback(update: dict[str, Any]) -> TopicCallback | None:
         data=data,
         message_sender_username=message_sender_username,
         message_sender_id=message_sender_id,
+        choice_labels=_choice_labels(message) if message_sender_id is not None else (),
     )
 
 

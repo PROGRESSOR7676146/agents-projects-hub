@@ -554,6 +554,7 @@ class TelegramOutboxSender:
             outbox,
             state_path=self.config.state_path,
             now=now,
+            choice_telegram=self.telegram_bots.get("hub"),
         )
         self._record_delivery_result(result)
         self._publish_health(force=True)

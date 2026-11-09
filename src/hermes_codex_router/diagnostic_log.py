@@ -116,6 +116,7 @@ SITES = frozenset(
         "service.client_close",
         "service.failure_notice_record",
         "service.health_publish",
+        "reply_choice.markup",
         "service.outbox_error_record",
         "service.queue_error_record",
         "supervisor.client_close",

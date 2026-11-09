@@ -5,11 +5,13 @@ Hub removes that line and delivers the labels as a separate final part whose
 HTML starts with a fixed marker; the sender turns that part into buttons. A
 pressed button becomes the owner's ordinary reply with the label as text, so
 choices grant no authority beyond typing the same words. Anything malformed
-stays visible as plain text.
+stays visible as plain text. Each stored part is bound to the Hub session of its
+job, so buttons from an earlier session cannot answer the current one.
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 
@@ -17,6 +19,8 @@ MIN_CHOICES = 2
 MAX_CHOICES = 6
 MAX_LABEL_CHARACTERS = 40
 CHOICE_PART_MARKER = "[[hub-choices:v1]]"
+_BOUND = re.compile(r"^\[\[hub-choices:v1:(?P<binding>[0-9a-f]{12})\]\]$")
+_CALLBACK = re.compile(r"^ch:(?P<index>[0-9]):(?P<binding>[0-9a-f]{12})$")
 CHOICE_PROMPT_HTML = "Выберите вариант:"
 
 _MARKER = re.compile(r"^\[\[\s*choices\s*:(?P<body>[^\[\]\n]*)\]\]$", re.IGNORECASE)
@@ -51,21 +55,39 @@ def extract_reply_choices(text: str) -> tuple[str, tuple[str, ...]]:
     return "\n".join(preceding).rstrip(), labels
 
 
-def choice_part_html(labels: tuple[str, ...]) -> str:
-    return "\n".join((CHOICE_PART_MARKER, *(html.escape(label) for label in labels)))
+def session_binding(session_id: str) -> str:
+    """Short public identity of one Hub session; not an authentication token."""
+    return hashlib.sha256(f"reply-choices:{session_id}".encode()).hexdigest()[:12]
 
 
-def parse_choice_part(part_html: str) -> tuple[str, ...] | None:
+def choice_part_html(labels: tuple[str, ...], binding: str | None = None) -> str:
+    marker = CHOICE_PART_MARKER if binding is None else f"[[hub-choices:v1:{binding}]]"
+    return "\n".join((marker, *(html.escape(label) for label in labels)))
+
+
+def parse_choice_part(part_html: str) -> tuple[tuple[str, ...], str] | None:
+    """Return labels and session binding ("" when unbound) of a choice part."""
     lines = part_html.split("\n")
-    if lines[0] != CHOICE_PART_MARKER:
+    if lines[0] == CHOICE_PART_MARKER:
+        binding = ""
+    elif (bound := _BOUND.match(lines[0])) is not None:
+        binding = bound.group("binding")
+    else:
         return None
-    return _valid_labels([html.unescape(line) for line in lines[1:]])
+    labels = _valid_labels([html.unescape(line) for line in lines[1:]])
+    return None if labels is None else (labels, binding)
 
 
-def keyboard(labels: tuple[str, ...]) -> dict[str, object]:
+def parse_choice_callback(data: str) -> tuple[int, str] | None:
+    match = _CALLBACK.match(data)
+    return None if match is None else (int(match.group("index")), match.group("binding"))
+
+
+def keyboard(labels: tuple[str, ...], binding: str) -> dict[str, object]:
     return {
         "inline_keyboard": [
-            [{"text": label, "callback_data": f"ch:{index}"}] for index, label in enumerate(labels)
+            [{"text": label, "callback_data": f"ch:{index}:{binding}"}]
+            for index, label in enumerate(labels)
         ]
     }
 
@@ -82,7 +104,7 @@ def split_choice_suffix(response_html: str) -> tuple[str, tuple[str, ...]]:
     position = response_html.rfind(f"\n\n{CHOICE_PART_MARKER}\n")
     if position < 0:
         return response_html, ()
-    labels = parse_choice_part(response_html[position + 2 :])
-    if labels is None or not response_html[:position].strip():
+    parsed = parse_choice_part(response_html[position + 2 :])
+    if parsed is None or parsed[1] or not response_html[:position].strip():
         return response_html, ()
-    return response_html[:position], labels
+    return response_html[:position], parsed[0]

@@ -8,7 +8,9 @@ from hermes_codex_router.reply_choices import (
     choice_part_html,
     extract_reply_choices,
     keyboard,
+    parse_choice_callback,
     parse_choice_part,
+    session_binding,
     split_choice_suffix,
 )
 
@@ -54,7 +56,9 @@ class ReplyChoicesTests(unittest.TestCase):
         part = choice_part_html(labels)
         self.assertTrue(part.startswith(CHOICE_PART_MARKER))
         self.assertNotIn("<tag>", part)
-        self.assertEqual(parse_choice_part(part), labels)
+        self.assertEqual(parse_choice_part(part), (labels, ""))
+        bound = choice_part_html(labels, session_binding("example-session"))
+        self.assertEqual(parse_choice_part(bound), (labels, session_binding("example-session")))
 
     def test_ordinary_html_is_not_a_choice_part(self) -> None:
         self.assertIsNone(parse_choice_part("Hello"))
@@ -75,14 +79,21 @@ class ReplyChoicesTests(unittest.TestCase):
 
     def test_keyboard_uses_index_callbacks(self) -> None:
         self.assertEqual(
-            keyboard(("Yes", "No")),
+            keyboard(("Yes", "No"), "0123456789ab"),
             {
                 "inline_keyboard": [
-                    [{"text": "Yes", "callback_data": "ch:0"}],
-                    [{"text": "No", "callback_data": "ch:1"}],
+                    [{"text": "Yes", "callback_data": "ch:0:0123456789ab"}],
+                    [{"text": "No", "callback_data": "ch:1:0123456789ab"}],
                 ]
             },
         )
+
+    def test_callback_data_requires_index_and_binding(self) -> None:
+        self.assertEqual(parse_choice_callback("ch:1:0123456789ab"), (1, "0123456789ab"))
+        for data in ("ch:1", "ch:done", "ch:12:0123456789ab", "ch:1:XYZ", "menu:new"):
+            self.assertIsNone(parse_choice_callback(data), data)
+        self.assertEqual(len(session_binding("a")), 12)
+        self.assertNotEqual(session_binding("a"), session_binding("b"))
 
 
 if __name__ == "__main__":

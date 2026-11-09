@@ -13,6 +13,8 @@ and releases use semantic versioning while the public API is still evolving.
   busy SQLite database; the next cycle retries instead of the service exiting.
 - Run local repository validation at background CPU priority (nice 10) outside
   CI, so a full parallel gate cannot starve a live Hub on the same host.
+- Show a provider's closed reply choices as Telegram buttons in project topics; a press
+  is sent as the owner's ordinary reply and old-session buttons are refused (ADR 0097).
 
 ## [0.11.9] - 2026-11-09
 

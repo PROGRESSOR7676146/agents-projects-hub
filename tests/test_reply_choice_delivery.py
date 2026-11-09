@@ -6,7 +6,11 @@ import unittest
 from typing import Any
 
 from hermes_codex_router.metadata import format_agent_response
-from hermes_codex_router.reply_choices import CHOICE_PART_MARKER, CHOICE_PROMPT_HTML
+from hermes_codex_router.reply_choices import (
+    CHOICE_PART_MARKER,
+    CHOICE_PROMPT_HTML,
+    session_binding,
+)
 from tests import test_outbox_sender as fixtures
 
 
@@ -33,24 +37,30 @@ class ReplyChoiceDeliveryTests(unittest.TestCase):
         html = format_agent_response("Which option?\n[[choices: Yes | No]]", {"Agent": "Example"})
         job_id = self.fixture.ready_outbox("opencode", 81, telegram_html=html)
         bot = MarkupBot()
-        sender = self.fixture.sender(opencode=bot, antigravity=fixtures.Bot())
+        hub = MarkupBot()
+        sender = self.fixture.sender(opencode=bot, antigravity=fixtures.Bot(), hub=hub)
         try:
             self.assertTrue(sender._deliver_one("opencode"))
             self.assertTrue(sender._deliver_one("opencode"))
             self.assertFalse(sender._deliver_one("opencode"))
-            texts = [text for _, _, text in bot.sent]
-            self.assertEqual(len(texts), 2)
-            self.assertIn("Which option?", texts[0])
-            self.assertNotIn("choices", texts[0])
-            self.assertNotIn(CHOICE_PART_MARKER, "".join(texts))
-            self.assertEqual(texts[1], CHOICE_PROMPT_HTML)
-            self.assertIsNone(bot.markups[0])
+            # The answer comes from the provider bot; the buttons come from the
+            # Hub bot, whose callbacks the Controller receives.
+            self.assertEqual(len(bot.sent), 1)
+            self.assertIn("Which option?", bot.sent[0][2])
+            self.assertNotIn("choices", bot.sent[0][2])
+            self.assertNotIn(CHOICE_PART_MARKER, bot.sent[0][2])
+            self.assertEqual(bot.markups, [None])
+            self.assertEqual([text for _, _, text in hub.sent], [CHOICE_PROMPT_HTML])
+            session_id = sender.state._connection.execute(
+                "SELECT session_id FROM provider_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()[0]
+            binding = session_binding(session_id)
             self.assertEqual(
-                bot.markups[1],
+                hub.markups[0],
                 {
                     "inline_keyboard": [
-                        [{"text": "Yes", "callback_data": "ch:0"}],
-                        [{"text": "No", "callback_data": "ch:1"}],
+                        [{"text": "Yes", "callback_data": f"ch:0:{binding}"}],
+                        [{"text": "No", "callback_data": f"ch:1:{binding}"}],
                     ]
                 },
             )
