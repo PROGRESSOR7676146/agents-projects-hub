@@ -11,7 +11,7 @@ The owner answers every request with Allow, so per-action prompts gave no real c
 ## Decision
 
 The owner explicitly selects `host` in local Claude configuration. Hub launches
-the pinned native CLI directly, as the same UID, from the registered project root,
+the pinned native CLI, as the same UID, from the registered project root,
 with the owner’s HOME and native `bypassPermissions`. No Hub permission hook,
 socket, card, restricted tool list or stream tool rejection applies. Claude’s
 configuration and conversations use a Hub-managed per-session directory under
@@ -37,3 +37,17 @@ the running process or malicious same-UID changes.
 
 This amends [ADR 0072](0072-trusted-personal-installation.md) and adds an
 explicit alternative to, without changing, [ADR 0081](0081-claude-workstation-host-view.md).
+
+## Amendment, 2026-11-09: turn boundary
+
+Live acceptance found two gaps between the native CLI and Hub's turn model. A
+Hub turn ends with its result, but the CLI can move long commands to background
+tasks that report after that result; `host` therefore sets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, as the confined profiles already do.
+The CLI also starts each command in its own process group, so stopping the CLI
+left the command running. When a `host` turn ends by stop, timeout or failure,
+the worker kills and checks the turn’s own transient systemd user scope. If
+cleanup cannot be verified, subsequent host turns are refused until that scope
+is inactive or gone. A successful turn leaves its processes alone, as the CLI
+does; systemd collects the scope when empty. Each scope is bound to its worker service (`BindsTo=`, `After=`), so a worker stop, crash or restart also stops the scope, and a replacement worker never inherits a running turn; processes from earlier successful turns therefore end when their worker restarts. Outside systemd the direct launch
+has no containment for commands that leave the CLI process group.

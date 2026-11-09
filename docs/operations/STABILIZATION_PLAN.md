@@ -146,12 +146,15 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 
 - Claude `host` profile (ADR 0095): live accepted 2026-11-09 at 0.11.7
   `b65b4df` for a Telegram turn after `/new` that ran Bash and wrote a file
-  outside the project through the CPA route with no permission request. Still
-  open: stop and resume under `host`.
+  outside the project through the CPA route with no permission request, and
+  for resuming that conversation. A two-minute command first failed because the
+  CLI moved it to a background task; with background tasks disabled it
+  completed. `/stop` cancelled the turn but left its command running; the
+  per-turn scope fix still needs a live re-test after its release.
 - Codex `full` profile (ADR 0096): live accepted 2026-11-09 at 0.11.7 `b65b4df`
   for a turn after `/new` that wrote a file outside the workspace with no
   approval request; the turn started only after the thread confirmed full
-  access and `never`. Still open: resume of an existing `full` thread.
+  access and `never`, and for resuming that thread.
 - Private copy of a saved answer with unknown delivery (ADR 0093): the owner
   receives the copy in the private chat; delivery status and queue hold stay
   unchanged. Not yet exercised: it needs a genuine active delivery hold.

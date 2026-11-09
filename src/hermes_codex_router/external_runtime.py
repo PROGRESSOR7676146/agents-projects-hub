@@ -27,7 +27,13 @@ from .claude_corrections import ClaudeCorrectionCallbacks, ClaudeCorrectionInput
 from .claude_environment import claude_environment_prompt
 from .claude_file_policy import file_tool_argv, file_tool_event_policy, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
-from .claude_host_profile import ClaudeHostConfig, host_event_policy, validate_host_route_settings
+from .claude_host_profile import (
+    ClaudeHostConfig,
+    ClaudeHostScopes,
+    host_event_policy,
+    validate_host_result,
+    validate_host_route_settings,
+)
 from .claude_image_input import (
     MAX_CLAUDE_INPUT_BYTES,
     ClaudeImageInputError,
@@ -285,6 +291,7 @@ class ExternalCliAdapter:
         self._claude_stop_process: subprocess.Popen[str] | None = None
         self._interrupt_requested = threading.Event()
         self._claude_capabilities = ClaudeCliCapabilities()
+        self._host_scopes = ClaudeHostScopes(ProviderUnavailableError)
 
     def interrupt(self) -> bool:
         """Terminate only this adapter's active provider process group."""
@@ -697,6 +704,8 @@ class ExternalCliAdapter:
                 ):
                     environment.pop(key)
             environment["CLAUDE_CONFIG_DIR"] = str(sandbox.provider_home)
+            # A Hub turn ends with its result; background tasks would outlive it.
+            environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             environment.pop("HUB_CLAUDE_PERMISSION_SOCKET", None)
         return environment
 
@@ -788,7 +797,9 @@ class ExternalCliAdapter:
         try:
             yield
         except ExternalTurnInterrupted:
-            # Cleanup errors supersede interruption and remain uncertain.
+            # An unverified host scope cannot establish stopped-process proof.
+            if self._host_scopes.pending:
+                raise
             raise ClaudeProcessStopped(session_id) from None
 
     def _run_owned_claude_turn(
@@ -853,7 +864,10 @@ class ExternalCliAdapter:
                 raise ProviderUnavailableError(
                     "claude_host_unverified", "Claude project root changed."
                 )
-            with self._claude_stop_proof(expected_session_id):
+            with (
+                self._claude_stop_proof(expected_session_id),
+                self._host_scopes.turn(environment) as scope,
+            ):
                 argv = self._verified_claude_argv(
                     (str(sandbox.claude_executable), *argv[1:]),
                     cwd=cwd,
@@ -865,8 +879,8 @@ class ExternalCliAdapter:
                     raise ProviderUnavailableError(
                         "claude_host_unverified", "Claude executable changed."
                     )
-                return self._run_claude_process(
-                    argv,
+                result = self._run_claude_process(
+                    scope(argv),
                     cwd=cwd,
                     environment=environment,
                     timeout=timeout,
@@ -878,6 +892,8 @@ class ExternalCliAdapter:
                     input_data=input_data,
                     correction_input=correction_input,
                 )
+                validate_host_result(result, expected_session_id)
+                return result
         try:
             argv = (str(sandbox.claude_executable), *argv[1:])
             launch = wrap_file_tool_argv(argv, environment, cwd, sandbox)
