@@ -152,12 +152,16 @@ def claude_policy(config: object) -> dict[str, Any]:
     agents = config.get("agents", [])
     need(isinstance(agents, list), "invalid agents")
     permissions = config.get("claude_file_permissions")
+    claude = [
+        {key: value for key, value in agent.items() if key != "executable"}
+        for agent in agents
+        if isinstance(agent, dict) and agent.get("runtime") == "claude"
+    ]
+    identities = [json.dumps(agent.get("agent_id")) for agent in claude]
+    need(len(set(identities)) == len(identities), "duplicate Claude agent identity")
     return {
-        "agents": [
-            {key: value for key, value in agent.items() if key != "executable"}
-            for agent in agents
-            if isinstance(agent, dict) and agent.get("runtime") == "claude"
-        ],
+        # Compared by agent identity, never by list position.
+        "agents": sorted(claude, key=lambda agent: json.dumps(agent.get("agent_id"))),
         "claude_file_permissions": {
             key: value for key, value in permissions.items() if key not in _RELEASE_PERMISSION_KEYS
         }

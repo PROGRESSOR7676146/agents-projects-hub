@@ -1183,6 +1183,15 @@ class WindowTests(StageFixture):
                 self.hub.write_text(json.dumps(changed))
                 with self.assertRaisesRegex(hub_deploy.Refused, "Claude settings differ"):
                     hub_deploy.create_plan(self.install, old, new, self.runner)
+        # Agent order is not drift; a duplicate Claude identity is refused.
+        first = {"runtime": "claude", "agent_id": "first", "executable": "/x"}
+        second = {"runtime": "claude", "agent_id": "second", "executable": "/y"}
+        self.assertEqual(
+            hub_deploy.claude_policy({"agents": [first, second]}),
+            hub_deploy.claude_policy({"agents": [second, first]}),
+        )
+        with self.assertRaisesRegex(hub_deploy.Refused, "duplicate Claude agent"):
+            hub_deploy.claude_policy({"agents": [first, first]})
         # The release overlay alone (executable, runtime paths) is not drift.
         overlay = copy.deepcopy(hub)
         overlay["agents"][0]["executable"] = "/home/example/other/bin/claude"
