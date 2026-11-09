@@ -103,3 +103,38 @@ class TelegramDeliveryHoldHubStateFacade:
                 callback_origin=callback_origin,
                 now=now or datetime.now(timezone.utc),
             )
+
+    def read_telegram_delivery_hold_private_copy(
+        self,
+        token: str,
+        *,
+        owner_user_id: int,
+        owner_user_ids: Sequence[int],
+        chat_id: int,
+        thread_id: int,
+        callback_message_id: int,
+        hub_bot_user_id: int,
+        callback_origin: str,
+        now: datetime | None = None,
+    ) -> tuple[str, str, bool]:
+        """Read a validated snapshot in one transaction, without durable changes."""
+        if self._connection.in_transaction:
+            raise StateError("cannot nest a Telegram delivery-hold copy transaction")
+        self._connection.execute("BEGIN")
+        try:
+            result = TelegramDeliveryHoldState(self._connection, StateError).read_private_copy(
+                token,
+                owner_user_id=owner_user_id,
+                owner_user_ids=owner_user_ids,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                callback_message_id=callback_message_id,
+                hub_bot_user_id=hub_bot_user_id,
+                callback_origin=callback_origin,
+                now=now or datetime.now(timezone.utc),
+            )
+            self._connection.commit()
+            return result
+        except BaseException:
+            self._connection.rollback()
+            raise

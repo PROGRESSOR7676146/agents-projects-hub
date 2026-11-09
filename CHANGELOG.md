@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Enable Hub-owner delivery-hold recovery and let the owner request a private
+  copy of the saved answer without changing the unknown delivery or queue hold.
+
 ## [0.11.6] - 2026-11-09
 
 - Allow fixture-tested forward schema deployments with a separately prepared

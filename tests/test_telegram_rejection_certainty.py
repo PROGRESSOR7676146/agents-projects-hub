@@ -51,6 +51,82 @@ class TelegramRejectionCertaintyTests(unittest.TestCase):
                     "private", error.safe_detail(consecutive_failures=1, last_success=None)
                 )
 
+    def test_private_chat_classification_is_bounded_and_requires_exact_response(self) -> None:
+        cases = (
+            (403, "Forbidden: bot can't initiate conversation with a user", True),
+            (403, "Forbidden: bot was blocked by the user", True),
+            (400, "Bad Request: chat not found", True),
+            (403, "Forbidden: user is deactivated", True),
+            (400, "Bad Request: file is too big", False),
+            (403, "Forbidden: bot was blocked by the user extra private-token", False),
+            (400, "Forbidden: bot was blocked by the user", False),
+            (403, None, False),
+        )
+        for status, description, unavailable in cases:
+            for http_status in (200, status):
+                for document in (False, True):
+                    with self.subTest(
+                        status=status,
+                        description=description,
+                        http_status=http_status,
+                        document=document,
+                    ):
+                        body = json.dumps(
+                            {"ok": False, "error_code": status, "description": description}
+                        ).encode()
+
+                        def opener(*_args: Any, **_kwargs: Any) -> io.BytesIO:
+                            if http_status != 200:
+                                raise urllib.error.HTTPError(
+                                    "https://example.com/private-token",
+                                    http_status,
+                                    "private-token",
+                                    Message(),
+                                    io.BytesIO(body),
+                                )
+                            return io.BytesIO(body)
+
+                        bot = TelegramBotApi("123456:example", opener=opener)
+                        with tempfile.TemporaryDirectory() as directory:
+                            path = Path(directory) / "example.md"
+                            path.write_text("example")
+                            with self.assertRaises(TelegramError) as raised:
+                                if document:
+                                    bot.send_document(123, 1, path)
+                                else:
+                                    bot.send_html(123, 1, "example")
+                        error = raised.exception
+                        self.assertEqual(error.private_chat_unavailable, unavailable)
+                        self.assertNotIn("private-token", str(error))
+                        self.assertNotIn(
+                            "private-token",
+                            error.safe_detail(consecutive_failures=1, last_success=None),
+                        )
+                        self.assertNotIn("private-token", repr(vars(error)))
+
+    def test_mismatched_http_status_does_not_classify_private_chat(self) -> None:
+        body = json.dumps(
+            {
+                "ok": False,
+                "error_code": 403,
+                "description": "Forbidden: bot was blocked by the user",
+            }
+        ).encode()
+
+        def opener(*_args: Any, **_kwargs: Any) -> io.BytesIO:
+            raise urllib.error.HTTPError(
+                "https://example.com/private-token",
+                400,
+                "private-token",
+                Message(),
+                io.BytesIO(body),
+            )
+
+        with self.assertRaises(TelegramError) as raised:
+            TelegramBotApi("123456:example", opener=opener).send_html(123, 1, "example")
+        self.assertEqual(raised.exception.failure_class, "api_http")
+        self.assertFalse(raised.exception.private_chat_unavailable)
+
     def test_real_http_telegram_rejections_are_proven_for_text_and_documents(self) -> None:
         for status in (400, 403, 429):
             self.assert_response(

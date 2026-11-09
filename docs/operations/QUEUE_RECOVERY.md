@@ -148,8 +148,8 @@ Schema56 supports a second, narrower route when the release artifact enables it.
 The 0.11.6 rollback target disables remote recovery: `release-info` reports
 `remote_delivery_hold_recovery` as false, and Telegram commands and callbacks
 refer the owner to the local `delivery-hold` command. Previously recorded remote
-decisions still release their matching FIFO barriers. When enabled in a future
-reviewed artifact, this route is available after that exact release is deployed. It is not live acceptance evidence and must not be used before the
+decisions still release their matching FIFO barriers. The 0.11.7 artifact enables
+this route after that exact release is deployed. It is not live acceptance evidence and must not be used before the
 separate deployment/owner Telegram acceptance gate is complete.
 
 Only the configured Hub bot in external queue/outbox mode can offer it, and
@@ -157,16 +157,25 @@ only after its exact positive numeric Telegram bot ID is configured locally
 alongside its username. A configured owner replies with exactly `/delivery` to
 the current delivered Hub delivery-wait warning in that same forum topic—no
 arguments, attachments, forward, direct chat or provider-bot warning. Hub then
-shows a short preview with part/receipt counts and one **Continue without
-confirmed delivery** button. The preview does not reveal a path, digest, result
+shows a short preview with part/receipt counts and buttons **Continue without
+confirmed delivery** and **Send me a copy of the saved answer**. The preview does not reveal a path, digest, result
 text, target ID or deployment data.
 
-The button is one exact, ten-minute capability. It is bound to that owner, the
+The buttons share one exact, ten-minute capability. It is bound to that owner, the
 Hub-bot preview message, warning, numeric chat/topic and complete saved
-delivery snapshot. Pressing it only lets later already-queued work pass this
-one FIFO wait. The old delivery remains unknown; Hub does not resend it, replay
+delivery snapshot. Pressing **Continue without confirmed delivery** only lets
+later already-queued work pass this one FIFO wait. The copy button does not release
+the queue. The old delivery remains unknown; Hub does not resend it, replay
 the provider, create a receipt, or relax stop, approval, writer, native
 uncertainty, session, root, capacity or full-control checks.
+
+To read the answer privately, press **Send me a copy of the saved answer**. The
+Hub sends a new private message or, for a long answer, one Markdown document.
+The label warns that the original is unconfirmed and may already be in the
+topic; attachments are omitted. If the private chat is unavailable, open the
+Hub bot's private chat, press Start, then press the copy button again. An
+uncertain copy may be attempted again by pressing the button. Copying does not
+continue the queue; use the separate Continue button only when intended.
 
 If the preview or button says unavailable, expired or changed, do not reuse a
 copied button/callback or edit state. Reinspect the current warning and, if it

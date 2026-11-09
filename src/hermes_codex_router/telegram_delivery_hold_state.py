@@ -22,6 +22,7 @@ from .delivery_hold_predicates import outbox_delivery_hold_released
 from .delivery_hold_state import ACTION, DeliveryHoldState
 
 CALLBACK_PREFIX = "dho:a:"
+COPY_CALLBACK_PREFIX = "dho:c:"
 CALLBACK_ORIGIN = "hub"
 REMOTE_AUTHORITY = "telegram_owner_callback"
 TOKEN_BYTES = 18
@@ -69,6 +70,10 @@ class TelegramDeliveryHoldPreview:
     def callback_data(self) -> str:
         return CALLBACK_PREFIX + self.token
 
+    @property
+    def copy_callback_data(self) -> str:
+        return COPY_CALLBACK_PREFIX + self.token
+
 
 @dataclass(frozen=True, slots=True)
 class TelegramDeliveryHoldDisposition:
@@ -88,7 +93,7 @@ def preview_text(preview: TelegramDeliveryHoldPreview) -> str:
         "Continuing permits only later queued work in this topic. Hub will not resend "
         "the uncertain result or repeat provider work. Session, writer, stop, approval, "
         "native-uncertainty, and other safety restrictions remain in force.\n\n"
-        "Use the button only to continue without confirmed delivery."
+        "Получите копию ответа в личном чате или отдельно разрешите продолжение очереди."
     )
 
 
@@ -424,6 +429,79 @@ class TelegramDeliveryHoldState:
                 if effect is not None and effect[0]
                 else "binding_changed"
             ),
+        )
+
+    def read_private_copy(
+        self,
+        token: str,
+        *,
+        owner_user_id: int,
+        owner_user_ids: Sequence[int],
+        chat_id: int,
+        thread_id: int,
+        callback_message_id: int,
+        hub_bot_user_id: int,
+        callback_origin: str,
+        now: datetime,
+    ) -> tuple[str, str, bool]:
+        """Validate the issued snapshot without recording a decision or changing delivery."""
+        self._require_transaction()
+        self._require_enabled_artifact()
+        self._owner(owner_user_id, owner_user_ids)
+        self._validate_token(token)
+        self._integer(chat_id, "chat", positive=False)
+        self._integer(thread_id, "topic")
+        self._integer(callback_message_id, "preview message")
+        self._integer(hub_bot_user_id, "Hub Bot")
+        if callback_origin != CALLBACK_ORIGIN:
+            raise self.error("invalid Telegram delivery-hold callback")
+        current, _ = self._timestamp(now)
+        row = self.db.execute(
+            "SELECT * FROM telegram_delivery_hold_callback_tokens WHERE token_sha256=?",
+            (self._token_sha256(token),),
+        ).fetchone()
+        if row is None:
+            raise self.error("Telegram delivery-hold preview is unavailable")
+        self._token_callback_binding(
+            row,
+            owner_user_id=owner_user_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            callback_message_id=callback_message_id,
+            hub_bot_user_id=hub_bot_user_id,
+            callback_origin=callback_origin,
+        )
+        issued_at = self._stored_time(row["issued_at"], "preview issue time")
+        expires_at = self._stored_time(row["expires_at"], "preview expiry")
+        if issued_at > current or expires_at - issued_at != TOKEN_TTL or expires_at <= current:
+            raise self.error("Telegram delivery-hold preview expired")
+        self._assert_no_existing_disposition(str(row["outbox_id"]))
+        warning, outbox_id = self._warning(
+            chat_id=chat_id, thread_id=thread_id, notice_message_id=int(row["notice_message_id"])
+        )
+        if str(warning["notice_id"]) != row["notice_id"] or outbox_id != row["outbox_id"]:
+            raise self.error("Telegram delivery-hold warning changed")
+        binding, target = self._target(outbox_id)
+        self._token_matches_current(
+            row,
+            binding,
+            self._snapshot(
+                binding,
+                target,
+                warning,
+                owner_user_id=owner_user_id,
+                hub_bot_user_id=hub_bot_user_id,
+            ),
+        )
+        topic = self.db.execute(
+            "SELECT title FROM topics WHERE topic_id=?", (row["topic_id"],)
+        ).fetchone()
+        if topic is None:
+            raise self.error("Telegram delivery-hold topic unavailable")
+        return (
+            str(target["result"]["visible_response"]),
+            str(topic["title"]),
+            any(part["part_type"] != "text" for part in target["parts"]),
         )
 
     def apply_callback(

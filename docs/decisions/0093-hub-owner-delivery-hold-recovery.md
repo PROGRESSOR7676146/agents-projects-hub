@@ -64,12 +64,24 @@ from the same bound owner returns the original immutable decision without
 inserting another record. The visible preview and callback responses omit paths,
 digests, deployment data, target IDs and the capability value.
 
-The sole effect is to exempt that exact saved-result unknown delivery from the
+The continue decision exempts that exact saved-result unknown delivery from the
 topic FIFO predicate. The outbox stays `unknown`; parts, receipts, artifacts,
 job status and provider history stay unchanged. No callback has resend, provider
 replay, Reply, assessment, approval, stop, writer, native-terminal, session,
 root, workflow, capacity or full-control authority. ADR 0063 full-control
 consent remains independently local and retains its own binding checks.
+
+## Amendment: private copy and 0.11.7 activation
+
+The 0.11.7 artifact enables the capability and adds a separate private-copy
+button to the same preview. It rechecks the owner, origin, expiry, bindings and
+entire snapshot using the existing schema56 token, without recording consent.
+It sends the saved visible answer as a new private Hub-bot message, or one UTF-8
+Markdown document for long answers. The label explains the original remains
+unconfirmed and may already be in the topic; original attachments are omitted
+and disclosed. A blocked private chat gets only a content-free topic instruction.
+An ambiguous copy send is not retried automatically; repeated presses can send
+another copy. Copying neither changes delivery evidence nor releases FIFO.
 
 ## Persistence and compatibility
 

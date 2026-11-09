@@ -189,10 +189,23 @@ class DeliveryWaitSenderTests(TestCase):
             )
 
     def test_ordinary_sender_cycle_delivers_notice_once_under_hub_identity(self):
+        self._assert_sender_notice(remote_recovery_enabled=True)
+
+    def test_ordinary_sender_notice_omits_remote_recovery_when_artifact_disables_it(self):
+        with patch(
+            "hermes_codex_router.artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY", False
+        ):
+            self._assert_sender_notice(remote_recovery_enabled=False)
+
+    def _assert_sender_notice(self, *, remote_recovery_enabled):
         self.assertTrue(self.sender.run_cycle())
         self.assertEqual(len(self.hub.sent), 1)
         self.assertIn("unconfirmed", self.hub.sent[0][2])
-        self.assertNotIn("/delivery", self.hub.sent[0][2])
+        self.assertIn("local delivery-hold preview/apply", self.hub.sent[0][2])
+        if remote_recovery_enabled:
+            self.assertIn("replying /delivery to this exact Hub warning", self.hub.sent[0][2])
+        else:
+            self.assertNotIn("/delivery", self.hub.sent[0][2])
         self.assertEqual(
             self.sender.state.get_telegram_outbox_for_job(self.job_id).status, "unknown"
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import sqlite3
 import tempfile
 import threading
@@ -16,7 +17,7 @@ from hermes_codex_router import artifact_capabilities
 from hermes_codex_router.hub_config import AcceptanceActor, HubTelegramBot
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.task_notice_sender import deliver_task_notice
-from hermes_codex_router.telegram import TelegramError
+from hermes_codex_router.telegram import TelegramError, _api_result
 from hermes_codex_router.telegram_delivery_hold_state import CALLBACK_ORIGIN, CALLBACK_PREFIX
 from tests.hub_service_harness import ANTIGRAVITY, CHAT_ID, CODEX, OWNER_ID, THREAD_ID, HubHarness
 
@@ -225,6 +226,220 @@ class TelegramDeliveryHoldUXTests(unittest.TestCase):
             handoff_id=None,
         )
         return tail
+
+    def _copy_callback(self) -> str:
+        self._preview()
+        markup = self.hub.telegram.markups[-1]
+        assert isinstance(markup, dict)
+        self.assertEqual(
+            [row[0]["text"] for row in markup["inline_keyboard"]],
+            ["Continue without confirmed delivery", "Send me a copy of the saved answer"],
+        )
+        return markup["inline_keyboard"][1][0]["callback_data"]
+
+    def test_private_copy_preserves_evidence_and_fifo(self) -> None:
+        self._enqueue_tail()
+        callback = self._copy_callback()
+        before = self._protected_evidence()
+        with patch.object(self.hub.telegram, "send_html", return_value=22) as send:
+            self.assertTrue(self.hub.service.handle_update(_callback_update(1, callback)))
+        self.assertEqual(send.call_args.args[:2], (OWNER_ID, 1))
+        text = send.call_args.args[2]
+        self.assertIn("Fictional saved result", text)
+        self.assertIn(html.escape(self.topic.title), text)
+        self.assertIn("копи", text.lower())
+        self.assertIn("не подтвержден", text.lower())
+        self.assertEqual(self._protected_evidence(), before)
+        self.assertIsNone(self.state.lease_provider_job(CODEX.agent_id, "example-worker"))
+        self.assertEqual(self.hub.client.turns, 0)
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT COUNT(*) FROM telegram_delivery_hold_remote_dispositions"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_long_private_copy_is_one_private_document_and_deleted(self) -> None:
+        result = "<Fictional & result>\n" * 200
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE provider_job_results SET visible_response=? WHERE job_id=?",
+                (result, self.outbox.job_id),
+            )
+        callback = self._copy_callback()
+        captured = []
+
+        def send_document(chat: int, thread: int, path: Path, **kwargs: object) -> int:
+            self.assertEqual((chat, thread), (OWNER_ID, 1))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            captured.append((path, path.read_text(encoding="utf-8"), kwargs))
+            return 22
+
+        with (
+            patch.object(
+                self.hub.telegram, "send_document", create=True, side_effect=send_document
+            ),
+            patch.object(self.hub.telegram, "send_html") as send,
+        ):
+            self.hub.service.handle_update(_callback_update(1, callback))
+        send.assert_not_called()
+        self.assertEqual(len(captured), 1)
+        path, content, kwargs = captured[0]
+        self.assertEqual(content, result)
+        self.assertIn("копи", str(kwargs["caption"]).lower())
+        self.assertFalse(path.exists())
+
+    def test_copy_rejects_foreign_and_stale_callbacks(self) -> None:
+        callback = self._copy_callback()
+        with patch.object(self.hub.telegram, "send_html") as send:
+            for update in (
+                _callback_update(1, callback, sender_id=900),
+                _callback_update(1, callback, chat_id=CHAT_ID - 1),
+                _callback_update(1, callback, thread_id=THREAD_ID + 1),
+                _callback_update(2, callback),
+                _callback_update(1, callback, message_sender_id=701),
+                _callback_update(1, callback + "x"),
+            ):
+                self.hub.service.handle_update(update)
+            with self.state._connection:
+                self.state._connection.execute(
+                    "UPDATE provider_job_results SET visible_response='changed' WHERE job_id=?",
+                    (self.outbox.job_id,),
+                )
+            self.hub.service.handle_update(_callback_update(1, callback))
+        send.assert_not_called()
+
+    def test_expired_copy_is_refused(self) -> None:
+        callback = self._copy_callback()
+        issued = datetime.now(timezone.utc) - timedelta(minutes=11)
+        with self.state._connection:
+            self.state._connection.execute(
+                "DROP TRIGGER telegram_delivery_hold_callback_tokens_no_update"
+            )
+            self.state._connection.execute(
+                "UPDATE telegram_delivery_hold_callback_tokens SET issued_at=?,expires_at=?",
+                (issued.isoformat(), (issued + timedelta(minutes=10)).isoformat()),
+            )
+        with patch.object(self.hub.telegram, "send_html") as send:
+            self.hub.service.handle_update(_callback_update(1, callback))
+        send.assert_not_called()
+
+    def test_copy_escapes_text_and_discloses_omitted_attachments(self) -> None:
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE provider_job_results SET visible_response=? WHERE job_id=?",
+                ("<saved & answer>", self.outbox.job_id),
+            )
+            self.state._connection.execute(
+                "INSERT INTO telegram_outbox_parts "
+                "(outbox_id,part_index,telegram_html,part_type,file_path,file_name,file_size,file_sha256) "
+                "VALUES (?,2,'attachment','document','/home/example/file','file',1,?)",
+                (self.outbox.outbox_id, "a" * 64),
+            )
+        callback = self._copy_callback()
+        with patch.object(self.hub.telegram, "send_html", return_value=22) as send:
+            self.hub.service.handle_update(_callback_update(1, callback))
+            self.hub.service.handle_update(_callback_update(1, callback, callback_id="repeat"))
+        self.assertEqual(send.call_count, 2)
+        text = send.call_args.args[2]
+        self.assertTrue(text.endswith("&lt;saved &amp; answer&gt;"))
+        self.assertIn("Вложения оригинала не включены", text)
+
+    def test_private_chat_unavailable_gives_content_free_notice(self) -> None:
+        callback = self._copy_callback()
+        for status, description in (
+            (403, "Forbidden: bot can't initiate conversation with a user"),
+            (403, "Forbidden: bot was blocked by the user"),
+            (400, "Bad Request: chat not found"),
+            (403, "Forbidden: user is deactivated"),
+        ):
+            with self.subTest(description=description):
+                with self.assertRaises(TelegramError) as raised:
+                    _api_result(
+                        "sendMessage",
+                        {"ok": False, "error_code": status, "description": description},
+                    )
+                with (
+                    patch.object(
+                        self.hub.telegram, "send_html", side_effect=[raised.exception, 23]
+                    ) as send,
+                    patch.object(self.hub.telegram, "answer_callback") as answer,
+                ):
+                    self.hub.service.handle_update(_callback_update(1, callback))
+                self.assertEqual(send.call_args_list[1].args[:2], (CHAT_ID, THREAD_ID))
+                self.assertNotIn("Fictional saved result", send.call_args_list[1].args[2])
+                self.assertIn("Start", send.call_args_list[1].args[2])
+                answer.assert_called_once()
+
+    def test_other_rejections_do_not_send_topic_notice(self) -> None:
+        callback = self._copy_callback()
+        for status, description in (
+            (400, "Bad Request: file is too big"),
+            (403, "Forbidden: unrelated"),
+        ):
+            with self.subTest(description=description):
+                with self.assertRaises(TelegramError) as raised:
+                    _api_result(
+                        "sendMessage",
+                        {"ok": False, "error_code": status, "description": description},
+                    )
+                with (
+                    patch.object(
+                        self.hub.telegram, "send_html", side_effect=raised.exception
+                    ) as send,
+                    patch.object(self.hub.telegram, "answer_callback") as answer,
+                ):
+                    self.hub.service.handle_update(_callback_update(1, callback))
+                send.assert_called_once()
+                self.assertEqual(send.call_args.args[0], OWNER_ID)
+                answer.assert_called_once()
+                self.assertNotIn("могла", answer.call_args.args[1])
+                self.assertNotIn("Личный чат недоступен", answer.call_args.args[1])
+
+    def test_rejected_long_copy_does_not_send_topic_notice(self) -> None:
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE provider_job_results SET visible_response=? WHERE job_id=?",
+                ("Fictional result " * 500, self.outbox.job_id),
+            )
+        callback = self._copy_callback()
+        with self.assertRaises(TelegramError) as raised:
+            _api_result(
+                "sendDocument",
+                {"ok": False, "error_code": 400, "description": "Bad Request: file is too big"},
+            )
+        paths = []
+
+        def reject_document(_chat: int, _thread: int, path: Path, **_kwargs: object) -> int:
+            paths.append(path)
+            raise raised.exception
+
+        with (
+            patch.object(
+                self.hub.telegram, "send_document", create=True, side_effect=reject_document
+            ) as send_document,
+            patch.object(self.hub.telegram, "send_html") as send,
+            patch.object(self.hub.telegram, "answer_callback") as answer,
+        ):
+            self.hub.service.handle_update(_callback_update(1, callback))
+        send_document.assert_called_once()
+        send.assert_not_called()
+        answer.assert_called_once()
+        self.assertIn("отклонил", answer.call_args.args[1])
+        self.assertEqual(len(paths), 1)
+        self.assertFalse(paths[0].exists())
+
+    def test_ambiguous_private_copy_is_not_retried(self) -> None:
+        callback = self._copy_callback()
+        with (
+            patch.object(
+                self.hub.telegram, "send_html", side_effect=TelegramError("timeout")
+            ) as send,
+            patch.object(self.hub.telegram, "answer_callback") as answer,
+        ):
+            self.hub.service.handle_update(_callback_update(1, callback))
+        send.assert_called_once()
+        self.assertIn("ещё раз", answer.call_args.args[1])
 
     def test_hub_owner_can_preview_then_explicitly_continue_one_exact_hold(self) -> None:
         """A delivered Hub warning can create a bounded preview and one safe decision."""

@@ -58,7 +58,7 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
     fallback nor recovery authority. Missing numeric Hub-bot identity keeps this remote control
     disabled.
   - Hub recovery MUST use a distinct `telegram_owner_callback` ledger, never `local_owner_cli` or
-    same-UID inference. A bounded opaque single-use callback capability MUST be issued only for a
+    same-UID inference. A bounded opaque callback capability MUST be issued only for a
     complete exact snapshot and bound to the configured owner, Hub-Bot message origin, numeric
     chat/topic, delivered warning, positively returned preview message, outbox/job/result and every
     ordered part/receipt/artifact record. The capability expires in ten minutes; an ambiguous preview
@@ -67,7 +67,13 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
     actor/chat/topic/message bindings and complete snapshot before appending the immutable remote
     decision. Expired, stale, foreign, cross-topic/message or conflicting callbacks MUST fail closed;
     an exact repeat by the same bound owner returns only its original decision. Telegram preview and
-    callback text MUST expose no local paths, digests, deployment data or capability value.
+    callback text MUST expose no local paths, digests, deployment data or capability value. Only one
+    continue decision may be recorded per capability; private copy presses may be repeated.
+  - A separate copy button MAY send the exact saved visible result to the bound owner's private Hub
+    chat after the same snapshot and origin checks. It MUST label the unconfirmed original and possible
+    duplicate in the topic, disclose omitted attachments, and leave all delivery evidence and FIFO
+    unchanged. Long text MUST be one private document; unavailable private chat permits only a
+    content-free instruction in the topic. An ambiguous copy send MUST NOT be retried automatically.
   - Queue-only consent MAY release only that exact delivery/FIFO barrier; it MUST NOT change unknown
     evidence, saved work, permissions, stop/holds, writers, native uncertainty or other control
     guards.
