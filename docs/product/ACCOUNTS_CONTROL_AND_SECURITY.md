@@ -170,8 +170,14 @@ refuse before inference; exact-session failure MUST NOT create a replacement.
 - **REQ-SEC-007 (Accepted):** Provider failure MUST be visible, reversible and isolated; recovery
   MUST NOT weaken security.
 - **REQ-SEC-008 (Minimal developer and workstation live accepted; temporary Bash consent
-  pending):** Claude tool access MUST follow an explicitly selected profile and verified launch
-  boundary; failed confinement MUST refuse, never launch unconfined.
+  pending):** Claude tool access MUST follow an explicitly selected profile. Confined profiles require a verified
+  launch boundary; failed confinement MUST refuse, never fall back to `host`.
+  - Explicit local `host` is unconfined and prompt-free by owner decision (ADR 0095): native
+    bypass permissions, real HOME and same UID, separate per-session Claude configuration,
+    CPA-only route, no permission hook or cards. It can act with the owner’s full authority.
+    Registered roots, single writer, stop, journaling and no uncertain replay remain mandatory.
+  - The following confinement, tool policy, hook and human-receipt requirements apply to confined
+    profiles; `host` does not claim those protections.
   - The editor profile permits project read/search and requires fresh human permission for each
     Write/Edit, with read-only ordinary Git metadata; editor acceptance MUST prove native
     enforcement, not merely manual settings.

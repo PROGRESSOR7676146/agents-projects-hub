@@ -44,6 +44,20 @@ _REQUIRED_OPTIONS = frozenset(
         "effort",
     }
 )
+# Host launches drop the confinement switches and use bypassPermissions instead.
+_HOST_OPTIONS = frozenset(
+    {
+        "print",
+        "output-format",
+        "verbose",
+        "permission-mode",
+        "session-id",
+        "resume",
+        "model",
+        "effort",
+    }
+)
+_BYPASS = re.compile(r"(?<![\w-])bypassPermissions(?![\w-])")
 # Help option rows are indented and have a bare switch, a declared argument,
 # or a description separated by at least two spaces. Prose mentions and
 # single-space sentences do not become declarations.
@@ -104,13 +118,21 @@ def _advertised_options(help_text: str) -> dict[str, list[str]]:
 
 
 def _has_required_advertisement(
-    output: bytes, *, file_tools: bool = False, image_input: bool = False
+    output: bytes, *, file_tools: bool = False, image_input: bool = False, host: bool = False
 ) -> bool:
     entries = _advertised_options(output.decode("utf-8", errors="replace"))
+    if host:
+        confinement = _HOST_OPTIONS.issubset(entries) and any(
+            _BYPASS.search(stanza) for stanza in entries["permission-mode"]
+        )
+    else:
+        confinement = (
+            _REQUIRED_OPTIONS.issubset(entries)
+            and any(_NONE.search(stanza) for stanza in entries["permission-prompts"])
+            and any(_DONT_ASK.search(stanza) for stanza in entries["permission-mode"])
+        )
     return (
-        _REQUIRED_OPTIONS.issubset(entries)
-        and any(_NONE.search(stanza) for stanza in entries["permission-prompts"])
-        and any(_DONT_ASK.search(stanza) for stanza in entries["permission-mode"])
+        confinement
         and (
             not image_input
             or "input-format" in entries
@@ -207,7 +229,7 @@ class ClaudeCliCapabilities:
     """Cache only successful help inspections for an unchanged executable."""
 
     def __init__(self) -> None:
-        self._success: dict[tuple[str, bool, bool], tuple[int, int, int, int, int]] = {}
+        self._success: dict[tuple[str, bool, bool, bool], tuple[int, int, int, int, int]] = {}
         self._lock = threading.Lock()
 
     def require(
@@ -219,6 +241,7 @@ class ClaudeCliCapabilities:
         interrupted: threading.Event,
         file_tools: bool = False,
         image_input: bool = False,
+        host: bool = False,
     ) -> str:
         """Return the resolved CLI path if its current help advertises all controls."""
         if interrupted.is_set():
@@ -241,7 +264,7 @@ class ClaudeCliCapabilities:
             path = os.path.realpath(path)
             before = _fingerprint(path)
             with self._lock:
-                if self._success.get((path, file_tools, image_input)) == before:
+                if self._success.get((path, file_tools, image_input, host)) == before:
                     if interrupted.is_set():
                         raise ClaudeCliCapabilityError()
                     return path
@@ -272,14 +295,14 @@ class ClaudeCliCapabilities:
                 except Exception:
                     raise ClaudeCliCleanupError() from None
             if not _has_required_advertisement(
-                output, file_tools=file_tools, image_input=image_input
+                output, file_tools=file_tools, image_input=image_input, host=host
             ):
                 raise ClaudeCliCapabilityError()
             after = _fingerprint(path)
             if interrupted.is_set() or after != before:
                 raise ClaudeCliCapabilityError()
             with self._lock:
-                self._success[(path, file_tools, image_input)] = after
+                self._success[(path, file_tools, image_input, host)] = after
             return path
         except Exception as error:
             if cleanup_failed:

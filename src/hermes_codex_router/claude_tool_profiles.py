@@ -6,6 +6,8 @@ BASH_PROFILES = frozenset({"developer", "workstation"})
 
 
 def profile_tools(profile: str) -> frozenset[str]:
+    if profile == "host":
+        return frozenset()
     if profile == "editor":
         return FILE_TOOLS
     if profile in BASH_PROFILES:

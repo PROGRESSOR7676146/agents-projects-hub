@@ -80,6 +80,7 @@ class DeveloperHostedLaunchTests(unittest.TestCase):
             ) as hosted,
         ):
             assert hosted is not None
+            assert isinstance(hosted.sandbox, FileToolSandboxConfig)
             self.assertEqual(hosted.sandbox.profile, "developer")
             self.assertIs(hosted.sandbox.toolchain, settings.toolchain)
             self.assertIs(hosted.sandbox._namespace.toolchain, settings.toolchain)

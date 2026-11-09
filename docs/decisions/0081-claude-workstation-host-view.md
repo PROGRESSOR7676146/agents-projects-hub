@@ -73,3 +73,8 @@ Claude has the same practical reach as Codex and the same residual risk. The
 limits move to operations: Hub state and project backups with tested restore,
 CPA and subscription budgets, the parallel-root limit, and recorded agent,
 model and revision provenance for each turn.
+
+## Later decision
+
+[ADR 0095](0095-claude-host-profile.md) adds an explicit unconfined, prompt-free
+`host` profile; this decision remains in force for confined profiles.

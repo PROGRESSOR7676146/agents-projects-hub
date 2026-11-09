@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import selectors
 import signal
 import subprocess
@@ -26,6 +27,7 @@ from .claude_corrections import ClaudeCorrectionCallbacks, ClaudeCorrectionInput
 from .claude_environment import claude_environment_prompt
 from .claude_file_policy import file_tool_argv, file_tool_event_policy, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from .claude_host_profile import ClaudeHostConfig, host_event_policy, validate_host_route_settings
 from .claude_image_input import (
     MAX_CLAUDE_INPUT_BYTES,
     ClaudeImageInputError,
@@ -217,6 +219,22 @@ def _claude_route_environment(
             "claude_cpa_credential_ambiguous",
             "Claude CPA credentials or provider selection are ambiguous.",
         )
+
+
+def _sandbox_argv(
+    argv: tuple[str, ...], sandbox: FileToolSandboxConfig | ClaudeHostConfig
+) -> tuple[str, ...]:
+    if isinstance(sandbox, ClaudeHostConfig):
+        return ExternalCliAdapter._host_argv(argv)
+    return file_tool_argv(argv, sandbox)
+
+
+def _sandbox_event_policy(
+    sandbox: FileToolSandboxConfig | ClaudeHostConfig | None,
+) -> Callable[[dict[str, object]], None] | None:
+    if isinstance(sandbox, ClaudeHostConfig):
+        return host_event_policy
+    return file_tool_event_policy(sandbox.profile) if sandbox is not None else None
 
 
 class ExternalCliAdapter:
@@ -439,14 +457,13 @@ class ExternalCliAdapter:
         new_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
         on_claude_process_started: Callable[[], None] | None = None,
-        claude_sandbox: FileToolSandboxConfig | None = None,
+        claude_sandbox: FileToolSandboxConfig | ClaudeHostConfig | None = None,
         claude_permission_wait: PermissionWaitClock | None = None,
         claude_images: tuple[VerifiedClaudeImage, ...] = (),
         project_id: str | None = None,
         claude_corrections: ClaudeCorrectionCallbacks | None = None,
     ) -> ExternalTurnResult:
-        if self.runtime == "claude" and claude_sandbox is not None and prompt.strip():
-            prompt = claude_environment_prompt(claude_sandbox) + "\n\n" + prompt
+        prompt = self._claude_turn_prompt(prompt, claude_sandbox)
         correction_input = self._prepare_claude_corrections(
             prompt, session_id or new_session_id, claude_corrections, bool(claude_images)
         )
@@ -471,7 +488,7 @@ class ExternalCliAdapter:
                     "claude_permission_host_unverified",
                     "Claude file tools require the owned process runner.",
                 )
-            argv = file_tool_argv(argv, claude_sandbox)
+            argv = _sandbox_argv(argv, claude_sandbox)
         if staging_dir is not None:
             environment["HUB_STAGING_DIR"] = str(staging_dir)
             environment["HUB_ARTIFACTS_DIR"] = str(staging_dir)
@@ -634,16 +651,18 @@ class ExternalCliAdapter:
             new_session_id=new_session_id,
             model=model,
             antigravity_log=antigravity_log,
-            event_policy=file_tool_event_policy(claude_sandbox.profile)
-            if claude_sandbox is not None
-            else None,
+            event_policy=_sandbox_event_policy(claude_sandbox),
         )
 
     def _turn_environment(
-        self, sandbox: FileToolSandboxConfig | None, project_id: str | None
+        self, sandbox: FileToolSandboxConfig | ClaudeHostConfig | None, project_id: str | None
     ) -> dict[str, str]:
         environment = os.environ.copy()
         if self.runtime == "claude":
+            if isinstance(sandbox, ClaudeHostConfig) and self.claude_auth_route != "cpa":
+                raise ProviderUnavailableError(
+                    "claude_cpa_route_unverified", "Claude host requires the CPA route."
+                )
             environment.update(self.claude_subscription_tokens)
             _claude_route_environment(
                 environment,
@@ -656,7 +675,59 @@ class ExternalCliAdapter:
             # Claude subscription accounts never reach another provider.
             _pop_claude_project_tokens(environment)
             environment.pop(CLAUDE_SUBSCRIPTION_TOKEN, None)
+        if isinstance(sandbox, ClaudeHostConfig):
+            try:
+                environment["HOME"] = pwd.getpwuid(os.geteuid()).pw_dir
+            except KeyError:
+                raise ProviderUnavailableError(
+                    "claude_host_unverified", "The owner home could not be resolved."
+                ) from None
+            for key in tuple(environment):
+                if (
+                    key
+                    in {
+                        "GOOGLE_APPLICATION_CREDENTIALS",
+                        "ANTHROPIC_CUSTOM_HEADERS",
+                        CLAUDE_SUBSCRIPTION_TOKEN,
+                        *_CLAUDE_CLOUD_SELECTORS,
+                    }
+                    or (key == "ANTHROPIC_API_KEY" and not environment[key])
+                    or (key == "ANTHROPIC_AUTH_TOKEN" and not environment[key])
+                    or key.startswith(("AWS_", "AZURE_", "GOOGLE_CLOUD_"))
+                ):
+                    environment.pop(key)
+            environment["CLAUDE_CONFIG_DIR"] = str(sandbox.provider_home)
+            environment.pop("HUB_CLAUDE_PERMISSION_SOCKET", None)
         return environment
+
+    def _claude_turn_prompt(
+        self, prompt: str, sandbox: FileToolSandboxConfig | ClaudeHostConfig | None
+    ) -> str:
+        if (
+            self.runtime == "claude"
+            and isinstance(sandbox, FileToolSandboxConfig)
+            and prompt.strip()
+        ):
+            return claude_environment_prompt(sandbox) + "\n\n" + prompt
+        return prompt
+
+    @staticmethod
+    def _host_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
+        result = list(argv)
+        for flag, count in (
+            ("--setting-sources", 2),
+            ("--restricted", 1),
+            ("--safe-mode", 1),
+            ("--settings", 2),
+            ("--strict-mcp-config", 1),
+            ("--disable-slash-commands", 1),
+            ("--permission-prompts", 2),
+            ("--tools", 2),
+        ):
+            index = result.index(flag)
+            del result[index : index + count]
+        result[result.index("--permission-mode") + 1] = "bypassPermissions"
+        return tuple(result)
 
     def _prepare_claude_corrections(
         self,
@@ -689,7 +760,7 @@ class ExternalCliAdapter:
         prompt: str,
         images: tuple[VerifiedClaudeImage, ...],
         session_id: str | None,
-        sandbox: FileToolSandboxConfig | None,
+        sandbox: FileToolSandboxConfig | ClaudeHostConfig | None,
     ) -> bytes | None:
         if not images:
             return None
@@ -730,7 +801,7 @@ class ExternalCliAdapter:
         expected_session_id: str | None,
         on_visible_assistant: VisibleAssistantCallback | None,
         on_process_started: Callable[[], None] | None,
-        sandbox: FileToolSandboxConfig | None,
+        sandbox: FileToolSandboxConfig | ClaudeHostConfig | None,
         permission_wait: PermissionWaitClock | None = None,
         input_data: bytes | None = None,
         correction_input: ClaudeCorrectionInput | None = None,
@@ -768,6 +839,43 @@ class ExternalCliAdapter:
                     input_data=input_data,
                     image_receipt=receipt,
                     permission_wait=permission_wait,
+                    correction_input=correction_input,
+                )
+        if isinstance(sandbox, ClaudeHostConfig):
+            try:
+                validate_host_route_settings(cwd, sandbox.provider_home)
+            except ValueError:
+                raise ProviderUnavailableError(
+                    "claude_cpa_route_unverified",
+                    "Claude settings could change the CPA route. The turn was not started.",
+                ) from None
+            if cwd.resolve(strict=True) != sandbox.project_root:
+                raise ProviderUnavailableError(
+                    "claude_host_unverified", "Claude project root changed."
+                )
+            with self._claude_stop_proof(expected_session_id):
+                argv = self._verified_claude_argv(
+                    (str(sandbox.claude_executable), *argv[1:]),
+                    cwd=cwd,
+                    environment=environment,
+                    image_input=input_data is not None,
+                    host=True,
+                )
+                if argv[0] != str(sandbox.claude_executable):
+                    raise ProviderUnavailableError(
+                        "claude_host_unverified", "Claude executable changed."
+                    )
+                return self._run_claude_process(
+                    argv,
+                    cwd=cwd,
+                    environment=environment,
+                    timeout=timeout,
+                    expected_session_id=expected_session_id,
+                    on_visible_assistant=on_visible_assistant,
+                    on_process_started=on_process_started,
+                    event_policy=host_event_policy,
+                    permission_wait=permission_wait,
+                    input_data=input_data,
                     correction_input=correction_input,
                 )
         try:
@@ -814,18 +922,20 @@ class ExternalCliAdapter:
         environment: dict[str, str],
         file_tools: bool = False,
         image_input: bool = False,
+        host: bool = False,
     ) -> tuple[str, ...]:
         """Bind advertised isolation controls to the executable before invocation."""
         if self._interrupt_requested.is_set():
             raise ExternalTurnInterrupted("claude turn interrupted by user")
         try:
             executable = self._claude_capabilities.require(
-                argv[0] if file_tools else self.executable,
+                argv[0] if file_tools or host else self.executable,
                 cwd=cwd,
                 environment=environment,
                 interrupted=self._interrupt_requested,
                 file_tools=file_tools,
                 image_input=image_input,
+                **({"host": True} if host else {}),
             )
         except ClaudeCliUnavailableError:
             raise ProviderUnavailableError(

@@ -118,3 +118,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0091: Workstation project without a trust scan](0091-workstation-project-not-trust-scanned.md) — `workstation` admits hardlinks, special files and large trees in the project like Codex; bind aliases with the session HOME still refuse; installed and live-accepted on 0.11.5.
 - [0092: Session hygiene and agent-run procedures](0092-session-hygiene-and-agent-run-procedures.md) — each session removes the worktrees, branches, kits and processes it created; agents run every technical procedure, and a step that still needs the owner is a tracked defect.
 - [0093: Hub-owner delivery-hold recovery](0093-hub-owner-delivery-hold-recovery.md) — a configured Telegram owner can release only one exact unknown saved-result FIFO hold through a Hub-bound preview/callback; delivery remains unknown and deployment/acceptance are pending.
+
+- [0095: Claude host profile](0095-claude-host-profile.md) — explicit unconfined, prompt-free owner authority.
