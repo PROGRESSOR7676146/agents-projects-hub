@@ -52,6 +52,7 @@ class ValidationTests(unittest.TestCase):
 
         output = io.StringIO()
         with (
+            patch.object(validator, "lower_local_priority", return_value=False),
             patch.object(validator, "run", side_effect=run),
             # A distinctive marker: a checkout path may itself contain "lock".
             patch.object(
@@ -114,6 +115,27 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL full tests", output)
         self.assertIn("test_example.py", output)
+
+    def test_local_gate_yields_cpu_but_ci_keeps_normal_priority(self) -> None:
+        with (
+            patch.object(validator.sys, "platform", "linux"),
+            patch.object(validator.os, "getpriority", return_value=0),
+            patch.object(validator.os, "setpriority") as setpriority,
+        ):
+            with patch.dict(os.environ, {"CI": "true"}):
+                self.assertFalse(validator.lower_local_priority())
+            setpriority.assert_not_called()
+            with patch.dict(os.environ, {"CI": ""}):
+                self.assertTrue(validator.lower_local_priority())
+            setpriority.assert_called_once_with(validator.os.PRIO_PROCESS, 0, 10)
+        with (
+            patch.object(validator.sys, "platform", "linux"),
+            patch.object(validator.os, "getpriority", return_value=19),
+            patch.object(validator.os, "setpriority") as setpriority,
+            patch.dict(os.environ, {"CI": ""}),
+        ):
+            self.assertTrue(validator.lower_local_priority())
+            setpriority.assert_not_called()
 
     def test_low_load_preserves_gates_and_caps_cli_or_environment_parallelism(self) -> None:
         with (

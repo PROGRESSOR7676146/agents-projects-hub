@@ -354,7 +354,10 @@ class ClaudeStreamTests(unittest.TestCase):
             (401, "claude_authentication_failed"),
             (429, "claude_quota_exhausted"),
             (529, "claude_provider_overloaded"),
-            (503, "claude_provider_failure"),
+            (500, "claude_provider_unavailable"),
+            (503, "claude_provider_unavailable"),
+            (504, "claude_provider_unavailable"),
+            (501, "claude_provider_failure"),
             (599, "claude_provider_failure"),
         ):
             with self.subTest(status=status), self.assertRaises(ClaudeTerminalFailure) as raised:
@@ -377,6 +380,11 @@ class ClaudeStreamTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, code)
             self.assertEqual(raised.exception.session_id, SESSION)
             self.assertNotIn("fictional provider error", str(raised.exception))
+            if code == "claude_provider_unavailable":
+                self.assertIn("network", str(raised.exception))
+                self.assertIn(
+                    "conversation and saved partial work are preserved", str(raised.exception)
+                )
 
     def test_typed_terminal_failures_have_bounded_actionable_messages(self) -> None:
         messages: set[str] = set()
@@ -448,7 +456,11 @@ class ClaudeStreamTests(unittest.TestCase):
             parse_claude_stream(output(missing_result), expected_session_id=SESSION)
 
     def test_native_http_failure_status_cannot_be_overridden_by_assistant_error(self) -> None:
-        for status in (400, 500, 503):
+        for status, code in (
+            (400, "claude_provider_failure"),
+            (500, "claude_provider_unavailable"),
+            (503, "claude_provider_unavailable"),
+        ):
             with self.subTest(status=status), self.assertRaises(ClaudeTerminalFailure) as raised:
                 parse_claude_stream(
                     output(
@@ -458,7 +470,7 @@ class ClaudeStreamTests(unittest.TestCase):
                     expected_session_id=SESSION,
                     returncode=1,
                 )
-            self.assertEqual(raised.exception.code, "claude_provider_failure")
+            self.assertEqual(raised.exception.code, code)
 
     def test_non_error_success_with_any_non_null_http_status_stays_uncertain(self) -> None:
         for status in ("529", True, False, 600, 0, [], {}, 200, 529, 529.0):

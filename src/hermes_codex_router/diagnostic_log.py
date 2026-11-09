@@ -106,6 +106,7 @@ SITES = frozenset(
         "outbox_sender.health_publish",
         "outbox_sender.message_draft",
         "outbox_sender.runtime_event_record",
+        "project_onboarding.outbox_claim_busy",
         "project_provisioner.client_disconnect",
         "project_provisioner.claim_contention",
         "project_provisioner.disconnect_after_unknown",
