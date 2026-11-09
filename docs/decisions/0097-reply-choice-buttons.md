@@ -37,4 +37,7 @@ from the model or the button.
 - Choices work in project topics. Direct-message choices are not implemented.
 - Buttons are sent by the Hub bot while the answer comes from the provider bot.
 - A failed keyboard edit leaves stale buttons visible; the claim still refuses them.
+- After a crash between admission and the claim, admission deduplicates a later
+  press and the mark shows the label that was actually admitted.
+- An expired callback query is acknowledged best-effort and never fails the press.
 - Installed and live Telegram acceptance remain pending.

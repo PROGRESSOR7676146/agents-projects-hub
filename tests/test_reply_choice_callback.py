@@ -198,6 +198,43 @@ class ReplyChoiceCallbackTests(unittest.TestCase):
         self.assertEqual([update["message"]["text"] for update in self.forwarded], ["Yes"])
         self.assertEqual(self.telegram.callbacks[-1], ("cb-2", "Выбор уже сделан"))
 
+    def test_expired_query_on_a_refused_press_is_survived(self) -> None:
+        def expired(callback_id: str, text: str = "") -> None:
+            raise TelegramError("fictional query is too old")
+
+        cast(Any, self.telegram).answer_callback = expired
+        self.assertTrue(self.press("cb-1", "ch:done"))
+        self.service.state.new_active_session(self.topic_id)
+        self.assertTrue(self.press("cb-2", "ch:0"))
+        self.assertEqual(self.forwarded, [])
+
+    def test_mark_shows_the_label_admitted_before_a_crash(self) -> None:
+        # Admission of "Yes" committed, then a crash before the claim: a later
+        # press of "No" is deduplicated by admission and must mark "Yes".
+        session = self.service.state.active_session(self.topic_id)
+        assert session is not None
+        self.service.state.enqueue_or_append_provider_job(
+            idempotency_key="choice-crash:555",
+            chat_id=CHAT,
+            message_id=555,
+            topic_id=self.topic_id,
+            agent_id=session.agent_id,
+            session_id=session.session_id,
+            session_generation=session.generation,
+            model=session.model,
+            effort=session.effort,
+            payload_text="Yes",
+            appended_user_text="Yes",
+            quiet_ms=1000,
+            max_ms=2000,
+        )
+        self.assertTrue(self.press("cb-2", "ch:1"))
+        _, params = self.telegram.calls[-1]
+        self.assertEqual(
+            json.loads(str(params["reply_markup"]))["inline_keyboard"][0][0]["text"], "✓ Yes"
+        )
+        self.assertEqual(self.telegram.callbacks[-1], ("cb-2", "Отправлено: Yes"))
+
     def test_current_binding_cannot_reuse_an_old_keyboard(self) -> None:
         self.assertTrue(self.press("cb-1", "ch:0", keyboard_binding="0123456789ab"))
         self.assertEqual(self.forwarded, [])

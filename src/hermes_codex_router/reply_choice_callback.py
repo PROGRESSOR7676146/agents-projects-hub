@@ -31,19 +31,17 @@ def handle_reply_choice(
         or parsed[0] >= len(labels)
         or callback.choice_data[parsed[0]] != callback.data
     ):
-        service.telegram.answer_callback(callback.callback_id, "Выбор уже сделан")
+        _answer(service, callback.callback_id, "Выбор уже сделан")
         return True
     index, binding = parsed
     active = service.state.active_session(topic_id)
     if active is None or session_binding(active.session_id) != binding:
-        service.telegram.answer_callback(
-            callback.callback_id, "Эти варианты относятся к прошлой сессии"
-        )
+        _answer(service, callback.callback_id, "Эти варианты относятся к прошлой сессии")
         return True
     label = labels[index]
     record = f"choice:{callback.chat_id}:{callback.message_id}"
     if _choice_recorded(service, record):
-        service.telegram.answer_callback(callback.callback_id, "Выбор уже сделан")
+        _answer(service, callback.callback_id, "Выбор уже сделан")
         return True
     synthetic_update_id = -(
         int.from_bytes(hashlib.sha256(callback.callback_id.encode("utf-8")).digest()[:4], "big") + 1
@@ -72,6 +70,10 @@ def handle_reply_choice(
     )
     if not accepted:
         return False
+    # Admission is idempotent per pressed message: after a crash between
+    # admission and the claim below, a later press of another button is
+    # deduplicated, so the mark must show the label that was actually admitted.
+    label = _admitted_label(service, callback, labels) or label
     service.state.claim_callback(
         record, observer_agent_id=getattr(service, "ingress_identity", service.agent.agent_id)
     )
@@ -90,6 +92,24 @@ def handle_reply_choice(
         # The reply is already accepted; stale buttons are refused by the record.
         survived("reply_choice.markup", error)
     return True
+
+
+def _answer(service: Any, callback_id: str, text: str) -> None:
+    # An expired query ("query is too old") must not fail the press handling.
+    try:
+        service.telegram.answer_callback(callback_id, text)
+    except TelegramError as error:
+        survived("reply_choice.markup", error)
+
+
+def _admitted_label(service: Any, callback: TopicCallback, labels: tuple[str, ...]) -> str | None:
+    row = service.state._connection.execute(
+        """SELECT input_text FROM provider_job_inputs
+           WHERE chat_id = ? AND message_id = ? ORDER BY part_index LIMIT 1""",
+        (callback.chat_id, callback.message_id),
+    ).fetchone()
+    text = None if row is None else row[0]
+    return text if text in labels else None
 
 
 def _choice_recorded(service: Any, record: str) -> bool:
