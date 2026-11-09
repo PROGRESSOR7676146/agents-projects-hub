@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-11-09
+
 - Allow fixture-tested forward schema deployments with a separately prepared
   compatible rollback release and schema-aware recovery (ADR 0094).
 
