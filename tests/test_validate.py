@@ -125,15 +125,15 @@ class ValidationTests(unittest.TestCase):
             with patch.dict(os.environ, {"CI": "true"}):
                 self.assertFalse(validator.lower_local_priority())
             setpriority.assert_not_called()
-            os.environ.pop("CI", None)
-            self.assertTrue(validator.lower_local_priority())
+            with patch.dict(os.environ, {"CI": ""}):
+                self.assertTrue(validator.lower_local_priority())
             setpriority.assert_called_once_with(validator.os.PRIO_PROCESS, 0, 10)
         with (
             patch.object(validator.sys, "platform", "linux"),
             patch.object(validator.os, "getpriority", return_value=19),
             patch.object(validator.os, "setpriority") as setpriority,
+            patch.dict(os.environ, {"CI": ""}),
         ):
-            os.environ.pop("CI", None)
             self.assertTrue(validator.lower_local_priority())
             setpriority.assert_not_called()
 

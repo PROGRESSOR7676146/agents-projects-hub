@@ -13,6 +13,7 @@ from typing import Callable
 
 from .diagnostic_log import survived
 from .registry import PROJECT_ID
+from .sqlite_contention import is_sqlite_contention
 from .state import HubState, StateError
 
 WORKFLOW_TTL = timedelta(minutes=30)
@@ -991,6 +992,9 @@ class ProjectOnboardingStore:
         except sqlite3.OperationalError as exc:
             # A busy database is transient and nothing was claimed: the next
             # cycle retries. Raising here would stop the whole Controller.
+            # Any other database fault still propagates.
+            if not is_sqlite_contention(exc):
+                raise
             survived("project_onboarding.outbox_claim_busy", exc)
             return None
 
