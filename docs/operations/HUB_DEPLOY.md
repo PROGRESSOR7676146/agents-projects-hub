@@ -115,6 +115,12 @@ the candidate runtime and private evidence; it does not change installed service
 files or restart services. A Claude config filename containing the first seven
 characters of the old revision is changed to the new prefix; otherwise its
 existing name is retained. The candidate runtime validates both Hub configs.
+The Hub config is the authority for Claude settings: the plan is refused when
+its Claude agent definitions (except `executable`) or Claude permission
+settings differ from the candidate Claude worker config. Only the release
+overlay may differ — the CLI executable and a confined profile's runtime paths
+and pin. The Controller and monitor read the Hub config, so a drifted copy there
+would misreport the Claude workers' real configuration.
 Release unit templates are included as changes only when their bytes differ;
 unchanged templates are recorded as guards.
 

@@ -322,6 +322,7 @@ class StageFixture(unittest.TestCase):
                 {"root": str(self.old), "sha256": "c" * 64}
             ]
         (self.configs / f"claude-{self.old_sha[:7]}.json").write_text(json.dumps(config))
+        self.hub.write_text(json.dumps(config))
         for unit in self.install["restart_order"]:
             directory = self.units / (unit + ".d")
             directory.mkdir(exist_ok=True)
@@ -1167,12 +1168,35 @@ class WindowTests(StageFixture):
         self.sleeps = []
         self.fail_verify_old = False
 
+    def test_claude_settings_drift_between_configs_refuses_the_plan(self):
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, python=Path("/usr/bin/python3")
+        )
+        hub = json.loads(self.hub.read_text())
+        drifted = copy.deepcopy(hub)
+        drifted["claude_file_permissions"]["profile"] = "host"
+        for changed in (drifted, {**hub, "agents": [{"runtime": "claude", "auth_route": "x"}]}):
+            with self.subTest(changed=changed):
+                self.hub.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(hub_deploy.Refused, "Claude settings differ"):
+                    hub_deploy.create_plan(self.install, old, new, self.runner)
+        # The release overlay alone (executable, runtime paths) is not drift.
+        overlay = copy.deepcopy(hub)
+        overlay["agents"][0]["executable"] = "/home/example/other/bin/claude"
+        overlay["claude_file_permissions"]["runtime_roots"] = ["/home/example/other"]
+        self.hub.write_text(json.dumps(overlay))
+        hub_deploy.create_plan(self.install, old, new, self.runner)
+
     def test_host_profile_deploys_and_keeps_its_permissions(self):
         config = self.configs / f"claude-{self.old_sha[:7]}.json"
         data = json.loads(config.read_text())
         host = {"profile": "host", "provider_home": "/home/example/claude-host-sessions"}
         data["claude_file_permissions"] = host
         config.write_text(json.dumps(data))
+        self.hub.write_text(json.dumps(data))
         old = hub_deploy.discover_installation(
             self.install, self.runner, lambda *_: True, lambda _: 0
         )
