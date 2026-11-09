@@ -1190,6 +1190,14 @@ class WindowTests(StageFixture):
         )
         self.assertEqual(candidate["claude_file_permissions"], host)
         self.assertTrue(candidate["agents"][0]["executable"].startswith(new["root"] + "/"))
+        window = self.require_window()
+        result = hub_deploy.rollback_window(
+            self.install, window["id"], self.manager, self.window_runner, self.sleeps.append
+        )
+        self.assertEqual(result["outcome"], "ROLLED_BACK")
+        restored = json.loads(config.read_text())
+        self.assertEqual(restored["claude_file_permissions"], host)
+        self.assertEqual(restored["agents"][0]["executable"], data["agents"][0]["executable"])
 
     def require_window(self) -> dict[str, Any]:
         window = hub_deploy.last_window(self.install)
