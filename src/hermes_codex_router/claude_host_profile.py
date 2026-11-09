@@ -11,6 +11,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+# A host turn has the owner's CLI rights, so it also gets a CLI-like duration:
+# long builds and test runs must not be cut at the confined 900 s default.
+# The cap only bounds a hung CLI; /stop, no-progress notices and scope cleanup
+# remain the owner's controls (ADR 0095).
+HOST_TURN_SECONDS = 6 * 3600
+
 
 @dataclass(frozen=True, slots=True)
 class ClaudeHostConfig:
