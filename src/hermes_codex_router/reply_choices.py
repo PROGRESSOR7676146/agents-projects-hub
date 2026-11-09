@@ -34,9 +34,33 @@ def _valid_labels(raw: list[str]) -> tuple[str, ...] | None:
         return None
     if any(not label.isprintable() for label in labels):
         return None
+    # A pressed label is sent as text; a slash would make it a Hub command.
+    if any(label.startswith("/") for label in labels):
+        return None
     if len({label.casefold() for label in labels}) != len(labels):
         return None
     return labels
+
+
+_FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+
+
+def _open_fence(lines: list[str]) -> bool:
+    """Whether Markdown text ends inside a fenced code block (CommonMark fences)."""
+    opened: str | None = None
+    for line in lines:
+        match = _FENCE.match(line)
+        if match is None:
+            continue
+        fence = match.group("fence")
+        if opened is None:
+            if not (fence[0] == "`" and "`" in match.group("info")):
+                opened = fence
+        elif (
+            fence[0] == opened[0] and len(fence) >= len(opened) and not match.group("info").strip()
+        ):
+            opened = None
+    return opened is not None
 
 
 def extract_reply_choices(text: str) -> tuple[str, tuple[str, ...]]:
@@ -46,7 +70,7 @@ def extract_reply_choices(text: str) -> tuple[str, tuple[str, ...]]:
     if match is None:
         return text, ()
     preceding = lines[:-1]
-    if sum(line.lstrip().startswith("```") for line in preceding) % 2:
+    if _open_fence(preceding):
         # The marker is inside an unclosed code fence: it is example content.
         return text, ()
     labels = _valid_labels(match.group("body").split("|"))

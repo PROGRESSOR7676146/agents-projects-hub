@@ -33,8 +33,20 @@ class ReplyChoicesTests(unittest.TestCase):
         self.assertEqual(extract_reply_choices(source), (source, ()))
 
     def test_marker_inside_an_open_code_fence_is_ignored(self) -> None:
-        source = "Example:\n```\n[[choices: A | B]]"
-        self.assertEqual(extract_reply_choices(source), (source, ()))
+        for fence in (
+            "Example:\n```\n",
+            "Example:\n~~~\n",
+            "Example:\n````md\n```\n",
+            "Example:\n~~~\n```\n",
+        ):
+            source = fence + "[[choices: A | B]]"
+            self.assertEqual(extract_reply_choices(source), (source, ()), fence)
+
+    def test_marker_after_a_closed_code_fence_is_used(self) -> None:
+        for fence in ("```\ncode\n```\n", "~~~~\ncode\n~~~~~\n", "````\n```\n````\n"):
+            text, labels = extract_reply_choices("Before\n" + fence + "[[choices: A | B]]")
+            self.assertEqual(labels, ("A", "B"), fence)
+            self.assertEqual(text, ("Before\n" + fence).rstrip())
 
     def test_invalid_label_sets_leave_the_text_visible(self) -> None:
         for marker in (
@@ -43,6 +55,7 @@ class ReplyChoicesTests(unittest.TestCase):
             "[[choices: A | ]]",
             "[[choices: " + " | ".join(str(i) for i in range(7)) + "]]",
             "[[choices: A | " + "x" * 41 + "]]",
+            "[[choices: Continue | /stop]]",
         ):
             source = f"Question\n{marker}"
             self.assertEqual(extract_reply_choices(source), (source, ()), marker)

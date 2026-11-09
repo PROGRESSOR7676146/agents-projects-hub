@@ -12,7 +12,8 @@ owner, topic and session, and that model-supplied commands never execute.
 ## Decision
 
 A provider ends a visible answer with one last line `[[choices: A | B]]`: 2–6
-distinct printable labels of at most 40 characters, outside an open code fence.
+distinct printable labels of at most 40 characters, none starting with `/`
+(so a button cannot issue a Hub command), outside an open code fence.
 Hub removes a valid line from the answer; an invalid one stays visible text.
 
 The labels travel with the formatted answer and become one extra final outbox

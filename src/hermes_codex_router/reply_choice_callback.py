@@ -2,8 +2,8 @@
 
 The Controller authorizes the sender and resolves the topic before this runs.
 Here the press is checked against the pressed message and the topic's current
-Hub session, claimed once per message, acknowledged, and then forwarded as the
-sender's ordinary text reply through normal ingress. It adds no authority: the
+Hub session, forwarded as the sender's ordinary text reply through normal
+ingress, and only then recorded and acknowledged, so a failure cannot lose it. It adds no authority: the
 result is the same as typing the label.
 """
 
@@ -24,7 +24,13 @@ def handle_reply_choice(
     """Turn one pressed choice into the sender's ordinary reply, once."""
     parsed = parse_choice_callback(callback.data)
     labels = callback.choice_labels
-    if parsed is None or parsed[0] >= len(labels):
+    # The data must be exactly one button of the pressed message: a client can
+    # send any callback data, so the binding is checked against the keyboard.
+    if (
+        parsed is None
+        or parsed[0] >= len(labels)
+        or callback.choice_data[parsed[0]] != callback.data
+    ):
         service.telegram.answer_callback(callback.callback_id, "Выбор уже сделан")
         return True
     index, binding = parsed
@@ -35,32 +41,17 @@ def handle_reply_choice(
         )
         return True
     label = labels[index]
-    # First press wins across buttons, duplicate deliveries and restarts.
-    if not service.state.claim_callback(
-        f"choice:{callback.chat_id}:{callback.message_id}",
-        observer_agent_id=getattr(service, "ingress_identity", service.agent.agent_id),
-    ):
+    record = f"choice:{callback.chat_id}:{callback.message_id}"
+    if _choice_recorded(service, record):
         service.telegram.answer_callback(callback.callback_id, "Выбор уже сделан")
         return True
-    try:
-        service.telegram.call(
-            "editMessageReplyMarkup",
-            chat_id=callback.chat_id,
-            message_id=callback.message_id,
-            reply_markup=json.dumps(
-                {"inline_keyboard": [[{"text": f"✓ {label}", "callback_data": "ch:done"}]]},
-                ensure_ascii=False,
-            ),
-        )
-    except TelegramError as error:
-        # The reply below is the outcome; stale buttons are refused by the claim.
-        survived("reply_choice.markup", error)
-    service.telegram.answer_callback(callback.callback_id, f"Отправлено: {label}")
     synthetic_update_id = -(
         int.from_bytes(hashlib.sha256(callback.callback_id.encode("utf-8")).digest()[:4], "big") + 1
     )
     synthetic_message: dict[str, object] = {
         # The pressed Hub message id is unique in the chat and never a user message.
+        # Durable admission is idempotent per (chat, message id), so a press that
+        # is retried after a failure below cannot start a second turn.
         "message_id": callback.message_id,
         "from": {"id": callback.sender_id, "is_bot": False},
         "chat": {
@@ -74,6 +65,37 @@ def handle_reply_choice(
     if callback.thread_id != 1:
         synthetic_message["message_thread_id"] = callback.thread_id
         synthetic_message["is_topic_message"] = True
-    return service.handle_update(
+    # Forward first: until ingress accepts the reply nothing marks the choice as
+    # made, so a failure here leaves the buttons usable for another press.
+    accepted = service.handle_update(
         _InternalSyntheticTopicUpdate(update_id=synthetic_update_id, message=synthetic_message)
+    )
+    if not accepted:
+        return False
+    service.state.claim_callback(
+        record, observer_agent_id=getattr(service, "ingress_identity", service.agent.agent_id)
+    )
+    try:
+        service.telegram.call(
+            "editMessageReplyMarkup",
+            chat_id=callback.chat_id,
+            message_id=callback.message_id,
+            reply_markup=json.dumps(
+                {"inline_keyboard": [[{"text": f"✓ {label}", "callback_data": "ch:done"}]]},
+                ensure_ascii=False,
+            ),
+        )
+        service.telegram.answer_callback(callback.callback_id, f"Отправлено: {label}")
+    except TelegramError as error:
+        # The reply is already accepted; stale buttons are refused by the record.
+        survived("reply_choice.markup", error)
+    return True
+
+
+def _choice_recorded(service: Any, record: str) -> bool:
+    return (
+        service.state._connection.execute(
+            "SELECT 1 FROM observed_callbacks WHERE callback_id = ?", (record,)
+        ).fetchone()
+        is not None
     )

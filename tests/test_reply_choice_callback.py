@@ -18,7 +18,7 @@ from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.reply_choices import session_binding
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
-from hermes_codex_router.telegram import parse_topic_callback
+from hermes_codex_router.telegram import TelegramError, parse_topic_callback
 from tests.git_fixtures import init_git_root
 from tests.test_service_integration import (
     FakeClient,
@@ -119,15 +119,27 @@ class ReplyChoiceCallbackTests(unittest.TestCase):
         self.topic_id = topic.topic_id
         self.binding = session_binding(session.session_id)
 
-    def press(self, callback_id: str, data: str, *, sender_id: int = 42) -> bool:
+    def press(
+        self,
+        callback_id: str,
+        data: str,
+        *,
+        sender_id: int = 42,
+        keyboard_binding: str | None = None,
+        forward: Any = None,
+    ) -> bool:
         if data.startswith("ch:") and data != "ch:done":
             data = f"{data}:{self.binding}"
         parsed = parse_topic_callback(
-            choice_callback(callback_id, data, sender_id=sender_id, binding=self.binding)
+            choice_callback(
+                callback_id, data, sender_id=sender_id, binding=keyboard_binding or self.binding
+            )
         )
         assert parsed is not None
         service = cast(Any, self.service)
-        service.handle_update = lambda update: self.forwarded.append(dict(update)) or True
+        service.handle_update = forward or (
+            lambda update: self.forwarded.append(dict(update)) or True
+        )
         return bool(service._handle_callback(parsed))
 
     def test_first_press_becomes_the_owner_reply_and_marks_the_choice(self) -> None:
@@ -157,6 +169,39 @@ class ReplyChoiceCallbackTests(unittest.TestCase):
         self.assertTrue(self.press("cb-1", "ch:done"))
         self.assertTrue(self.press("cb-2", "ch:7"))
         self.assertEqual(self.forwarded, [])
+
+    def test_failed_forwarding_keeps_the_choice_available(self) -> None:
+        def failing(update: object) -> bool:
+            raise RuntimeError("ingress failed before admission")
+
+        with self.assertRaises(RuntimeError):
+            self.press("cb-1", "ch:0", forward=failing)
+        self.assertEqual(self.telegram.calls, [])
+        self.assertTrue(self.press("cb-2", "ch:1"))
+        self.assertEqual([update["message"]["text"] for update in self.forwarded], ["No"])
+
+    def test_rejected_forwarding_keeps_the_choice_available(self) -> None:
+        self.assertFalse(self.press("cb-1", "ch:0", forward=lambda update: False))
+        self.assertTrue(self.press("cb-2", "ch:0"))
+        self.assertEqual(len(self.forwarded), 1)
+
+    def test_telegram_failure_after_acceptance_keeps_one_reply(self) -> None:
+        def broken_answer(callback_id: str, text: str = "") -> None:
+            raise TelegramError("fictional acknowledgement failure")
+
+        cast(Any, self.telegram).answer_callback = broken_answer
+        self.assertTrue(self.press("cb-1", "ch:0"))
+        cast(Any, self.telegram).answer_callback = FakeTelegram.answer_callback.__get__(
+            self.telegram
+        )
+        self.assertTrue(self.press("cb-2", "ch:1"))
+        self.assertEqual([update["message"]["text"] for update in self.forwarded], ["Yes"])
+        self.assertEqual(self.telegram.callbacks[-1], ("cb-2", "Выбор уже сделан"))
+
+    def test_current_binding_cannot_reuse_an_old_keyboard(self) -> None:
+        self.assertTrue(self.press("cb-1", "ch:0", keyboard_binding="0123456789ab"))
+        self.assertEqual(self.forwarded, [])
+        self.assertEqual(self.telegram.callbacks[-1], ("cb-1", "Выбор уже сделан"))
 
     def test_choices_from_an_earlier_session_are_refused(self) -> None:
         self.service.state.new_active_session(self.topic_id)

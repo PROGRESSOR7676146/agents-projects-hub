@@ -69,6 +69,28 @@ class ReplyChoiceDeliveryTests(unittest.TestCase):
         finally:
             sender.close()
 
+    def test_multipart_answer_sends_buttons_only_after_every_part(self) -> None:
+        answer = "".join(f"Line {n}\n" for n in range(1500)) + "[[choices: Yes | No]]"
+        job_id = self.fixture.ready_outbox(
+            "opencode", 83, telegram_html=format_agent_response(answer, {})
+        )
+        bot = MarkupBot()
+        hub = MarkupBot()
+        sender = self.fixture.sender(opencode=bot, antigravity=fixtures.Bot(), hub=hub)
+        try:
+            while sender._deliver_one("opencode"):
+                pass
+            self.assertGreater(len(bot.sent), 1)
+            self.assertEqual(len(hub.sent), 1)
+            parts = sender.state.get_telegram_outbox_parts(
+                sender.state.get_telegram_outbox_for_job(job_id).outbox_id
+            )
+            self.assertTrue(parts[-1].telegram_html.startswith("[[hub-choices:v1:"))
+            self.assertTrue(all(part.telegram_message_id for part in parts))
+            self.assertFalse(any("hub-choices" in text for _, _, text in bot.sent))
+        finally:
+            sender.close()
+
     def test_answer_without_choices_is_one_unchanged_part(self) -> None:
         html = format_agent_response("Plain answer", {"Agent": "Example"})
         self.fixture.ready_outbox("opencode", 82, telegram_html=html)
