@@ -1357,6 +1357,14 @@ _DEPENDENCIES = (
 )
 
 
+def _rerun_helper(manager: Any, unit: str) -> bool:
+    """A oneshot without RemainAfterExit is re-run by every dependent start."""
+    return (
+        manager.property(unit, "Type") == "oneshot"
+        and manager.property(unit, "RemainAfterExit") == "no"
+    )
+
+
 def _check_dependencies(
     manager: Any, operated: list[str], untouched: list[str], config_only: tuple[str, ...] = ()
 ) -> None:
@@ -1399,11 +1407,7 @@ def _check_dependencies(
     helper_ids: set[str] = set()
     for unit in config_only:
         read(unit)
-        if (
-            not aliases[unit] & strict
-            and manager.property(unit, "Type") == "oneshot"
-            and manager.property(unit, "RemainAfterExit") == "no"
-        ):
+        if not aliases[unit] & strict and _rerun_helper(manager, unit):
             helper_ids.update(aliases[unit])
     pending = [(unit, action, "") for unit in operated for action in ("start", "stop")]
     visited: set[tuple[str, str, str]] = set()
@@ -1468,7 +1472,12 @@ def _check_template_instances(
 
 
 def _verify_config_only(
-    plan: dict[str, Any], manager: Any, untouched: dict[str, Any], role: str
+    plan: dict[str, Any],
+    manager: Any,
+    untouched: dict[str, Any],
+    role: str,
+    *,
+    started: bool = False,
 ) -> None:
     root = plan[role]["root"]
     others = {
@@ -1477,9 +1486,23 @@ def _verify_config_only(
         if key in plan
     } - {root}
     for unit in plan["config_only_units"]:
-        need(
-            manager.identity(unit) == untouched["units"][unit], "config-only unit changed: " + unit
-        )
+        if unit not in plan["untouched_units"] and _rerun_helper(manager, unit):
+            # Dependent starts re-run it, so its identity changes. Before starts only its
+            # configuration is checked; after starts it must have finished successfully.
+            need(
+                not started
+                or (
+                    manager.property(unit, "ActiveState") == "inactive"
+                    and manager.property(unit, "SubState") == "dead"
+                    and manager.property(unit, "Result") == "success"
+                ),
+                "config-only helper not finished successfully: " + unit,
+            )
+        else:
+            need(
+                manager.identity(unit) == untouched["units"][unit],
+                "config-only unit changed: " + unit,
+            )
         required = set()
         for entry in plan["files"]:
             path = Path(entry["path"])
@@ -1728,6 +1751,7 @@ def _verify(
                 manager,
                 untouched,
                 role or ("new_runtime" if runtime == plan["new_runtime"] else "old_runtime"),
+                started=True,
             )
             for unit in plan["untouched_units"]:
                 need(
