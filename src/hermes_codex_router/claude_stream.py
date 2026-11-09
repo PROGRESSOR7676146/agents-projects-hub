@@ -387,6 +387,9 @@ def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | N
         return "claude_authentication_failed"
     if type(status) is int and status == 529:
         return "claude_provider_overloaded"
+    if type(status) is int and status in {500, 502, 503, 504}:
+        # Reached only after the CLI's own retries: a network, DNS or upstream outage.
+        return "claude_provider_unavailable"
     if subtype == "success":
         # The reinterpreted native HTTP failure is proven by the exact status;
         # assistant text must not turn another 4xx/5xx into quota evidence.
@@ -421,6 +424,12 @@ def _terminal_failure_message(code: str) -> str:
         "claude_provider_overloaded": (
             "Claude reported temporary provider overload.",
             inspect_work,
+        ),
+        "claude_provider_unavailable": (
+            "Claude could not reach its API after retrying "
+            "(a temporary network, DNS or upstream outage).",
+            "The conversation and saved partial work are preserved; once the connection is "
+            "back, send a short follow-up such as “continue” to resume.",
         ),
         "claude_turn_limit": ("Claude reached the configured turn limit.", inspect_limits),
         "claude_budget_exhausted": (

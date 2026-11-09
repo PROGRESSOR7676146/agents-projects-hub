@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
+from .diagnostic_log import survived
 from .registry import PROJECT_ID
 from .state import HubState, StateError
 
@@ -985,6 +986,15 @@ class ProjectOnboardingStore:
         )
 
     def claim_outbox(self, sender_id: str) -> OnboardingOutbox | None:
+        try:
+            return self._claim_outbox(sender_id)
+        except sqlite3.OperationalError as exc:
+            # A busy database is transient and nothing was claimed: the next
+            # cycle retries. Raising here would stop the whole Controller.
+            survived("project_onboarding.outbox_claim_busy", exc)
+            return None
+
+    def _claim_outbox(self, sender_id: str) -> OnboardingOutbox | None:
         token = _token()
         now = self._now()
         with self.state._immediate_transaction():

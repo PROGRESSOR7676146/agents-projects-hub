@@ -47,6 +47,24 @@ def enable_low_load() -> None:
     )
 
 
+def lower_local_priority() -> bool:
+    """Best effort: a local gate yields CPU to services on the same host.
+
+    A full parallel run at normal priority once starved a live Hub on the
+    developer's machine until its SQLite writers timed out. CI hosts nothing
+    else, so it keeps normal priority.
+    """
+    if os.environ.get("CI") == "true" or sys.platform != "linux":
+        return False
+    try:
+        current = os.getpriority(os.PRIO_PROCESS, 0)
+        if current < 10:
+            os.setpriority(os.PRIO_PROCESS, 0, 10)
+    except OSError:
+        return False
+    return True
+
+
 def parse_test_jobs(value: str) -> int:
     try:
         jobs = int(value)
@@ -559,6 +577,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     }[args.profile]
     print(label, flush=True)
     started = time.monotonic()
+    if not args.low_load and lower_local_priority():
+        print("Local host: validation runs at background CPU priority (nice=10)", flush=True)
     if args.low_load:
         try:
             enable_low_load()

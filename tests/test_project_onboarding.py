@@ -380,6 +380,20 @@ class ProjectOnboardingTests(unittest.TestCase):
             worker.close()
         self.assertEqual(replacement.create_calls, 0)
 
+    def test_busy_database_on_outbox_claim_does_not_stop_the_controller(self) -> None:
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
+        controller.telegram = FakeTelegram()
+        try:
+            with patch.object(
+                controller.state,
+                "_immediate_transaction",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ):
+                self.assertFalse(controller.run_project_onboarding_outbox_cycle())
+        finally:
+            controller.state.close()
+
     def test_completion_notice_without_real_message_id_becomes_unknown(self) -> None:
         workflow_id = self.prepare_workflow()
         worker = ProjectProvisioner(self.config, client=FakeProvisioningClient())

@@ -5,6 +5,15 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Report a Claude turn that ends on HTTP 500/502/503/504 after the CLI's own
+  retries as `claude_provider_unavailable` (temporary network, DNS or upstream
+  outage; conversation preserved, send a follow-up to resume) instead of a
+  generic terminal provider failure.
+- Keep the Controller running when the project-onboarding outbox claim meets a
+  busy SQLite database; the next cycle retries instead of the service exiting.
+- Run local repository validation at background CPU priority (nice 10) outside
+  CI, so a full parallel gate cannot starve a live Hub on the same host.
+
 ## [0.11.9] - 2026-11-09
 
 - Give Claude `host` turns a six-hour deadline instead of the confined 900-second
