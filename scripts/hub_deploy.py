@@ -1265,6 +1265,14 @@ def inspect_unit(unit: str, root: str, runner: Callable[..., Any]) -> bool:
     return any(arg.startswith(prefix) for arg in args)
 
 
+def _unit_list(manager: Any, unit: str, name: str) -> list[str]:
+    """Split a unit-list property; systemctl quotes escaped names such as slices."""
+    try:
+        return shlex.split(manager.property(unit, name))
+    except ValueError:
+        raise Refused(f"malformed {name} property of {unit}") from None
+
+
 class ServiceManager:
     def __init__(self, runner: Callable[..., Any]):
         self.runner = runner
@@ -1358,11 +1366,10 @@ def _check_dependencies(manager: Any, operated: list[str], untouched: list[str])
         if unit not in cache:
             need(len(cache) < 2048, "dependency graph too large")
             identity = manager.property(unit, "Id")
-            names = set(shlex.split(manager.property(unit, "Names")))
+            names = set(_unit_list(manager, unit, "Names"))
             need(identity in names and unit in names, "missing dependency unit identity: " + unit)
             aliases[unit] = names
-            # systemctl quotes escaped names such as "app-example\\x2dhub.slice".
-            values = {name: shlex.split(manager.property(unit, name)) for name in _DEPENDENCIES}
+            values = {name: _unit_list(manager, unit, name) for name in _DEPENDENCIES}
             need(
                 all(
                     re.fullmatch(r"[A-Za-z0-9_.@:\\-]+", target)

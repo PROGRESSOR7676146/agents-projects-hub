@@ -1595,6 +1595,25 @@ class WindowTests(StageFixture):
         self.execute()
         self.assertIn(unit_name, seen)
 
+    def test_malformed_quoted_dependency_property_is_refused(self):
+        original = self.manager.property
+        for broken in ("Requires", "Names"):
+
+            def property_value(unit, name, broken=broken):
+                if unit == "worker.service" and name == broken:
+                    return '"worker.service'
+                return original(unit, name)
+
+            self.manager.property = property_value
+            with (
+                self.subTest(property=broken),
+                self.assertRaisesRegex(hub_deploy.Refused, "malformed " + broken),
+            ):
+                self.execute()
+            self.assertFalse(
+                any(call[0] in ("start", "stop", "reload") for call in self.manager.calls)
+            )
+
     def test_stop_propagation_and_conflicts_refused_before_effects(self):
         self.prepare_config_only()
         original = self.manager.property
