@@ -53,6 +53,15 @@ class RewriteTests(unittest.TestCase):
             [{"root": self.new, "sha256": "b" * 64}],
         )
 
+    def test_host_profile_rewrites_only_the_cli_executable(self):
+        self.config["claude_file_permissions"] = {
+            "profile": "host",
+            "provider_home": "/home/example/claude-host-sessions",
+        }
+        result = hub_deploy.rewrite_claude_config(self.config, self.old, self.new, "b" * 64)
+        self.assertEqual(result["agents"][0]["executable"], self.new + "/bin/claude")
+        self.assertEqual(result["claude_file_permissions"], self.config["claude_file_permissions"])
+
     def test_root_owned_runtime_without_previous_pin(self):
         del self.config["claude_file_permissions"]["user_releases"]
         result = hub_deploy.rewrite_claude_config(self.config, self.old, self.new, "b" * 64)
@@ -433,6 +442,24 @@ class StageTests(StageFixture):
         self.input.chmod(0o644)
         with self.assertRaises(hub_deploy.Refused):
             hub_deploy.load_installation(self.input)
+
+    def host_config(self, extra=None):
+        config = self.configs / f"claude-{self.old_sha[:7]}.json"
+        data = json.loads(config.read_text())
+        data["claude_file_permissions"] = {
+            "profile": "host",
+            "provider_home": "/home/example/claude-host-sessions",
+            **(extra or {}),
+        }
+        config.write_text(json.dumps(data))
+
+    def test_host_profile_with_extra_permission_keys_is_refused(self):
+        self.host_config({"runtime_roots": ["/usr"]})
+        install = hub_deploy.load_installation(self.input)
+        with self.assertRaisesRegex(hub_deploy.Refused, "host permissions"):
+            hub_deploy.discover_installation(
+                install, self.runner, lambda unit, root: True, lambda root: 0
+            )
 
     def test_discovery_full_layout_and_residency(self):
         install = hub_deploy.load_installation(self.input)
@@ -1139,6 +1166,30 @@ class WindowTests(StageFixture):
         self.manager.states["codex.service"] = "failed"
         self.sleeps = []
         self.fail_verify_old = False
+
+    def test_host_profile_deploys_and_keeps_its_permissions(self):
+        config = self.configs / f"claude-{self.old_sha[:7]}.json"
+        data = json.loads(config.read_text())
+        host = {"profile": "host", "provider_home": "/home/example/claude-host-sessions"}
+        data["claude_file_permissions"] = host
+        config.write_text(json.dumps(data))
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        self.assertIsNone(old["tree_sha256"])
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, python=Path("/usr/bin/python3")
+        )
+        shutil.rmtree(self.plan)
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        self.assertEqual(self.execute()["outcome"], "ACCEPTED")
+        candidate = json.loads(
+            Path(
+                hub_deploy.verify_saved_plan(self.plan, check_live=False)["candidate_config"]
+            ).read_text()
+        )
+        self.assertEqual(candidate["claude_file_permissions"], host)
+        self.assertTrue(candidate["agents"][0]["executable"].startswith(new["root"] + "/"))
 
     def require_window(self) -> dict[str, Any]:
         window = hub_deploy.last_window(self.install)

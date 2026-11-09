@@ -126,6 +126,14 @@ def discover_dropin_root(dropins: list[str]) -> str:
     return roots.pop()
 
 
+def _host_permissions(permissions: dict[str, Any]) -> bool:
+    """The explicit host profile (ADR 0095) has exactly a profile and session storage."""
+    if permissions.get("profile") != "host":
+        return False
+    need(set(permissions) == {"profile", "provider_home"}, "invalid Claude host permissions")
+    return True
+
+
 def verify_config_pin(
     config: dict[str, Any], old: str, verify: Callable[[str, str], bool], *, user_owned: bool
 ) -> None:
@@ -181,6 +189,8 @@ def rewrite_claude_config(
         need(isinstance(agent, dict), "invalid agent")
         if agent.get("runtime") == "claude" and "executable" in agent:
             agent["executable"] = _path_rewrite(agent["executable"], old, new)
+    if _host_permissions(permissions):
+        return result  # host carries no runtime paths or pin beyond the CLI executable
     roots = permissions.get("runtime_roots")
     if not isinstance(roots, list):
         raise Refused("invalid runtime_roots")
@@ -668,34 +678,36 @@ def discover_installation(
         ),
         "mixed Claude runtime",
     )
-    for key in ("python_executable", "hook_code_root"):
-        value = permissions.get(key)
-        need(isinstance(value, str) and value.startswith(root + "/"), "mixed Claude runtime")
-    roots = permissions.get("runtime_roots")
-    if not (
-        isinstance(roots, list)
-        and all(isinstance(p, str) and Path(p).is_absolute() for p in roots)
-        and any(p == root or p.startswith(root + "/") for p in roots)
-    ):
-        raise Refused("missing Claude runtime root")
-    releases = Path(installation["releases_dir"])
-    need(
-        all(
-            not Path(p).is_relative_to(releases) or p == root or p.startswith(root + "/")
-            for p in roots
-        ),
-        "mixed Claude runtime roots",
-    )
-    user_owned = (
-        root_path.is_relative_to(Path(installation["releases_dir"]))
-        or runtime_owner(root_path) != 0
-    )
-    verify_config_pin(
-        config,
-        root,
-        lambda r, d: bool(_runtime_command(Path(r), "verify", runner, d)),
-        user_owned=user_owned,
-    )
+    # The host profile (ADR 0095) carries no hook runtime paths or pin.
+    if not _host_permissions(permissions):
+        for key in ("python_executable", "hook_code_root"):
+            value = permissions.get(key)
+            need(isinstance(value, str) and value.startswith(root + "/"), "mixed Claude runtime")
+        roots = permissions.get("runtime_roots")
+        if not (
+            isinstance(roots, list)
+            and all(isinstance(p, str) and Path(p).is_absolute() for p in roots)
+            and any(p == root or p.startswith(root + "/") for p in roots)
+        ):
+            raise Refused("missing Claude runtime root")
+        releases = Path(installation["releases_dir"])
+        need(
+            all(
+                not Path(p).is_relative_to(releases) or p == root or p.startswith(root + "/")
+                for p in roots
+            ),
+            "mixed Claude runtime roots",
+        )
+        user_owned = (
+            root_path.is_relative_to(Path(installation["releases_dir"]))
+            or runtime_owner(root_path) != 0
+        )
+        verify_config_pin(
+            config,
+            root,
+            lambda r, d: bool(_runtime_command(Path(r), "verify", runner, d)),
+            user_owned=user_owned,
+        )
     modes = _unit_runtime_modes(installation, root)
     for unit, mode in modes.items():
         if mode == "process":
