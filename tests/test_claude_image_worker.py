@@ -186,7 +186,7 @@ class ClaudeImageWorkerTests(unittest.TestCase):
 
                 def spawn(*args, **kwargs):
                     child = original_spawn(*args, **kwargs)
-                    if args[0] == argv:
+                    if tuple(args[0])[-len(argv) :] == argv:  # Hub prefixes `nice -n 10`
                         children.append(child)
                     return child
 

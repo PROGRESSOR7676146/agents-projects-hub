@@ -102,6 +102,21 @@ class ExternalTurnResult:
     model: str | None
 
 
+_NICE = Path("/usr/bin/nice")
+
+
+def below_hub_priority(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Run a provider turn and everything it spawns below the Hub control plane.
+
+    Agent work such as a full parallel test suite must not starve the Hub's own
+    SQLite writers. ``nice`` execs the provider, so the PID is unchanged and the
+    priority is set before the provider creates any thread or child.
+    """
+    if os.access(_NICE, os.X_OK):
+        return (str(_NICE), "-n", "10", *argv)
+    return argv
+
+
 def _json_values(output: str) -> list[dict[str, object]]:
     values: list[dict[str, object]] = []
     stripped = output.strip()
@@ -1009,7 +1024,7 @@ class ExternalCliAdapter:
         )
         try:
             process = subprocess.Popen(
-                argv,
+                below_hub_priority(argv),
                 cwd=cwd,
                 env=environment,
                 stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,

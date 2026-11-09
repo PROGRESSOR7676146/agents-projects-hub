@@ -13,7 +13,11 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from hermes_codex_router.claude_stream import parse_claude_stream
-from hermes_codex_router.external_runtime import ExternalCliAdapter, ProviderUnavailableError
+from hermes_codex_router.external_runtime import (
+    ExternalCliAdapter,
+    ProviderUnavailableError,
+    below_hub_priority,
+)
 
 SESSION = "00000000-0000-4000-8000-000000000001"
 
@@ -91,7 +95,7 @@ class ClaudeProcessObservationTests(unittest.TestCase):
             launch.__enter__.assert_called_once()
             process = self.adapter._active_process
             assert process is not None
-            self.assertEqual(process.args, self.argv)
+            self.assertEqual(process.args, below_hub_priority(self.argv))
             observations.append(process)
 
         with (

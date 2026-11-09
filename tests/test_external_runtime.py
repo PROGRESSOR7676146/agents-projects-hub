@@ -392,6 +392,19 @@ class ExternalRuntimeTests(unittest.TestCase):
                     self.assertTrue(process.stderr and process.stderr.closed)
                 self.assertIsNone(adapter._active_process)
 
+    def test_claude_turn_and_its_children_run_below_hub_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "niceness"
+            with self.assertRaises(ClaudeStreamError):
+                self._claude_process(
+                    "import os, subprocess, sys\n"
+                    "child = subprocess.run([sys.executable, '-c', 'import os; print(os.nice(0))'],"
+                    " capture_output=True, text=True, check=True)\n"
+                    f"open({str(marker)!r}, 'w').write(f'{{os.nice(0)}} {{child.stdout.strip()}}')\n"
+                )
+            expected = min(os.nice(0) + 10, 19)  # relative to the worker, like `nice -n 10`
+            self.assertEqual(marker.read_text(), f"{expected} {expected}")
+
     def test_claude_stdout_overflow_is_rejected_before_eof(self) -> None:
         with self.assertRaisesRegex(ClaudeStreamError, "output.*limit"):
             self._claude_process(
