@@ -144,15 +144,17 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   unknown controls. Offline tests do not close this item. See the
   [operator procedure](TLIVE_RELIABILITY.md).
 
-- Claude `host` profile (ADR 0095): after an owner-selected switch and `/new`,
-  a Telegram Claude turn runs a Bash command and edits a file without any
-  permission card, through the CPA route, with stop and resume intact.
-- Codex `full` profile (ADR 0096): after the local switch and `/new`, a Codex
-  turn runs a command outside the workspace without an approval request; the
-  start/resume projection reports full access and `never`.
+- Claude `host` profile (ADR 0095): live accepted 2026-11-09 at 0.11.7
+  `b65b4df` for a Telegram turn after `/new` that ran Bash and wrote a file
+  outside the project through the CPA route with no permission request. Still
+  open: stop and resume under `host`.
+- Codex `full` profile (ADR 0096): live accepted 2026-11-09 at 0.11.7 `b65b4df`
+  for a turn after `/new` that wrote a file outside the workspace with no
+  approval request; the turn started only after the thread confirmed full
+  access and `never`. Still open: resume of an existing `full` thread.
 - Private copy of a saved answer with unknown delivery (ADR 0093): the owner
   receives the copy in the private chat; delivery status and queue hold stay
-  unchanged.
+  unchanged. Not yet exercised: it needs a genuine active delivery hold.
 
 Each item needs deployment-local evidence at an exact clean revision, recorded
 privately (see [live canary](LIVE_CANARY.md)). Repository tests are not

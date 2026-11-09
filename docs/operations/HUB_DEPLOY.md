@@ -1,9 +1,11 @@
 # One-command Hub deployment: first source slice
 
 The standalone tool now implements planning, a journaled deployment window,
-status and recovery. Its evidence is limited to offline fixtures; independent
-source review and installed acceptance are still required before operational use.
-No live deployment or system service was exercised by these tests.
+status and recovery. Installed use, 2026-11-09: a forward schema migration
+(55 → 56) exposed four service-manager gaps, fixed in source; recovery then
+closed with `ROLLED_BACK`, and the next same-schema window was `ACCEPTED` with
+every component converged on the release. The fixture tests remain the
+regression evidence for each path.
 
 The source now validates the following version 1 input. All values below are
 fictional; paths must be absolute, canonical and already exist. The ops
@@ -122,8 +124,8 @@ rechecks the digest, copies and installed files before reporting the plan. Old
 release tags are resolved from the discovered revision; missing or ambiguous
 release evidence is refused. The installed runtime's `release-info` does not
 supply `schema_max`, so the gate uses verified published metadata for both
-releases. Only offline fixture execution has been tested; no installed planning,
-deployment or rollback has been accepted.
+releases. Installed planning, a same-schema deployment and an explicit rollback
+have been exercised; a forward migration has not yet completed as `ACCEPTED`.
 
 ```text
 python3.12 -I scripts/hub_deploy.py plan --installation /home/example/private/installation.json --release v1.2.3 --rollback-release v1.2.2
