@@ -149,8 +149,9 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   outside the project through the CPA route with no permission request, and
   for resuming that conversation. A two-minute command first failed because the
   CLI moved it to a background task; with background tasks disabled it
-  completed. `/stop` cancelled the turn but left its command running; the
-  per-turn scope fix still needs a live re-test after its release.
+  completed. At 0.11.7 `/stop` cancelled the turn but left its command running;
+  with the per-turn scope of 0.11.8 (`01767c0`) `/stop` was live accepted: the
+  turn was cancelled and its scope and command were gone.
 - Codex `full` profile (ADR 0096): live accepted 2026-11-09 at 0.11.7 `b65b4df`
   for a turn after `/new` that wrote a file outside the workspace with no
   approval request; the turn started only after the thread confirmed full
