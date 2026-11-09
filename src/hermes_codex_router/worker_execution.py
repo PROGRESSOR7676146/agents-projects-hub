@@ -13,7 +13,7 @@ from .artifacts import (
 )
 from .claude_corrections import ClaudeCorrectionCallbacks
 from .claude_file_sandbox import FileToolSandboxConfig
-from .claude_host_profile import ClaudeHostConfig
+from .claude_host_profile import HOST_TURN_SECONDS, ClaudeHostConfig
 from .claude_image_input import VerifiedClaudeImage
 from .claude_permission_wait import PermissionWaitClock
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
@@ -487,6 +487,11 @@ def invoke_external_provider_turn(
                 claude_permission_wait=claude_permission_wait,
                 claude_images=claude_images,
                 claude_corrections=claude_corrections,
+                **(
+                    {"timeout": HOST_TURN_SECONDS}
+                    if isinstance(claude_sandbox, ClaudeHostConfig)
+                    else {}
+                ),
             )
         except ClaudeProcessStopped as exc:
             if (

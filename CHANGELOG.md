@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Give Claude `host` turns a six-hour deadline instead of the confined 900-second
+  default, so long CLI-equal work is not cut off mid-task (ADR 0095 amendment).
+
 ## [0.11.8] - 2026-11-09
 
 ## [0.11.7] - 2026-11-09

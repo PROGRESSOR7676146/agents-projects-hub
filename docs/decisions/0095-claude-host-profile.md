@@ -51,3 +51,13 @@ cleanup cannot be verified, subsequent host turns are refused until that scope
 is inactive or gone. A successful turn leaves its processes alone, as the CLI
 does; systemd collects the scope when empty. Each scope is bound to its worker service (`BindsTo=`, `After=`), so a worker stop, crash or restart also stops the scope, and a replacement worker never inherits a running turn; processes from earlier successful turns therefore end when their worker restarts. Outside systemd the direct launch
 has no containment for commands that leave the CLI process group.
+
+## Amendment, 2026-11-09: turn duration
+
+A `host` turn inherited the 900-second deadline of the confined profiles. Live
+use showed that an ordinary multi-step development turn exceeds it: the worker
+ended the turn as an uncertain outcome and its scope cleanup removed the
+turn's commands. The owner's CLI has no such limit. A `host` turn therefore has
+a six-hour deadline. It only bounds a hung CLI; `/stop`, the no-progress notice,
+uncertain-outcome handling and scope cleanup are unchanged. Confined profiles
+keep 900 seconds.

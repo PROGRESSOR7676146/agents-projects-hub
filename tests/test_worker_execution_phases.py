@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+from hermes_codex_router.claude_host_profile import HOST_TURN_SECONDS, ClaudeHostConfig
 from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
 from hermes_codex_router.codex_failure import CodexPreparationError
+from hermes_codex_router.execution_journal import ClaudeSessionBinding
 from hermes_codex_router.external_runtime import (
     ExternalTurnResult,
     ProviderLimitError,
@@ -401,6 +403,34 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
             interrupt_prepared=True,
             staging_dir=staging,
         )
+
+    def _claude_invocation(self, sandbox: object | None) -> dict[str, object]:
+        session = "00000000-0000-4000-8000-000000000001"
+        adapter = Mock()
+        adapter.runtime = "claude"
+        adapter.run_turn.return_value = ExternalTurnResult(
+            "claude", "Fictional result", session, "fictional-actual-model"
+        )
+        invoke_external_provider_turn(
+            adapter,
+            self.job(),
+            self.project,
+            prompt="Fictional prompt",
+            staging_dir=self.project.root / ".hub" / "staging" / "fictional-job",
+            claude_session_binding=ClaudeSessionBinding(session, False),
+            claude_sandbox=cast(Any, sandbox),
+        )
+        return dict(adapter.run_turn.call_args.kwargs)
+
+    def test_claude_host_turn_gets_the_long_cli_equal_deadline(self) -> None:
+        host = ClaudeHostConfig(
+            self.project.root, Path("/home/example/claude-home"), Path("/usr/bin/claude")
+        )
+        self.assertEqual(self._claude_invocation(host)["timeout"], HOST_TURN_SECONDS)
+        self.assertEqual(HOST_TURN_SECONDS, 6 * 3600)
+
+    def test_confined_claude_turn_keeps_the_bounded_default_deadline(self) -> None:
+        self.assertNotIn("timeout", self._claude_invocation(None))
 
     def test_artifact_preparation_snapshots_with_bounded_rejection_notice(self) -> None:
         artifacts = (object(),)
