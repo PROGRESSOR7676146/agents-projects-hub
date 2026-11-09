@@ -73,6 +73,19 @@ def validate_host_result(result: subprocess.CompletedProcess[str], session_id: s
 
 CLEANUP_TIMEOUT = 10.0
 _SCOPE_NAME = re.compile(r"hub-claude-host-[0-9a-f]{12}\.scope\Z")
+_SERVICE_NAME = re.compile(r"[A-Za-z0-9_.:@\\-]+\.service\Z")
+
+
+def owning_service(proc_cgroup: Path = Path("/proc/self/cgroup")) -> str | None:
+    """The systemd service whose cgroup holds this worker, if any."""
+    try:
+        line = next(row for row in proc_cgroup.read_text().splitlines() if row.startswith("0::"))
+    except (OSError, StopIteration, UnicodeError):
+        return None
+    leaf = line.split("::", 1)[1].strip().rsplit("/", 1)[-1]
+    if not _SERVICE_NAME.fullmatch(leaf) or leaf.startswith("user@"):
+        return None
+    return leaf
 
 
 def _systemctl_environment() -> dict[str, str]:
@@ -88,8 +101,13 @@ def _systemctl_environment() -> dict[str, str]:
 class ClaudeHostScopes:
     """Turn-local systemd containment and fail-closed cleanup verification."""
 
-    def __init__(self, unavailable: Callable[[str, str], Exception]) -> None:
+    def __init__(
+        self,
+        unavailable: Callable[[str, str], Exception],
+        owner: Callable[[], str | None] = owning_service,
+    ) -> None:
         self._unavailable = unavailable
+        self._owner = owner
         self._systemd_run: str | None = None
         self._systemctl: str | None = None
         self.pending: set[str] = set()
@@ -174,8 +192,11 @@ class ClaudeHostScopes:
             yield lambda argv: argv
             return
         unit = f"hub-claude-host-{uuid.uuid4().hex[:12]}.scope"
-        if not _SCOPE_NAME.fullmatch(unit):
-            raise self._unavailable("claude_host_unverified", "Claude host scope name is invalid.")
+        owner = self._owner()
+        if not _SCOPE_NAME.fullmatch(unit) or owner is None:
+            raise self._unavailable(
+                "claude_host_unverified", "Claude host scope cannot be bound to its worker."
+            )
         assert self._systemd_run is not None
 
         def wrap(argv: tuple[str, ...]) -> tuple[str, ...]:
@@ -187,6 +208,9 @@ class ClaudeHostScopes:
                 "--quiet",
                 "--collect",
                 f"--unit={unit}",
+                # The turn ends with its worker: stop, crash or restart stops the scope.
+                f"--property=BindsTo={owner}",
+                f"--property=After={owner}",
                 "--",
                 *argv,
             )

@@ -328,6 +328,7 @@ class ClaudeHostScopeTests(unittest.TestCase):
         self.root = Path.cwd()
         self.host = ClaudeHostConfig(self.root, self.root / "session", Path("/usr/bin/true"))
         self.adapter = ExternalCliAdapter("claude")
+        self.adapter._host_scopes._owner = lambda: "example-worker@2.service"
         self.output = '{"type":"result","subtype":"success","is_error":false,"session_id":"00000000-0000-4000-8000-000000000001","result":"ok"}\n'
         self.env = {
             "INVOCATION_ID": "example",
@@ -378,7 +379,15 @@ class ClaudeHostScopeTests(unittest.TestCase):
         self.assertEqual(argv[:4], ("/usr/bin/systemd-run", "--user", "--scope", "--quiet"))
         self.assertEqual(argv[4], "--collect")
         self.assertRegex(argv[5], r"^--unit=hub-claude-host-[0-9a-f]{12}\.scope$")
-        self.assertEqual(argv[6:8], ("--", "/usr/bin/true"))
+        self.assertEqual(
+            argv[6:10],
+            (
+                "--property=BindsTo=example-worker@2.service",
+                "--property=After=example-worker@2.service",
+                "--",
+                "/usr/bin/true",
+            ),
+        )
         self.assertEqual(self.verified.call_args.args[0][0], "/usr/bin/true")
         self.assertEqual(
             self.process_run.call_args.kwargs["environment"][
@@ -532,3 +541,40 @@ class ClaudeHostScopeTests(unittest.TestCase):
                     self.turn()
                 self.assertEqual(error.exception.code, "claude_host_unverified")
                 self.process_run.assert_not_called()
+
+
+class ClaudeHostScopeOwnerTests(unittest.TestCase):
+    def test_owning_service_is_the_worker_service_leaf(self):
+        from hermes_codex_router.claude_host_profile import owning_service
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "cgroup"
+            for line, expected in (
+                ("0::/user.slice/app.slice/example-worker@2.service\n", "example-worker@2.service"),
+                ("0::/user.slice/user@1000.service\n", None),
+                ("0::/user.slice/session-1.scope\n", None),
+                ("0::/user.slice/app.slice/bad name.service\n", None),
+            ):
+                with self.subTest(line=line):
+                    path.write_text(line)
+                    self.assertEqual(owning_service(path), expected)
+
+    def test_scope_is_bound_to_its_worker_and_refused_without_one(self):
+        from hermes_codex_router.claude_host_profile import ClaudeHostScopes
+
+        class Unavailable(Exception):
+            pass
+
+        def scopes(owner):
+            value = ClaudeHostScopes(lambda code, message: Unavailable(code), lambda: owner)
+            value._systemd_run, value._systemctl = "/usr/bin/systemd-run", "/usr/bin/systemctl"
+            return value
+
+        with scopes("example-worker@2.service").turn({"INVOCATION_ID": "example"}) as wrap:
+            argv = wrap(("/usr/bin/claude", "--print"))
+        self.assertIn("--property=BindsTo=example-worker@2.service", argv)
+        self.assertIn("--property=After=example-worker@2.service", argv)
+        self.assertEqual(argv[argv.index("--") + 1 :], ("/usr/bin/claude", "--print"))
+        with self.assertRaises(Unavailable):
+            with scopes(None).turn({"INVOCATION_ID": "example"}):
+                self.fail("unbound scope accepted")

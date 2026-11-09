@@ -49,5 +49,5 @@ left the command running. When a `host` turn ends by stop, timeout or failure,
 the worker kills and checks the turn’s own transient systemd user scope. If
 cleanup cannot be verified, subsequent host turns are refused until that scope
 is inactive or gone. A successful turn leaves its processes alone, as the CLI
-does; systemd collects the scope when empty. Outside systemd the direct launch
+does; systemd collects the scope when empty. Each scope is bound to its worker service (`BindsTo=`, `After=`), so a worker stop, crash or restart also stops the scope, and a replacement worker never inherits a running turn; processes from earlier successful turns therefore end when their worker restarts. Outside systemd the direct launch
 has no containment for commands that leave the CLI process group.
