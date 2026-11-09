@@ -7,8 +7,7 @@
     "local-operator"
   ],
   "runbook": "RUNBOOK.md",
-  "maintained_release": "0.11.5",
-  "source_status": "unpublished schema-56 source candidate; not deployment inventory",
+  "maintained_release": "0.11.6",
   "state_schema": 56,
   "max_age_days": 30,
   "required_units": [

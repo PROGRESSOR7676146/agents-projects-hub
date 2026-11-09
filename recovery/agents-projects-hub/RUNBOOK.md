@@ -1,10 +1,8 @@
 # Agents Projects Hub recovery capsule
 
-This source capsule tracks the candidate target state schema `56`. It does not
-claim that Hub `0.11.5`, any installed release, or any deployed database has
-migrated to schema `56`. This capsule is a bounded local recovery guide, not
-authority to weaken policy, retry ambiguous work, expose private state, or
-perform a rollout.
+Maintained for Hub `0.11.6`, state schema `56`. This capsule is a bounded local
+recovery guide, not authority to weaken policy, retry ambiguous work, expose
+private state, or perform a rollout.
 
 ## Safety boundary
 
@@ -39,11 +37,9 @@ ACTIVE_BIN status HUB_CONFIG
 ACTIVE_BIN doctor HUB_CONFIG
 ```
 
-For a separately authorized deployment of this candidate, acceptance requires
-`release-info.ok=true`, `clean_tree=true`, an exact Git SHA, schema `56/56`,
-and `deployment_revision.status=converged`. For an existing deployment, use
-its active release metadata rather than inferring its schema from this source
-capsule. A live process or package version alone is not deployment identity.
+Acceptance requires `release-info.ok=true`, `clean_tree=true`, an exact Git
+SHA, schema `56/56`, and `deployment_revision.status=converged`. A live process
+or package version alone is not deployment identity.
 
 ## Classify before repair
 
