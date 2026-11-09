@@ -812,6 +812,63 @@ class ServiceManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
             hub_deploy._check_dependencies(Manager(), ["worker.service"], ["codex.service"])
 
+    def test_oneshot_config_only_helper_may_only_be_started(self):
+        def manager(kind, remain, edge):
+            class Manager:
+                def property(self, unit, name):
+                    if name in ("Id", "Names"):
+                        return unit
+                    if unit == "socket-dir.service" and name == "Type":
+                        return kind
+                    if unit == "socket-dir.service" and name == "RemainAfterExit":
+                        return remain
+                    return "socket-dir.service" if (unit, name) == ("worker.service", edge) else ""
+
+            return Manager()
+
+        helper = ("socket-dir.service",)
+        hub_deploy._check_dependencies(
+            manager("oneshot", "no", "Wants"), ["worker.service"], ["codex.service"], helper
+        )
+        for kind, remain, edge, untouched, config_only in (
+            ("oneshot", "yes", "Wants", ["codex.service"], helper),
+            ("simple", "no", "Wants", ["codex.service"], helper),
+            ("oneshot", "no", "Wants", ["codex.service", "socket-dir.service"], ()),
+            ("oneshot", "no", "PropagatesStopTo", ["codex.service"], helper),
+            ("oneshot", "no", "Upholds", ["codex.service"], helper),
+        ):
+            with (
+                self.subTest(kind=kind, remain=remain, edge=edge, config_only=config_only),
+                self.assertRaisesRegex(hub_deploy.Refused, "untouched unit: socket-dir"),
+            ):
+                hub_deploy._check_dependencies(
+                    manager(kind, remain, edge), ["worker.service"], untouched, config_only
+                )
+
+    def test_helper_sharing_an_untouched_identity_is_refused(self):
+        class Manager:
+            def property(self, unit, name):
+                if name == "Id":
+                    return "codex.service" if unit in ("codex.service", "helper.service") else unit
+                if name == "Names":
+                    if unit in ("codex.service", "helper.service"):
+                        return "codex.service helper.service"
+                    return unit
+                if name == "Type":
+                    return "oneshot"
+                if name == "RemainAfterExit":
+                    return "no"
+                return "helper.service" if (unit, name) == ("worker.service", "Wants") else ""
+
+        for untouched in (["codex.service"], ["helper.service"]):
+            with (
+                self.subTest(untouched=untouched),
+                self.assertRaisesRegex(hub_deploy.Refused, "untouched unit"),
+            ):
+                hub_deploy._check_dependencies(
+                    Manager(), ["worker.service"], untouched, ("helper.service",)
+                )
+
     def test_missing_dependency_property_is_not_treated_as_empty(self):
         manager = hub_deploy.ServiceManager(lambda argv: SimpleNamespace(stdout=""))
         with self.assertRaisesRegex(hub_deploy.Refused, "dependency property"):
@@ -887,13 +944,15 @@ class ServiceManagerTests(unittest.TestCase):
 
         def runner(argv):
             calls.append(argv)
-            name = argv[-1].split("=", 1)[1]
+            name = next(item for item in argv if item.startswith("--property=")).split("=", 1)[1]
             return SimpleNamespace(stdout=name + "=fixture.service\n")
 
         manager = hub_deploy.ServiceManager(runner)
         for name in ("PropagatesStopTo", "StopPropagatedFrom", "Conflicts", "ConflictedBy"):
             self.assertEqual(manager.property("worker.service", name), "fixture.service")
-            self.assertEqual(calls[-1][-2:], ["--all", "--property=" + name])
+            self.assertEqual(
+                calls[-1][-4:], ["--all", "--property=" + name, "--", "worker.service"]
+            )
         manager.runner = lambda argv: SimpleNamespace(stdout="")
         for name in ("PropagatesStopTo", "StopPropagatedFrom", "Conflicts", "ConflictedBy"):
             with (
@@ -922,12 +981,23 @@ class ServiceManagerTests(unittest.TestCase):
                     "systemctl",
                     "--user",
                     "show",
-                    "gateway.service",
                     "--property=Environment",
                     "--value",
+                    "--",
+                    "gateway.service",
                 ]
             ],
         )
+
+    def test_root_slice_is_not_parsed_as_an_option(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            return SimpleNamespace(stdout="Id=-.slice\n")
+
+        hub_deploy.ServiceManager(runner).property("-.slice", "Id")
+        self.assertEqual(calls[0][-2:], ["--", "-.slice"])
 
     def test_effective_settings_and_fallback_are_checked(self):
         values = {
@@ -1575,6 +1645,44 @@ class WindowTests(StageFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
             self.execute()
         self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
+
+    def test_quoted_escaped_dependency_names_are_traversed(self):
+        # systemctl prints escaped names quoted with doubled backslashes.
+        original = self.manager.property
+        quoted = '"app-example\\\\x2dhub.slice"'
+        unit_name = "app-example\\x2dhub.slice"
+        seen = []
+
+        def property_value(unit, name):
+            seen.append(unit)
+            if unit == "worker.service" and name == "Requires":
+                return quoted
+            if unit == unit_name and name == "Names":
+                return quoted
+            return original(unit, name)
+
+        self.manager.property = property_value
+        self.execute()
+        self.assertIn(unit_name, seen)
+
+    def test_malformed_quoted_dependency_property_is_refused(self):
+        original = self.manager.property
+        for broken in ("Requires", "Names"):
+
+            def property_value(unit, name, broken=broken):
+                if unit == "worker.service" and name == broken:
+                    return '"worker.service'
+                return original(unit, name)
+
+            self.manager.property = property_value
+            with (
+                self.subTest(property=broken),
+                self.assertRaisesRegex(hub_deploy.Refused, "malformed " + broken),
+            ):
+                self.execute()
+            self.assertFalse(
+                any(call[0] in ("start", "stop", "reload") for call in self.manager.calls)
+            )
 
     def test_stop_propagation_and_conflicts_refused_before_effects(self):
         self.prepare_config_only()
