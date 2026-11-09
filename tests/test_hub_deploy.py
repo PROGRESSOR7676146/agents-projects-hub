@@ -826,25 +826,47 @@ class ServiceManagerTests(unittest.TestCase):
 
             return Manager()
 
-        protected = ["codex.service", "socket-dir.service"]
+        helper = ("socket-dir.service",)
         hub_deploy._check_dependencies(
-            manager("oneshot", "no", "Wants"),
-            ["worker.service"],
-            protected,
-            ("socket-dir.service",),
+            manager("oneshot", "no", "Wants"), ["worker.service"], ["codex.service"], helper
         )
-        for kind, remain, edge, helpers in (
-            ("oneshot", "yes", "Wants", ("socket-dir.service",)),
-            ("simple", "no", "Wants", ("socket-dir.service",)),
-            ("oneshot", "no", "Wants", ()),
-            ("oneshot", "no", "PropagatesStopTo", ("socket-dir.service",)),
+        for kind, remain, edge, untouched, config_only in (
+            ("oneshot", "yes", "Wants", ["codex.service"], helper),
+            ("simple", "no", "Wants", ["codex.service"], helper),
+            ("oneshot", "no", "Wants", ["codex.service", "socket-dir.service"], ()),
+            ("oneshot", "no", "PropagatesStopTo", ["codex.service"], helper),
+            ("oneshot", "no", "Upholds", ["codex.service"], helper),
         ):
             with (
-                self.subTest(kind=kind, remain=remain, edge=edge, helpers=helpers),
+                self.subTest(kind=kind, remain=remain, edge=edge, config_only=config_only),
                 self.assertRaisesRegex(hub_deploy.Refused, "untouched unit: socket-dir"),
             ):
                 hub_deploy._check_dependencies(
-                    manager(kind, remain, edge), ["worker.service"], protected, helpers
+                    manager(kind, remain, edge), ["worker.service"], untouched, config_only
+                )
+
+    def test_helper_sharing_an_untouched_identity_is_refused(self):
+        class Manager:
+            def property(self, unit, name):
+                if name == "Id":
+                    return "codex.service" if unit in ("codex.service", "helper.service") else unit
+                if name == "Names":
+                    if unit in ("codex.service", "helper.service"):
+                        return "codex.service helper.service"
+                    return unit
+                if name == "Type":
+                    return "oneshot"
+                if name == "RemainAfterExit":
+                    return "no"
+                return "helper.service" if (unit, name) == ("worker.service", "Wants") else ""
+
+        for untouched in (["codex.service"], ["helper.service"]):
+            with (
+                self.subTest(untouched=untouched),
+                self.assertRaisesRegex(hub_deploy.Refused, "untouched unit"),
+            ):
+                hub_deploy._check_dependencies(
+                    Manager(), ["worker.service"], untouched, ("helper.service",)
                 )
 
     def test_missing_dependency_property_is_not_treated_as_empty(self):

@@ -1358,12 +1358,13 @@ _DEPENDENCIES = (
 
 
 def _check_dependencies(
-    manager: Any, operated: list[str], untouched: list[str], helpers: tuple[str, ...] = ()
+    manager: Any, operated: list[str], untouched: list[str], config_only: tuple[str, ...] = ()
 ) -> None:
     """Follow effective systemd start/stop propagation, refusing protected effects.
 
-    A helper is a protected oneshot without RemainAfterExit: every dependent start
-    re-runs it by design, so start propagation may reach it but stop may not.
+    A helper is a protected config-only oneshot without RemainAfterExit: every
+    dependent start re-runs it by design, so Wants/Requires/BindsTo may start it.
+    Stop, Upholds and any identity shared with another protected unit still refuse.
     """
     protected: set[str] = set()
     cache: dict[str, dict[str, list[str]]] = {}
@@ -1391,34 +1392,47 @@ def _check_dependencies(
     for unit in untouched:
         read(unit)
         protected.update(aliases[unit])
-    start_helpers = {
-        unit
-        for unit in helpers
-        if manager.property(unit, "Type") == "oneshot"
-        and manager.property(unit, "RemainAfterExit") == "no"
-    }
-    pending = [(unit, action) for unit in operated for action in ("start", "stop")]
-    visited: set[tuple[str, str]] = set()
+    strict = set(protected)
+    for unit in config_only:
+        read(unit)
+        protected.update(aliases[unit])
+    helper_ids: set[str] = set()
+    for unit in config_only:
+        read(unit)
+        if (
+            not aliases[unit] & strict
+            and manager.property(unit, "Type") == "oneshot"
+            and manager.property(unit, "RemainAfterExit") == "no"
+        ):
+            helper_ids.update(aliases[unit])
+    pending = [(unit, action, "") for unit in operated for action in ("start", "stop")]
+    visited: set[tuple[str, str, str]] = set()
     while pending:
-        unit, action = pending.pop()
-        if (unit, action) in visited:
+        unit, action, edge = pending.pop()
+        if (unit, action, edge) in visited:
             continue
-        visited.add((unit, action))
+        visited.add((unit, action, edge))
         values = read(unit)
+        names = aliases[unit]
         need(
-            not aliases[unit] & protected or (action == "start" and unit in start_helpers),
+            not names & protected
+            or (
+                action == "start"
+                and edge in ("Wants", "Requires", "BindsTo")
+                and names <= helper_ids
+            ),
             "dependency can operate on untouched unit: " + unit,
         )
         if action == "start":
             for name in ("Wants", "Requires", "BindsTo", "Upholds"):
-                pending.extend((target, "start") for target in values[name])
+                pending.extend((target, "start", name) for target in values[name])
             for name in ("Conflicts", "ConflictedBy"):
-                pending.extend((target, "stop") for target in values[name])
+                pending.extend((target, "stop", name) for target in values[name])
         else:
             for name in ("RequiredBy", "BoundBy", "ConsistsOf", "PropagatesStopTo"):
-                pending.extend((target, "stop") for target in values[name])
+                pending.extend((target, "stop", name) for target in values[name])
             if values["UpheldBy"]:
-                pending.append((unit, "start"))
+                pending.append((unit, "start", "UpheldBy"))
 
 
 def _check_template_instances(
@@ -1499,8 +1513,8 @@ def _check_window_dependencies(plan: dict[str, Any], manager: Any) -> None:
     _check_dependencies(
         manager,
         [*plan["restart_order"], installation["monitor_service"], installation["monitor_timer"]],
-        list(set(plan["untouched_units"]) | set(plan["config_only_units"])),
-        tuple(sorted(set(plan["config_only_units"]) - set(plan["untouched_units"]))),
+        list(plan["untouched_units"]),
+        tuple(plan["config_only_units"]),
     )
     for entry in plan["files"]:
         path = Path(entry["path"])
