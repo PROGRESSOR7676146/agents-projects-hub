@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-11-09
+
 - Enable Hub-owner delivery-hold recovery and let the owner request a private
   copy of the saved answer without changing the unknown delivery or queue hold.
 
