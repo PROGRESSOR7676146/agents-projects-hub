@@ -1358,10 +1358,11 @@ def _check_dependencies(manager: Any, operated: list[str], untouched: list[str])
         if unit not in cache:
             need(len(cache) < 2048, "dependency graph too large")
             identity = manager.property(unit, "Id")
-            names = set(manager.property(unit, "Names").split())
+            names = set(shlex.split(manager.property(unit, "Names")))
             need(identity in names and unit in names, "missing dependency unit identity: " + unit)
             aliases[unit] = names
-            values = {name: manager.property(unit, name).split() for name in _DEPENDENCIES}
+            # systemctl quotes escaped names such as "app-example\\x2dhub.slice".
+            values = {name: shlex.split(manager.property(unit, name)) for name in _DEPENDENCIES}
             need(
                 all(
                     re.fullmatch(r"[A-Za-z0-9_.@:\\-]+", target)

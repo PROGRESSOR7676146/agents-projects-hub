@@ -1576,6 +1576,25 @@ class WindowTests(StageFixture):
             self.execute()
         self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
 
+    def test_quoted_escaped_dependency_names_are_traversed(self):
+        # systemctl prints escaped names quoted with doubled backslashes.
+        original = self.manager.property
+        quoted = '"app-example\\\\x2dhub.slice"'
+        unit_name = "app-example\\x2dhub.slice"
+        seen = []
+
+        def property_value(unit, name):
+            seen.append(unit)
+            if unit == "worker.service" and name == "Requires":
+                return quoted
+            if unit == unit_name and name == "Names":
+                return quoted
+            return original(unit, name)
+
+        self.manager.property = property_value
+        self.execute()
+        self.assertIn(unit_name, seen)
+
     def test_stop_propagation_and_conflicts_refused_before_effects(self):
         self.prepare_config_only()
         original = self.manager.property
