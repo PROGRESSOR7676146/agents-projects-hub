@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Word the Claude quota notice for the owner: the account usage limit was
+  reached, the route reported no reset time, and the conversation and partial
+  work are preserved for a resend after the reset.
+
 - Start each Claude turn under `nice -n 10`, so the provider and every tool it
   spawns (builds, test suites) run below the Hub control plane and cannot starve
   its SQLite writers. The Codex app-server unit template gains `Nice=10`; an
