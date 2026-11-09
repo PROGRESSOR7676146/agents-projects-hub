@@ -1551,29 +1551,34 @@ class WindowTests(StageFixture):
         self.manager = FakeManager(self.install)
         self.manager.states["codex.service"] = "failed"
 
-    def rerun_helper_outcome(self, result_value):
+    def rerun_helper_outcome(self, result, active=lambda reads: "inactive"):
+        """Drive the socket-dir oneshot; ``result`` sees whether the candidate is installed."""
         self.prepare_config_only()
         original_identity = self.manager.identity
         original_property = self.manager.property
-        runs = []
+        dropin = self.units / "socket-dir.service.d" / "override.conf"
+        reads = []
 
         def identity(unit):
             value = original_identity(unit)
             if unit == "socket-dir.service":
-                runs.append(unit)
-                value = {**value, "InvocationID": f"run-{len(runs)}"}
+                reads.append(unit)
+                value = {**value, "InvocationID": f"run-{len(reads)}"}
             return value
 
         def property_value(unit, name):
             if unit == "socket-dir.service":
-                if name == "Type":
-                    return "oneshot"
-                if name == "RemainAfterExit":
-                    return "no"
-                if name == "Result":
-                    return result_value
+                values = {
+                    "Type": "oneshot",
+                    "RemainAfterExit": "no",
+                    "SubState": "dead",
+                    "Result": result(str(self.releases / self.new_sha) in dropin.read_text()),
+                }
                 if name == "ActiveState":
-                    return "inactive"
+                    reads.append(name)
+                    return active(len(reads))
+                if name in values:
+                    return values[name]
             return original_property(unit, name)
 
         self.manager.identity = identity
@@ -1581,11 +1586,27 @@ class WindowTests(StageFixture):
         return self.execute()["outcome"]
 
     def test_rerun_oneshot_helper_identity_change_is_accepted(self):
-        self.assertEqual(self.rerun_helper_outcome("success"), "ACCEPTED")
+        self.assertEqual(self.rerun_helper_outcome(lambda candidate: "success"), "ACCEPTED")
+
+    def test_running_helper_is_awaited_before_acceptance(self):
+        outcome = self.rerun_helper_outcome(
+            lambda candidate: "success",
+            active=lambda reads: "activating" if reads < 4 else "inactive",
+        )
+        self.assertEqual(outcome, "ACCEPTED")
+        self.assertIn(5, self.sleeps)
+
+    def test_candidate_helper_failure_rolls_back_to_a_working_helper(self):
+        outcome = self.rerun_helper_outcome(
+            lambda candidate: "exit-code" if candidate else "success"
+        )
+        self.assertEqual(outcome, "ROLLED_BACK")
 
     def test_failing_rerun_oneshot_helper_is_never_accepted(self):
         # It fails for the rollback runtime too, so recovery cannot be verified.
-        self.assertEqual(self.rerun_helper_outcome("exit-code"), "RECOVERY_REQUIRED")
+        self.assertEqual(
+            self.rerun_helper_outcome(lambda candidate: "exit-code"), "RECOVERY_REQUIRED"
+        )
 
     def test_config_only_rewritten_verified_and_rolled_back_without_lifecycle(self):
         self.prepare_config_only()

@@ -1472,7 +1472,12 @@ def _check_template_instances(
 
 
 def _verify_config_only(
-    plan: dict[str, Any], manager: Any, untouched: dict[str, Any], role: str
+    plan: dict[str, Any],
+    manager: Any,
+    untouched: dict[str, Any],
+    role: str,
+    *,
+    started: bool = False,
 ) -> None:
     root = plan[role]["root"]
     others = {
@@ -1482,11 +1487,16 @@ def _verify_config_only(
     } - {root}
     for unit in plan["config_only_units"]:
         if unit not in plan["untouched_units"] and _rerun_helper(manager, unit):
-            # Dependent starts re-run it, so its identity changes; require success.
+            # Dependent starts re-run it, so its identity changes. Before starts only its
+            # configuration is checked; after starts it must have finished successfully.
             need(
-                manager.property(unit, "ActiveState") != "failed"
-                and manager.property(unit, "Result") == "success",
-                "config-only helper failed: " + unit,
+                not started
+                or (
+                    manager.property(unit, "ActiveState") == "inactive"
+                    and manager.property(unit, "SubState") == "dead"
+                    and manager.property(unit, "Result") == "success"
+                ),
+                "config-only helper not finished successfully: " + unit,
             )
         else:
             need(
@@ -1741,6 +1751,7 @@ def _verify(
                 manager,
                 untouched,
                 role or ("new_runtime" if runtime == plan["new_runtime"] else "old_runtime"),
+                started=True,
             )
             for unit in plan["untouched_units"]:
                 need(
