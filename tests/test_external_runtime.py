@@ -32,6 +32,7 @@ from hermes_codex_router.external_runtime import (
     ExternalTurnResult,
     ProviderLimitError,
     ProviderUnavailableError,
+    below_hub_priority,
 )
 from hermes_codex_router.owned_process_exit import peek_exit_code
 from tests.test_claude_cli_capabilities import HELP, LeaderExitClock
@@ -392,6 +393,15 @@ class ExternalRuntimeTests(unittest.TestCase):
                     self.assertTrue(process.stderr and process.stderr.closed)
                 self.assertIsNone(adapter._active_process)
 
+    def test_without_nice_the_argv_is_unchanged(self) -> None:
+        with patch("hermes_codex_router.external_runtime.os.access", return_value=False):
+            self.assertEqual(below_hub_priority(("claude", "-p")), ("claude", "-p"))
+        with patch("hermes_codex_router.external_runtime.os.access", return_value=True):
+            self.assertEqual(
+                below_hub_priority(("claude", "-p")), ("/usr/bin/nice", "-n", "10", "claude", "-p")
+            )
+
+    @unittest.skipUnless(os.access("/usr/bin/nice", os.X_OK), "requires /usr/bin/nice")
     def test_claude_turn_and_its_children_run_below_hub_priority(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "niceness"
