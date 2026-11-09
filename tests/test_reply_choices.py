@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import unittest
+
+from hermes_codex_router.reply_choices import (
+    CHOICE_PART_MARKER,
+    append_choice_suffix,
+    choice_part_html,
+    extract_reply_choices,
+    keyboard,
+    parse_choice_callback,
+    parse_choice_part,
+    session_binding,
+    split_choice_suffix,
+)
+
+
+class ReplyChoicesTests(unittest.TestCase):
+    def test_trailing_marker_is_removed_and_labels_are_returned(self) -> None:
+        text, labels = extract_reply_choices("Pick one.\n\n[[choices: Yes | No | Later]]\n")
+        self.assertEqual(text, "Pick one.")
+        self.assertEqual(labels, ("Yes", "No", "Later"))
+
+    def test_marker_is_case_insensitive_and_tolerates_spacing(self) -> None:
+        text, labels = extract_reply_choices("Q?\n[[ Choices :  A  |B ]]")
+        self.assertEqual((text, labels), ("Q?", ("A", "B")))
+
+    def test_text_without_marker_is_unchanged(self) -> None:
+        self.assertEqual(extract_reply_choices("Plain answer"), ("Plain answer", ()))
+
+    def test_marker_not_on_the_last_line_is_ignored(self) -> None:
+        source = "[[choices: A | B]]\nMore text after it"
+        self.assertEqual(extract_reply_choices(source), (source, ()))
+
+    def test_marker_inside_an_open_code_fence_is_ignored(self) -> None:
+        for fence in (
+            "Example:\n```\n",
+            "Example:\n~~~\n",
+            "Example:\n````md\n```\n",
+            "Example:\n~~~\n```\n",
+        ):
+            source = fence + "[[choices: A | B]]"
+            self.assertEqual(extract_reply_choices(source), (source, ()), fence)
+
+    def test_marker_after_a_closed_code_fence_is_used(self) -> None:
+        for fence in ("```\ncode\n```\n", "~~~~\ncode\n~~~~~\n", "````\n```\n````\n"):
+            text, labels = extract_reply_choices("Before\n" + fence + "[[choices: A | B]]")
+            self.assertEqual(labels, ("A", "B"), fence)
+            self.assertEqual(text, ("Before\n" + fence).rstrip())
+
+    def test_invalid_label_sets_leave_the_text_visible(self) -> None:
+        for marker in (
+            "[[choices: Only]]",
+            "[[choices: A | A]]",
+            "[[choices: A | ]]",
+            "[[choices: " + " | ".join(str(i) for i in range(7)) + "]]",
+            "[[choices: A | " + "x" * 41 + "]]",
+            "[[choices: Continue | /stop]]",
+        ):
+            source = f"Question\n{marker}"
+            self.assertEqual(extract_reply_choices(source), (source, ()), marker)
+
+    def test_marker_alone_is_not_removed_into_an_empty_answer(self) -> None:
+        source = "[[choices: A | B]]"
+        self.assertEqual(extract_reply_choices(source), ("", ("A", "B")))
+
+    def test_choice_part_round_trips_escaped_labels(self) -> None:
+        labels = ("A & B", "<tag>", "Нет")
+        part = choice_part_html(labels)
+        self.assertTrue(part.startswith(CHOICE_PART_MARKER))
+        self.assertNotIn("<tag>", part)
+        self.assertEqual(parse_choice_part(part), (labels, ""))
+        bound = choice_part_html(labels, session_binding("example-session"))
+        self.assertEqual(parse_choice_part(bound), (labels, session_binding("example-session")))
+
+    def test_ordinary_html_is_not_a_choice_part(self) -> None:
+        self.assertIsNone(parse_choice_part("Hello"))
+        self.assertIsNone(parse_choice_part(CHOICE_PART_MARKER + "\nOnly"))
+
+    def test_suffix_round_trips_and_is_separated_from_the_answer(self) -> None:
+        combined = append_choice_suffix("Answer <b>x</b>", ("Yes", "No"))
+        self.assertEqual(split_choice_suffix(combined), ("Answer <b>x</b>", ("Yes", "No")))
+        self.assertEqual(append_choice_suffix("Answer", ()), "Answer")
+
+    def test_html_without_a_valid_suffix_is_unchanged(self) -> None:
+        for value in (
+            "Answer",
+            f"Answer\n\n{CHOICE_PART_MARKER}\nOnly",
+            f"\n\n{CHOICE_PART_MARKER}\nA\nB",
+        ):
+            self.assertEqual(split_choice_suffix(value), (value, ()))
+
+    def test_keyboard_uses_index_callbacks(self) -> None:
+        self.assertEqual(
+            keyboard(("Yes", "No"), "0123456789ab"),
+            {
+                "inline_keyboard": [
+                    [{"text": "Yes", "callback_data": "ch:0:0123456789ab"}],
+                    [{"text": "No", "callback_data": "ch:1:0123456789ab"}],
+                ]
+            },
+        )
+
+    def test_callback_data_requires_index_and_binding(self) -> None:
+        self.assertEqual(parse_choice_callback("ch:1:0123456789ab"), (1, "0123456789ab"))
+        for data in ("ch:1", "ch:done", "ch:12:0123456789ab", "ch:1:XYZ", "menu:new"):
+            self.assertIsNone(parse_choice_callback(data), data)
+        self.assertEqual(len(session_binding("a")), 12)
+        self.assertNotEqual(session_binding("a"), session_binding("b"))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -105,6 +105,7 @@ from .registry import (
     load_registry,
     validate_execution_root,
 )
+from .reply_choice_callback import handle_reply_choice
 from .routing import (
     is_emergency_stop,
     parse_command,
@@ -1278,7 +1279,11 @@ class ProjectHubService:
         sender = getattr(self, "external_services", {}).get(agent_id)
         telegram = sender.telegram if sender is not None else self._provider_telegram(agent_id)
         result = deliver_final_part(
-            queue_state.delivery, telegram, outbox, state_path=self.config.state_path
+            queue_state.delivery,
+            telegram,
+            outbox,
+            state_path=self.config.state_path,
+            choice_telegram=getattr(self, "telegram", None),
         )
         if result.cleanup_error is not None:
             survived("service.artifact_cleanup", result.cleanup_error)
@@ -1915,9 +1920,9 @@ class ProjectHubService:
             text="",
             reply_to_username=None,
         )
+        if callback.data.startswith("ch:"):  # Ordinary input, not a session control.
+            return handle_reply_choice(self, callback, binding.project_id, topic.topic_id)
         try:
-            from dataclasses import replace
-
             data, expected_control_session = validate_control(
                 self.state, topic.topic_id, callback.data
             )

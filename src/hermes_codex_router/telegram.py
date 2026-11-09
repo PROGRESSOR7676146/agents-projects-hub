@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .reply_choices import parse_choice_callback
 from .telegram_transport import _InitialConnectNotSent, urlopen_with_send_proof
 
 TELEGRAM_HEALTH_FAILURE_THRESHOLD = 3
@@ -351,6 +352,31 @@ class TopicCallback:
     data: str
     message_sender_username: str | None = None
     message_sender_id: int | None = None
+    choice_labels: tuple[str, ...] = ()
+    choice_data: tuple[str, ...] = ()
+
+
+def _choice_buttons(message: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Read Hub choice labels and their exact callback data from the pressed message."""
+    markup = message.get("reply_markup")
+    rows = markup.get("inline_keyboard") if isinstance(markup, dict) else None
+    if not isinstance(rows, list):
+        return (), ()
+    labels: list[str] = []
+    data: list[str] = []
+    bindings: set[str] = set()
+    for row in rows:
+        for button in row if isinstance(row, list) else ():
+            value = button.get("callback_data") if isinstance(button, dict) else None
+            parsed = parse_choice_callback(value) if isinstance(value, str) else None
+            text = button.get("text") if isinstance(button, dict) else None
+            if parsed is None or parsed[0] != len(labels) or not isinstance(text, str):
+                return (), ()
+            bindings.add(parsed[1])
+            labels.append(text)
+            data.append(str(value))
+    # Every button of one choice message carries the same session binding.
+    return (tuple(labels), tuple(data)) if len(bindings) == 1 else ((), ())
 
 
 class _InternalSyntheticTopicUpdate(dict[str, Any]):
@@ -684,6 +710,7 @@ def parse_topic_callback(update: dict[str, Any]) -> TopicCallback | None:
         and message_author["id"] > 0
         else None
     )
+    choices = _choice_buttons(message) if message_sender_id is not None else ((), ())
     return TopicCallback(
         callback_id=callback_id,
         message_id=message["message_id"],
@@ -693,6 +720,8 @@ def parse_topic_callback(update: dict[str, Any]) -> TopicCallback | None:
         data=data,
         message_sender_username=message_sender_username,
         message_sender_id=message_sender_id,
+        choice_labels=choices[0],
+        choice_data=choices[1],
     )
 
 

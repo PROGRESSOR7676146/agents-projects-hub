@@ -10,12 +10,20 @@ from typing import Callable, Protocol
 from .artifacts import artifact_spool_root, remove_spooled_artifact, verify_spooled_artifact
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .receipt_commit import commit_receipt
+from .reply_choices import CHOICE_PROMPT_HTML, keyboard, parse_choice_part
 from .state_delivery import DeliveryStateFacade, TelegramOutboxRecord
 from .telegram import TelegramError
 
 
 class FinalDeliveryTelegram(Protocol):
-    def send_html(self, chat_id: int, thread_id: int, html: str) -> int: ...
+    def send_html(
+        self,
+        chat_id: int,
+        thread_id: int,
+        html: str,
+        *,
+        reply_markup: dict[str, object] | None = None,
+    ) -> int: ...
     def send_document(
         self,
         chat_id: int,
@@ -50,7 +58,10 @@ def deliver_final_part(
     state_path: Path,
     now: datetime | None = None,
     clock: Callable[[], datetime] = utc_now,
+    choice_telegram: FinalDeliveryTelegram | None = None,
 ) -> FinalDeliveryResult:
+    # Buttons are answered through the bot that sent them. The Controller polls
+    # the Hub bot, so choice buttons use it rather than the provider bot.
     def current_time() -> datetime:
         return now if now is not None else clock()
 
@@ -107,6 +118,13 @@ def deliver_final_part(
                 file_path,
                 caption=part.telegram_html or None,
                 file_name=part.file_name,
+            )
+        elif (choice := parse_choice_part(part.telegram_html)) is not None and choice[1]:
+            message_id = (choice_telegram or telegram).send_html(
+                outbox.chat_id,
+                outbox.thread_id,
+                CHOICE_PROMPT_HTML,
+                reply_markup=keyboard(*choice),
             )
         else:
             message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, part.telegram_html)

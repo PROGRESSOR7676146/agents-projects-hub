@@ -98,9 +98,10 @@ input; selected/pasted quotations are context, not Reply addressing.
   a private immutable, verified delivery copy until Telegram accepts it. Symlinks, archives, shared
   staging and prose paths MUST NOT authorize files; rejected files must be explained and valid files
   cannot disappear behind a count cutoff.
-- **REQ-UX-006 (Planned):** Decision buttons MAY offer bounded choices, but callbacks MUST remain
-  persisted and bound to the owner, topic and session; model-supplied commands MUST NOT execute
-  directly.
+- **REQ-UX-006 (Implemented for project topics, ADR 0097):** Decision buttons MAY offer bounded
+  choices, but callbacks MUST remain persisted and bound to the owner, topic and session;
+  model-supplied commands MUST NOT execute directly. A press MUST act only as the sender's ordinary
+  reply with the label.
 - **REQ-UX-007 (Planned):** Complex reversible work MAY offer a durable 60-second
   Start/Clarify/Cancel grace period after explaining its approach; simple work starts immediately.
   Timer expiry MUST NOT authorize destruction or new authority, and restart, correction and stop

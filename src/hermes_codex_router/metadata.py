@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from .codex_appserver import LimitWindow, RateLimits, TurnResult, context_remaining_percent
 from .codex_turn_modes import goal_mode_label
 from .quota_windows import quota_window_label
+from .reply_choices import append_choice_suffix, extract_reply_choices
 
 _ABSENT_DETAIL_VALUES = {"", "unavailable", "unknown", "none", "n/a"}
 _MONTH_LABELS = (
@@ -94,11 +95,12 @@ def _compact_details(details: dict[str, str]) -> str:
 
 
 def format_agent_response(answer: str, details: dict[str, str]) -> str:
+    answer, choices = extract_reply_choices(answer or "")
     visible = html.escape(answer or "The agent completed without a visible text response.")
     block = _compact_details(details)
-    if not block:
-        return visible
-    return f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
+    if block:
+        visible = f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
+    return append_choice_suffix(visible, choices)
 
 
 def _reset_text(window: LimitWindow | None, timezone: ZoneInfo) -> str:

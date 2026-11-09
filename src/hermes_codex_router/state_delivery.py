@@ -14,6 +14,7 @@ from .delivery_control_predicates import final_control_reconciled, progress_cont
 from .delivery_hold_predicates import nonblocking_execution_notice, outbox_delivery_hold_released
 from .delivery_receipts import DeliveryReceipts
 from .delivery_wait import prepare_delivery_waits
+from .reply_choices import choice_part_html, session_binding, split_choice_suffix
 from .telegram_multipart import split_telegram_html
 
 if TYPE_CHECKING:
@@ -226,7 +227,8 @@ class DeliveryStateFacade:
         telegram_html: str,
         artifacts: tuple[ValidatedArtifact, ...] = (),
     ) -> None:
-        parts = split_telegram_html(telegram_html)
+        visible_html, choices = split_choice_suffix(telegram_html)
+        parts = split_telegram_html(visible_html)
         for part_index, part in enumerate(parts, start=1):
             self._connection.execute(
                 """INSERT INTO telegram_outbox_parts
@@ -252,6 +254,30 @@ class DeliveryStateFacade:
                     artifact.name,
                     artifact.size,
                     artifact.sha256,
+                ),
+            )
+        session = (
+            self._connection.execute(
+                """SELECT jobs.session_id FROM telegram_outbox outbox
+                   JOIN provider_jobs jobs ON jobs.job_id = outbox.job_id
+                   WHERE outbox.outbox_id = ?""",
+                (outbox_id,),
+            ).fetchone()
+            if choices
+            else None
+        )
+        if session is not None and session[0]:
+            # Buttons follow every visible part, so they are pressed only after
+            # the whole answer and its files are in the chat.
+            self._connection.execute(
+                """INSERT INTO telegram_outbox_parts
+                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
+                    file_size, file_sha256)
+                   VALUES (?, ?, ?, 'text', NULL, NULL, NULL, NULL)""",
+                (
+                    outbox_id,
+                    start_index + len(artifacts),
+                    choice_part_html(choices, session_binding(str(session[0]))),
                 ),
             )
 
