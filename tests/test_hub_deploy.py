@@ -812,6 +812,41 @@ class ServiceManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(hub_deploy.Refused, "dependency"):
             hub_deploy._check_dependencies(Manager(), ["worker.service"], ["codex.service"])
 
+    def test_oneshot_config_only_helper_may_only_be_started(self):
+        def manager(kind, remain, edge):
+            class Manager:
+                def property(self, unit, name):
+                    if name in ("Id", "Names"):
+                        return unit
+                    if unit == "socket-dir.service" and name == "Type":
+                        return kind
+                    if unit == "socket-dir.service" and name == "RemainAfterExit":
+                        return remain
+                    return "socket-dir.service" if (unit, name) == ("worker.service", edge) else ""
+
+            return Manager()
+
+        protected = ["codex.service", "socket-dir.service"]
+        hub_deploy._check_dependencies(
+            manager("oneshot", "no", "Wants"),
+            ["worker.service"],
+            protected,
+            ("socket-dir.service",),
+        )
+        for kind, remain, edge, helpers in (
+            ("oneshot", "yes", "Wants", ("socket-dir.service",)),
+            ("simple", "no", "Wants", ("socket-dir.service",)),
+            ("oneshot", "no", "Wants", ()),
+            ("oneshot", "no", "PropagatesStopTo", ("socket-dir.service",)),
+        ):
+            with (
+                self.subTest(kind=kind, remain=remain, edge=edge, helpers=helpers),
+                self.assertRaisesRegex(hub_deploy.Refused, "untouched unit: socket-dir"),
+            ):
+                hub_deploy._check_dependencies(
+                    manager(kind, remain, edge), ["worker.service"], protected, helpers
+                )
+
     def test_missing_dependency_property_is_not_treated_as_empty(self):
         manager = hub_deploy.ServiceManager(lambda argv: SimpleNamespace(stdout=""))
         with self.assertRaisesRegex(hub_deploy.Refused, "dependency property"):
@@ -887,13 +922,15 @@ class ServiceManagerTests(unittest.TestCase):
 
         def runner(argv):
             calls.append(argv)
-            name = argv[-1].split("=", 1)[1]
+            name = next(item for item in argv if item.startswith("--property=")).split("=", 1)[1]
             return SimpleNamespace(stdout=name + "=fixture.service\n")
 
         manager = hub_deploy.ServiceManager(runner)
         for name in ("PropagatesStopTo", "StopPropagatedFrom", "Conflicts", "ConflictedBy"):
             self.assertEqual(manager.property("worker.service", name), "fixture.service")
-            self.assertEqual(calls[-1][-2:], ["--all", "--property=" + name])
+            self.assertEqual(
+                calls[-1][-4:], ["--all", "--property=" + name, "--", "worker.service"]
+            )
         manager.runner = lambda argv: SimpleNamespace(stdout="")
         for name in ("PropagatesStopTo", "StopPropagatedFrom", "Conflicts", "ConflictedBy"):
             with (
@@ -922,12 +959,23 @@ class ServiceManagerTests(unittest.TestCase):
                     "systemctl",
                     "--user",
                     "show",
-                    "gateway.service",
                     "--property=Environment",
                     "--value",
+                    "--",
+                    "gateway.service",
                 ]
             ],
         )
+
+    def test_root_slice_is_not_parsed_as_an_option(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            return SimpleNamespace(stdout="Id=-.slice\n")
+
+        hub_deploy.ServiceManager(runner).property("-.slice", "Id")
+        self.assertEqual(calls[0][-2:], ["--", "-.slice"])
 
     def test_effective_settings_and_fallback_are_checked(self):
         values = {

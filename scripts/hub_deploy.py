@@ -1252,7 +1252,7 @@ def verify_saved_plan(plan_dir: Path, *, check_live: bool = True) -> dict[str, A
 def inspect_unit(unit: str, root: str, runner: Callable[..., Any]) -> bool:
     def property_value(name: str) -> str:
         return runner(
-            ["systemctl", "--user", "show", unit, f"--property={name}", "--value"]
+            ["systemctl", "--user", "show", f"--property={name}", "--value", "--", unit]
         ).stdout.strip()
 
     if property_value("ActiveState") != "active":
@@ -1280,7 +1280,8 @@ class ServiceManager:
     def property(self, unit: str, name: str) -> str:
         if name in (*_DEPENDENCIES, "Id", "Names"):
             output = self.runner(
-                ["systemctl", "--user", "show", unit, "--all", "--property=" + name]
+                # "--" keeps unit names such as the root "-.slice" from parsing as options.
+                ["systemctl", "--user", "show", "--all", "--property=" + name, "--", unit]
             ).stdout.strip()
             prefix = name + "="
             need(
@@ -1289,7 +1290,7 @@ class ServiceManager:
             )
             return output[len(prefix) :]
         return self.runner(
-            ["systemctl", "--user", "show", unit, "--property=" + name, "--value"]
+            ["systemctl", "--user", "show", "--property=" + name, "--value", "--", unit]
         ).stdout.strip()
 
     def identity(self, unit: str) -> dict[str, str]:
@@ -1356,8 +1357,14 @@ _DEPENDENCIES = (
 )
 
 
-def _check_dependencies(manager: Any, operated: list[str], untouched: list[str]) -> None:
-    """Follow effective systemd start/stop propagation, refusing protected effects."""
+def _check_dependencies(
+    manager: Any, operated: list[str], untouched: list[str], helpers: tuple[str, ...] = ()
+) -> None:
+    """Follow effective systemd start/stop propagation, refusing protected effects.
+
+    A helper is a protected oneshot without RemainAfterExit: every dependent start
+    re-runs it by design, so start propagation may reach it but stop may not.
+    """
     protected: set[str] = set()
     cache: dict[str, dict[str, list[str]]] = {}
     aliases: dict[str, set[str]] = {}
@@ -1384,6 +1391,12 @@ def _check_dependencies(manager: Any, operated: list[str], untouched: list[str])
     for unit in untouched:
         read(unit)
         protected.update(aliases[unit])
+    start_helpers = {
+        unit
+        for unit in helpers
+        if manager.property(unit, "Type") == "oneshot"
+        and manager.property(unit, "RemainAfterExit") == "no"
+    }
     pending = [(unit, action) for unit in operated for action in ("start", "stop")]
     visited: set[tuple[str, str]] = set()
     while pending:
@@ -1392,7 +1405,10 @@ def _check_dependencies(manager: Any, operated: list[str], untouched: list[str])
             continue
         visited.add((unit, action))
         values = read(unit)
-        need(not aliases[unit] & protected, "dependency can operate on untouched unit: " + unit)
+        need(
+            not aliases[unit] & protected or (action == "start" and unit in start_helpers),
+            "dependency can operate on untouched unit: " + unit,
+        )
         if action == "start":
             for name in ("Wants", "Requires", "BindsTo", "Upholds"):
                 pending.extend((target, "start") for target in values[name])
@@ -1484,6 +1500,7 @@ def _check_window_dependencies(plan: dict[str, Any], manager: Any) -> None:
         manager,
         [*plan["restart_order"], installation["monitor_service"], installation["monitor_timer"]],
         list(set(plan["untouched_units"]) | set(plan["config_only_units"])),
+        tuple(sorted(set(plan["config_only_units"]) - set(plan["untouched_units"]))),
     )
     for entry in plan["files"]:
         path = Path(entry["path"])
