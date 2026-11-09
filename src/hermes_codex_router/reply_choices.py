@@ -60,3 +60,29 @@ def parse_choice_part(part_html: str) -> tuple[str, ...] | None:
     if lines[0] != CHOICE_PART_MARKER:
         return None
     return _valid_labels([html.unescape(line) for line in lines[1:]])
+
+
+def keyboard(labels: tuple[str, ...]) -> dict[str, object]:
+    return {
+        "inline_keyboard": [
+            [{"text": label, "callback_data": f"ch:{index}"}] for index, label in enumerate(labels)
+        ]
+    }
+
+
+def append_choice_suffix(response_html: str, labels: tuple[str, ...]) -> str:
+    """Carry labels with the formatted answer until the outbox is split."""
+    if not labels:
+        return response_html
+    return f"{response_html}\n\n{choice_part_html(labels)}"
+
+
+def split_choice_suffix(response_html: str) -> tuple[str, tuple[str, ...]]:
+    """Separate a trailing choice part from the visible answer HTML."""
+    position = response_html.rfind(f"\n\n{CHOICE_PART_MARKER}\n")
+    if position < 0:
+        return response_html, ()
+    labels = parse_choice_part(response_html[position + 2 :])
+    if labels is None or not response_html[:position].strip():
+        return response_html, ()
+    return response_html[:position], labels

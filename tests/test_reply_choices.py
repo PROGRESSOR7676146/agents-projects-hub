@@ -4,9 +4,12 @@ import unittest
 
 from hermes_codex_router.reply_choices import (
     CHOICE_PART_MARKER,
+    append_choice_suffix,
     choice_part_html,
     extract_reply_choices,
+    keyboard,
     parse_choice_part,
+    split_choice_suffix,
 )
 
 
@@ -56,6 +59,30 @@ class ReplyChoicesTests(unittest.TestCase):
     def test_ordinary_html_is_not_a_choice_part(self) -> None:
         self.assertIsNone(parse_choice_part("Hello"))
         self.assertIsNone(parse_choice_part(CHOICE_PART_MARKER + "\nOnly"))
+
+    def test_suffix_round_trips_and_is_separated_from_the_answer(self) -> None:
+        combined = append_choice_suffix("Answer <b>x</b>", ("Yes", "No"))
+        self.assertEqual(split_choice_suffix(combined), ("Answer <b>x</b>", ("Yes", "No")))
+        self.assertEqual(append_choice_suffix("Answer", ()), "Answer")
+
+    def test_html_without_a_valid_suffix_is_unchanged(self) -> None:
+        for value in (
+            "Answer",
+            f"Answer\n\n{CHOICE_PART_MARKER}\nOnly",
+            f"\n\n{CHOICE_PART_MARKER}\nA\nB",
+        ):
+            self.assertEqual(split_choice_suffix(value), (value, ()))
+
+    def test_keyboard_uses_index_callbacks(self) -> None:
+        self.assertEqual(
+            keyboard(("Yes", "No")),
+            {
+                "inline_keyboard": [
+                    [{"text": "Yes", "callback_data": "ch:0"}],
+                    [{"text": "No", "callback_data": "ch:1"}],
+                ]
+            },
+        )
 
 
 if __name__ == "__main__":
