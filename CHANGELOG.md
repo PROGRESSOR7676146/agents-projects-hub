@@ -5,10 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-11-10
+
 - Word the Claude quota notice for the owner: the account usage limit was
   reached, the route reported no reset time, and the conversation and partial
   work are preserved for a resend after the reset.
-
 - Start each Claude turn under `nice -n 10`, so the provider and every tool it
   spawns (builds, test suites) run below the Hub control plane and cannot starve
   its SQLite writers. Codex tools still run at the app-server's priority: its
@@ -19,7 +20,6 @@ and releases use semantic versioning while the public API is still evolving.
 - Doctor: an incompatible inactive Claude session is an informational check
   (`claude_inactive_session_modes`); only active sessions keep the required
   `claude_session_modes` check, since switching back is refused explicitly.
-
 - Report a Claude turn that ends on HTTP 500/502/503/504 after the CLI's own
   retries as `claude_provider_unavailable` (temporary network, DNS or upstream
   outage; conversation preserved, send a follow-up to resume) instead of a
