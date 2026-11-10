@@ -434,6 +434,52 @@ class ExternalRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ClaudeStreamError, "malformed"):
             self._claude_process("import os, time\nos.write(1, b'{broken}\\n')\ntime.sleep(30)\n")
 
+    def test_owned_claude_pipe_publishes_quota_observations_after_exit(self) -> None:
+        session = "00000000-0000-4000-8000-000000000001"
+        events = (
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "rejected",
+                    "rateLimitType": "five_hour",
+                    "resetsAt": 1893456000,
+                },
+                "message": "private sentinel",
+            },
+            {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                "session_id": session,
+                "api_error_status": 429,
+            },
+        )
+        payload = "\n".join(map(json.dumps, events)) + "\n"
+        observed: list[dict[str, object]] = []
+        with self.assertRaises(ClaudeTerminalFailure) as raised:
+            self._claude_process(
+                f"import sys\nsys.stdout.write({payload!r})\nsys.exit(1)\n",
+                new_session_id=session,
+                on_quota_observation=observed.append,
+            )
+        self.assertEqual(raised.exception.code, "claude_quota_exhausted")
+        self.assertEqual(
+            [event["event_type"] for event in observed], ["rate_limit_event", "result"]
+        )
+        self.assertEqual(observed[0]["reset_at"], "2030-01-01T00:00:00Z")
+        self.assertNotIn("private sentinel", repr(observed))
+
+    def test_owned_claude_pipe_keeps_observations_from_an_incomplete_stream(self) -> None:
+        observed: list[dict[str, object]] = []
+        payload = json.dumps({"type": "rate_limit_event", "status": "rejected"}) + "\n{broken}\n"
+        with self.assertRaisesRegex(ClaudeStreamError, "malformed"):
+            self._claude_process(
+                f"import sys\nsys.stdout.write({payload!r})\n",
+                on_quota_observation=observed.append,
+            )
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0]["event_type"], "rate_limit_event")
+
     def test_claude_unexpected_permission_request_is_refused_before_eof(self) -> None:
         visible: list[ClaudeVisibleAssistant] = []
         request = (

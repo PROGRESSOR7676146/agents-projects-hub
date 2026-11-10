@@ -5,6 +5,13 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
+from .claude_quota_observation import (
+    MAX_QUOTA_OBSERVATIONS,
+    QuotaObservationCallback,
+    quota_observation,
+)
+from .diagnostic_log import survived
+
 if TYPE_CHECKING:
     from .claude_corrections import ClaudeCorrectionInput
     from .claude_image_receipt import ClaudeImageReceipt
@@ -134,12 +141,16 @@ class ClaudeStreamReader:
         *,
         expected_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
+        on_quota_observation: QuotaObservationCallback | None = None,
         event_policy: Callable[[dict[str, object]], None] | None = None,
         image_receipt: ClaudeImageReceipt | None = None,
         correction_input: ClaudeCorrectionInput | None = None,
     ) -> None:
         self.session_id = expected_session_id
         self.on_visible_assistant = on_visible_assistant
+        self.on_quota_observation = on_quota_observation
+        self._quota_observations: list[dict[str, object]] = []
+        self._quota_assistant_error: str | None = None
         self.event_policy = event_policy
         if event_policy is not None and image_receipt is not None:
             raise ClaudeStreamError("claude image input cannot use file-tool policy")
@@ -158,6 +169,17 @@ class ClaudeStreamReader:
     @property
     def terminal_seen(self) -> bool:
         return self._terminal_seen
+
+    def publish_quota_observations(self) -> None:
+        """Best-effort persistence after the process drain and deadline checks."""
+        observations, self._quota_observations = self._quota_observations, []
+        if self.on_quota_observation is None:
+            return
+        for observation in observations:
+            try:
+                self.on_quota_observation(observation)
+            except Exception as error:
+                survived("claude_stream.quota_observation", error)
 
     def feed(self, chunk: bytes) -> None:
         self._received_bytes += len(chunk)
@@ -243,6 +265,8 @@ class ClaudeStreamReader:
             self.session_id = identity
         if event.get("type") == "result":
             _validate_terminal(event)
+        if self.on_quota_observation is not None and not self._terminal_seen:
+            self._observe_quota(event)
         retain = (
             self.correction_input.observe(event)
             if self.correction_input
@@ -273,6 +297,37 @@ class ClaudeStreamReader:
                 if len(self._output) + len(encoded) > MAX_CLAUDE_OUTPUT_BYTES:
                     raise ClaudeStreamError("claude retained visible output exceeded its limit")
                 self._output.extend(encoded)
+
+    def _observe_quota(self, event: dict[str, object]) -> None:
+        kind = event.get("type")
+        if kind == "assistant":
+            error = event.get("error")
+            self._quota_assistant_error = (
+                "rate_limit"
+                if self.session_id is not None
+                and event.get("session_id") == self.session_id
+                and error == "rate_limit"
+                else None
+            )
+        api_status = event.get("api_error_status")
+        quota_result = (
+            kind == "result"
+            and event.get("is_error") is True
+            and (
+                (type(api_status) is int and api_status == 429)
+                or _terminal_failure_code(event, self._quota_assistant_error)
+                == "claude_quota_exhausted"
+            )
+        )
+        if kind == "result":
+            self._quota_assistant_error = None
+        observation = quota_observation(event, quota_result=quota_result)
+        if observation is None:
+            return
+        if len(self._quota_observations) == MAX_QUOTA_OBSERVATIONS:
+            # Keep the latest evidence, including a terminal quota rejection.
+            self._quota_observations.pop(0)
+        self._quota_observations.append(observation)
 
     def _visible_assistant(self, event: dict[str, object]) -> None:
         # Native assistant messages are complete; stream_event deltas are not.
