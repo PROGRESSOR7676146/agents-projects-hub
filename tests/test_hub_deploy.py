@@ -747,6 +747,30 @@ class StageTests(StageFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "protected"):
             hub_deploy.create_plan(self.install, old, new, self.runner)
 
+    def test_unchanged_codex_template_remains_a_guard(self):
+        unit = "agents-projects-hub-codex-app-server.service"
+        self.install["untouched_units"][0] = unit
+        candidate = (Path(__file__).resolve().parents[1] / "systemd" / unit).read_bytes()
+        self.assertNotIn(b"Nice=10\n", candidate)
+        (self.units / unit).write_bytes(candidate)
+        self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
+        templates = hub_deploy._templates(new)
+        templates[unit] = candidate
+        with patch.object(hub_deploy, "_templates", return_value=templates):
+            plan = hub_deploy.verify_saved_plan(
+                hub_deploy.create_plan(self.install, old, new, self.runner)
+            )
+            templates[unit] = candidate.replace(b"[Service]\n", b"[Service]\nNice=10\n", 1)
+            with self.assertRaisesRegex(hub_deploy.Refused, "protected unit template changed"):
+                hub_deploy.create_plan(self.install, old, new, self.runner)
+        entry = next(item for item in plan["files"] if item["path"] == str(self.units / unit))
+        self.assertEqual(entry["kind"], "base_guard")
+        self.assertFalse(entry["changed"])
+
     def test_template_and_instance_dropins_are_planned_and_stray_ignored(self):
         self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
         worker = self.units / "worker.service.d/override.conf"
@@ -1973,6 +1997,8 @@ class WindowTests(StageFixture):
 
     def test_rollback_never_restores_database_backup(self):
         original = self.manager.start
+        manifest_bytes = self.manifest.read_bytes()
+        manifest_mode = self.manifest.stat().st_mode & 0o777
 
         def start(unit):
             if unit == "controller.service":
@@ -1988,7 +2014,8 @@ class WindowTests(StageFixture):
         self.assertEqual(self.execute()["outcome"], "ROLLED_BACK")
         with closing(sqlite3.connect(self.db)) as db:
             self.assertEqual(db.execute("SELECT value FROM after_backup").fetchone()[0], "retained")
-        self.assertEqual(self.manifest.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.manifest.read_bytes(), manifest_bytes)
+        self.assertEqual(self.manifest.stat().st_mode & 0o777, manifest_mode)
 
     def test_monitor_failure_is_incomplete_without_rollback(self):
         self.manager.monitor_failures = 2

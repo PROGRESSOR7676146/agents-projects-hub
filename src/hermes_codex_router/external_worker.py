@@ -9,13 +9,9 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
+from .claude_quota_observation import QuotaObservationCallback
 from .claude_recovery import recover_claude_completion, recover_claude_job
-from .claude_stream import (
-    ClaudeStreamError,
-    ClaudeTerminalFailure,
-    ClaudeVisibleAssistant,
-    VisibleAssistantCallback,
-)
+from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import (
     CodexAppServerClient,
 )
@@ -67,6 +63,7 @@ from .telegram_interaction import (
 from .turn_observation import TurnObservation
 from .worker_activity import codex_activity_for_turn
 from .worker_activity_barrier import WorkerActivityBarrier
+from .worker_claude_observations import claude_stream_observers
 from .worker_execution import (
     ProviderSessionPreparationError,
     ProviderTurnStopped,
@@ -1136,6 +1133,7 @@ class ExternalQueueWorker:
         claude_session_binding = None
         claude_journal = None
         on_visible_assistant: VisibleAssistantCallback | None = None
+        on_quota_observation: QuotaObservationCallback | None = None
         if self.agent.runtime == "claude":
             try:
                 claude_journal = ExecutionJournal(self.state)
@@ -1145,24 +1143,14 @@ class ExternalQueueWorker:
             except (StateError, OSError) as exc:
                 raise ProviderSessionPreparationError() from exc
 
-            def record_visible_assistant(item: ClaudeVisibleAssistant) -> None:
-                assert claude_journal is not None
-                assert claude_session_binding is not None
-                if item.session_id != claude_session_binding.session_id:
-                    raise ClaudeStreamError("claude visible message has a different session")
-                try:
-                    claude_journal.record_claude_item(
-                        job.job_id,
-                        token,
-                        claude_session_binding.session_id,
-                        item.message_id,
-                        item.text,
-                        cwd=Path(project.root),
-                    )
-                except Exception as exc:
-                    raise ClaudeStreamError("claude visible message could not be saved") from exc
-
-            on_visible_assistant = record_visible_assistant
+            on_visible_assistant, on_quota_observation = claude_stream_observers(
+                claude_journal,
+                claude_session_binding,
+                job.job_id,
+                token,
+                Path(project.root),
+                self._record_event,
+            )
         prepare_interrupt = getattr(adapter, "prepare_interruptible_turn", None)
         interrupt_prepared = callable(prepare_interrupt)
         if interrupt_prepared:
@@ -1239,6 +1227,7 @@ class ExternalQueueWorker:
                     staging_dir=staging_dir,
                     claude_session_binding=claude_session_binding,
                     on_visible_assistant=on_visible_assistant,
+                    on_quota_observation=on_quota_observation,
                     on_claude_process_started=on_claude_process_started,
                     claude_sandbox=hosted.sandbox if hosted else None,
                     claude_permission_wait=hosted.permission_wait if hosted else None,

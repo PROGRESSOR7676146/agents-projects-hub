@@ -11,7 +11,8 @@ are intentionally excluded.
 Follow the scoped read order in [AGENTS.md](../AGENTS.md).
 The [product index](product/PRODUCT_REQUIREMENTS.md) routes capability reading;
 [maintenance](product/MAINTENANCE.md#19-maintenance-and-change-policy) defines
-document ownership. [Project status](status/PROJECT_STATUS.md) records evidence,
+document ownership. [Project status](status/PROJECT_STATUS.md) records current evidence;
+[project status history](status/PROJECT_STATUS_HISTORY.md) retains earlier checkpoints,
 and the [decision map](decisions/README.md) routes durable rationale.
 The completed [requirements split](product/REQUIREMENTS_SPLIT_PLAN.md) is
 migration rationale, not a routine prerequisite or another specification.

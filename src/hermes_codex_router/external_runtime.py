@@ -43,6 +43,7 @@ from .claude_image_input import (
 from .claude_image_receipt import ClaudeImageReceipt
 from .claude_native_settings import text_only_settings
 from .claude_permission_wait import PermissionWaitClock, ProductiveDeadline
+from .claude_quota_observation import QuotaObservationCallback
 from .claude_stream import (
     MAX_CLAUDE_STDERR_BYTES,
     ClaudeStreamError,
@@ -478,6 +479,7 @@ class ExternalCliAdapter:
         staging_dir: Path | None = None,
         new_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
+        on_quota_observation: QuotaObservationCallback | None = None,
         on_claude_process_started: Callable[[], None] | None = None,
         claude_sandbox: FileToolSandboxConfig | ClaudeHostConfig | None = None,
         claude_permission_wait: PermissionWaitClock | None = None,
@@ -531,6 +533,7 @@ class ExternalCliAdapter:
                 timeout=timeout,
                 expected_session_id=session_id if session_id is not None else new_session_id,
                 on_visible_assistant=on_visible_assistant,
+                on_quota_observation=on_quota_observation,
                 on_process_started=on_claude_process_started,
                 sandbox=claude_sandbox,
                 permission_wait=claude_permission_wait,
@@ -655,14 +658,12 @@ class ExternalCliAdapter:
                 timeout=timeout,
             )
             if self.runtime == "claude":
-                if len(result.stderr.encode("utf-8")) > MAX_CLAUDE_STDERR_BYTES:
-                    raise ClaudeStreamError("claude diagnostic output exceeded its limit")
-                reader = ClaudeStreamReader(
+                self._validate_captured_claude_output(
+                    result,
                     expected_session_id=session_id if session_id is not None else new_session_id,
                     on_visible_assistant=on_visible_assistant,
+                    on_quota_observation=on_quota_observation,
                 )
-                reader.feed(result.stdout.encode("utf-8"))
-                reader.finish()
         if self._interrupt_requested.is_set() and not owned_claude:
             raise ExternalTurnInterrupted(f"{self.runtime} turn interrupted by user")
         if detected_limit:
@@ -675,6 +676,30 @@ class ExternalCliAdapter:
             antigravity_log=antigravity_log,
             event_policy=_sandbox_event_policy(claude_sandbox),
         )
+
+    def _validate_captured_claude_output(
+        self,
+        result: subprocess.CompletedProcess[str],
+        *,
+        expected_session_id: str | None,
+        on_visible_assistant: VisibleAssistantCallback | None,
+        on_quota_observation: QuotaObservationCallback | None,
+    ) -> None:
+        """Validate a supplied runner's completed capture and publish its observations."""
+        if len(result.stderr.encode("utf-8")) > MAX_CLAUDE_STDERR_BYTES:
+            raise ClaudeStreamError("claude diagnostic output exceeded its limit")
+        reader = ClaudeStreamReader(
+            expected_session_id=expected_session_id,
+            on_visible_assistant=on_visible_assistant,
+            on_quota_observation=on_quota_observation,
+        )
+        completed = None
+        try:
+            reader.feed(result.stdout.encode("utf-8"))
+            reader.finish()
+            completed = result
+        finally:
+            reader.publish_quota_observations(completed, self._interrupt_requested.is_set())
 
     def _turn_environment(
         self, sandbox: FileToolSandboxConfig | ClaudeHostConfig | None, project_id: str | None
@@ -831,6 +856,7 @@ class ExternalCliAdapter:
         permission_wait: PermissionWaitClock | None = None,
         input_data: bytes | None = None,
         correction_input: ClaudeCorrectionInput | None = None,
+        on_quota_observation: QuotaObservationCallback | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Own mount descriptors across every productive invocation exit path."""
         if sandbox is not None and input_data is not None and correction_input is None:
@@ -861,6 +887,7 @@ class ExternalCliAdapter:
                     timeout=timeout,
                     expected_session_id=expected_session_id,
                     on_visible_assistant=on_visible_assistant,
+                    on_quota_observation=on_quota_observation,
                     on_process_started=on_process_started,
                     input_data=input_data,
                     image_receipt=receipt,
@@ -901,6 +928,7 @@ class ExternalCliAdapter:
                     timeout=timeout,
                     expected_session_id=expected_session_id,
                     on_visible_assistant=on_visible_assistant,
+                    on_quota_observation=on_quota_observation,
                     on_process_started=on_process_started,
                     event_policy=host_event_policy,
                     permission_wait=permission_wait,
@@ -937,6 +965,7 @@ class ExternalCliAdapter:
                 timeout=timeout,
                 expected_session_id=expected_session_id,
                 on_visible_assistant=on_visible_assistant,
+                on_quota_observation=on_quota_observation,
                 on_process_started=on_process_started,
                 event_policy=file_tool_event_policy(sandbox.profile),
                 pass_fds=launch.pass_fds,
@@ -1000,6 +1029,7 @@ class ExternalCliAdapter:
         image_receipt: ClaudeImageReceipt | None = None,
         permission_wait: PermissionWaitClock | None = None,
         correction_input: ClaudeCorrectionInput | None = None,
+        on_quota_observation: QuotaObservationCallback | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Drain both pipes without communicate() or an unbounded reader queue."""
         if self._interrupt_requested.is_set():
@@ -1018,6 +1048,7 @@ class ExternalCliAdapter:
         reader = ClaudeStreamReader(
             expected_session_id=expected_session_id,
             on_visible_assistant=on_visible_assistant,
+            on_quota_observation=on_quota_observation,
             event_policy=event_policy,
             image_receipt=image_receipt,
             correction_input=correction_input,
@@ -1046,6 +1077,7 @@ class ExternalCliAdapter:
         input_offset = 0
         next_input_poll = 0.0
         stop_draining = False
+        completed = None
         try:
             if on_process_started is not None:
                 try:
@@ -1157,7 +1189,8 @@ class ExternalCliAdapter:
             stdout = reader.finish()
             if deadline.remaining() <= 0:
                 raise subprocess.TimeoutExpired(argv, timeout)
-            return subprocess.CompletedProcess(argv, exit_code, stdout, "")
+            completed = subprocess.CompletedProcess(argv, exit_code, stdout, "")
+            return completed
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
             # A deadline does not prove EOF or complete reap/drain. A stop flag
@@ -1177,6 +1210,7 @@ class ExternalCliAdapter:
                 with self._process_lock:
                     if self._active_process is process:
                         self._active_process = None
+                reader.publish_quota_observations(completed, self._interrupt_requested.is_set())
 
     def _terminate_claude_process(self, process: subprocess.Popen[str], *, graceful: bool) -> None:
         with self._process_lock:

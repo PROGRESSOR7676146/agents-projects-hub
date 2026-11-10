@@ -16,6 +16,7 @@ from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_host_profile import HOST_TURN_SECONDS, ClaudeHostConfig
 from .claude_image_input import VerifiedClaudeImage
 from .claude_permission_wait import PermissionWaitClock
+from .claude_quota_observation import QuotaObservationCallback
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError, CodexRetryBindingError
@@ -453,6 +454,7 @@ def invoke_external_provider_turn(
     staging_dir: Path,
     claude_session_binding: ClaudeSessionBinding | None = None,
     on_visible_assistant: VisibleAssistantCallback | None = None,
+    on_quota_observation: QuotaObservationCallback | None = None,
     on_claude_process_started: Callable[[], None] | None = None,
     claude_sandbox: FileToolSandboxConfig | ClaudeHostConfig | None = None,
     claude_permission_wait: PermissionWaitClock | None = None,
@@ -482,6 +484,7 @@ def invoke_external_provider_turn(
                 interrupt_prepared=interrupt_prepared,
                 staging_dir=staging_dir,
                 on_visible_assistant=on_visible_assistant,
+                on_quota_observation=on_quota_observation,
                 on_claude_process_started=on_claude_process_started,
                 claude_sandbox=claude_sandbox,
                 claude_permission_wait=claude_permission_wait,

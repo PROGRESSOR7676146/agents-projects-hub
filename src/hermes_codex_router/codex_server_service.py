@@ -12,9 +12,11 @@ import sqlite3
 import stat
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from .codex_control_predicates import unsettled_control
+from .diagnostic_log import configure_process_logging, survived
 from .release_identity import CURRENT_RELEASE
 from .state_connection import connect_existing
 from .state_errors import StateError
@@ -455,6 +457,12 @@ def main(argv: list[str] | None = None) -> int:
         authorize_start(manifest, args.receipt, Path(runtime))
         os.environ["CODEX_HOME"] = manifest["codex_home"]
         binary = manifest["codex_binary"]["path"]
+        try:
+            os.nice(10)
+        except OSError as error:
+            with suppress(Exception):
+                configure_process_logging()
+            survived("codex_server_service.priority", error)
         os.execv(binary, [binary, "app-server", "--listen", "unix://"])
     except (OSError, ValueError, KeyError, TypeError, StateError) as exc:
         # The journal is the only record of a refused boot start: name the gate.

@@ -27,11 +27,28 @@ MANAGED_HOOKS = ("pre-commit", "pre-push")
 HOOK_ROOT = "hub-hooks"
 # The single mutable hook directory used before sets; removed on migration.
 LEGACY_HOOK_DIRECTORY = "hub-managed-hooks"
-_ZERO_OID = "0" * 40
+_ZERO_OIDS = {"0" * 40, "0" * 64}
+_LOCAL_GIT_COMMANDS = frozenset(
+    {"check-ref-format", "config", "rev-parse", "show-ref", "status", "worktree"}
+)
 
 
 class PreflightError(RuntimeError):
     pass
+
+
+def _command_timeout(argv: Sequence[str], timeout: int | None) -> int:
+    if timeout is not None:
+        return timeout
+    # Only the local Git commands used here get extra time for disk contention.
+    # Network and unknown commands retain the shorter default.
+    if argv and argv[0] == "git":
+        args = argv[1:]
+        if args and args[0] == "--no-replace-objects":
+            args = args[1:]
+        if args and args[0] in _LOCAL_GIT_COMMANDS:
+            return 300
+    return 60
 
 
 def _run(
@@ -39,7 +56,7 @@ def _run(
     *,
     cwd: Path,
     env: dict[str, str] | None = None,
-    timeout: int = 60,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -48,7 +65,7 @@ def _run(
             env=env,
             text=True,
             capture_output=True,
-            timeout=timeout,
+            timeout=_command_timeout(argv, timeout),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise PreflightError("required local or hosted publication check is unavailable") from error
@@ -58,17 +75,47 @@ def _run_bytes(
     argv: Sequence[str],
     *,
     cwd: Path,
-    timeout: int = 60,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
             list(argv),
             cwd=cwd,
             capture_output=True,
-            timeout=timeout,
+            timeout=_command_timeout(argv, timeout),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise PreflightError("required hosted publication check is unavailable") from error
+
+
+def _deletion_only(source: str) -> bool:
+    lines = source.splitlines()
+    if not lines:
+        return False
+    remote_refs = []
+    only_deletions = True
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 4:
+            raise PreflightError("pre-push reference input is malformed")
+        local_ref, local_oid, remote_ref, remote_oid = fields
+        if (
+            re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", local_oid) is None
+            or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_oid) is None
+            or len(local_oid) != len(remote_oid)
+            or not remote_ref.startswith("refs/")
+            or (local_ref == "(delete)") != (local_oid in _ZERO_OIDS)
+        ):
+            raise PreflightError("pre-push reference input is malformed")
+        remote_refs.append(remote_ref)
+        if local_oid not in _ZERO_OIDS:
+            only_deletions = False
+    if not only_deletions:
+        return False
+    for remote_ref in remote_refs:
+        if _run(["git", "check-ref-format", remote_ref], cwd=ROOT).returncode != 0:
+            raise PreflightError("pre-push reference input is malformed")
+    return True
 
 
 def _validate_push_refs(
@@ -82,8 +129,10 @@ def _validate_push_refs(
         fields = line.split()
         if len(fields) != 4:
             raise PreflightError("pre-push reference input is malformed")
-        _local_ref, local_oid, _remote_ref, _remote_oid = fields
-        if local_oid == _ZERO_OID:
+        _local_ref, local_oid, remote_ref, _remote_oid = fields
+        if _run(["git", "check-ref-format", remote_ref], cwd=ROOT).returncode != 0:
+            raise PreflightError("pre-push reference input is malformed")
+        if local_oid in _ZERO_OIDS:
             continue
         if not _local_ref.startswith("refs/"):
             raise PreflightError("published objects must be reachable through a local ref")
@@ -445,12 +494,26 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        _require_checkout_import(ROOT)
         if args.install:
+            _require_checkout_import(ROOT)
             _install(ROOT)
             print("Publication preflight hook installed.")
             return 0
 
+        try:
+            if hasattr(sys.stdin, "buffer"):
+                source = sys.stdin.buffer.read().decode("utf-8")
+            else:
+                # In-memory test/embedded streams may only provide text.
+                source = sys.stdin.read()
+                source.encode("utf-8")
+        except UnicodeError:
+            raise PreflightError("pre-push reference input is malformed") from None
+        if _deletion_only(source):
+            print("Publication preflight: deletion-only push publishes no objects.")
+            return 0
+
+        _require_checkout_import(ROOT)
         status = _run(
             ["git", "status", "--porcelain", "--untracked-files=all"],
             cwd=ROOT,
@@ -458,7 +521,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if status.returncode != 0 or status.stdout:
             raise PreflightError("the publication checkout must be clean")
         head = _git_stdout(ROOT, "rev-parse", "HEAD")
-        source = sys.stdin.read()
 
         def resolve_commit(oid: str) -> str:
             return _resolve_commit_without_replacements(ROOT, oid)
