@@ -34,18 +34,27 @@ def _isolated_git_environment() -> dict[str, str]:
 class PublishPreflightTests(unittest.TestCase):
     def test_command_timeouts_allow_local_git_extra_time(self) -> None:
         commands = (
-            (["git", "status", "--porcelain"], {}, 300),
-            (["git", "rev-parse", "HEAD"], {}, 300),
-            (["gh", "status"], {}, 60),
-            (["git", "status"], {"timeout": 7}, 7),
+            (["git", "status", "--porcelain"], None, 300),
+            (["git", "--no-replace-objects", "rev-parse", "HEAD"], None, 300),
+            (["git", "check-ref-format", "refs/heads/example"], None, 300),
+            (["git", "config", "--local", "--get", "example.key"], None, 300),
+            (["git", "show-ref", "--verify", "refs/heads/example"], None, 300),
+            (["git", "worktree", "list"], None, 300),
+            (["git", "fetch", "origin"], None, 60),
+            (["git", "push", "origin"], None, 60),
+            (["git", "ls-remote", "origin"], None, 60),
+            (["git", "-c", "example.value=1", "status"], None, 60),
+            (["gh", "status"], None, 60),
+            (["git", "fetch", "origin"], 7, 7),
+            (["git", "status"], 7, 7),
         )
         for run in (publish_preflight._run, publish_preflight._run_bytes):
-            for argv, options, expected in commands:
+            for argv, timeout, expected in commands:
                 with (
-                    self.subTest(run=run.__name__, argv=argv, options=options),
+                    self.subTest(run=run.__name__, argv=argv, timeout=timeout),
                     patch("hermes_codex_router.publish_preflight.subprocess.run") as subprocess_run,
                 ):
-                    run(argv, cwd=Path("/home/example"), **options)
+                    run(argv, cwd=Path("/home/example"), timeout=timeout)
                     self.assertEqual(subprocess_run.call_args.kwargs["timeout"], expected)
 
     def test_command_timeouts_remain_fail_closed(self) -> None:
@@ -140,6 +149,34 @@ class PublishPreflightTests(unittest.TestCase):
         self.assertEqual(sum(Path(argv[-1]).name == "validate.py" for argv in calls), 1)
         self.assertEqual(sum(argv[:2] == ["git", "status"] for argv in calls), 2)
 
+    def test_mixed_refs_are_classified_before_checking_deletion_ref_formats(self) -> None:
+        source = (
+            f"(delete) {'0' * 40} refs/heads/old {'b' * 40}\n"
+            f"refs/heads/new {'a' * 40} refs/heads/new {'0' * 40}\n"
+        )
+        with patch.object(publish_preflight, "_run") as run:
+            self.assertFalse(publish_preflight._deletion_only(source))
+            run.assert_not_called()
+
+    def test_non_utf8_hook_input_fails_closed_without_traceback(self) -> None:
+        raw = f"(delete) {'0' * 40} refs/heads/".encode() + b"\xff" + f" {'a' * 40}\n".encode()
+        for encoding, errors in (
+            ("utf-8", "strict"),
+            ("utf-8", "surrogateescape"),
+            ("latin-1", "strict"),
+        ):
+            with (
+                self.subTest(encoding=encoding, errors=errors),
+                io.TextIOWrapper(io.BytesIO(raw), encoding=encoding, errors=errors) as source,
+                patch("sys.stdin", source),
+                patch.object(publish_preflight, "_run") as run,
+                redirect_stderr(io.StringIO()) as stderr,
+            ):
+                self.assertEqual(publish_preflight.main([]), 1)
+                run.assert_not_called()
+                self.assertIn("Publication preflight failed:", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_malformed_deletion_input_fails_closed(self) -> None:
         zero, oid = "0" * 40, "a" * 40
         real_run = publish_preflight._run
@@ -157,6 +194,9 @@ class PublishPreflightTests(unittest.TestCase):
             f"(unknown) {zero} refs/heads/old {oid}\n",
             f"(delete) {zero} refs/heads/../bad {oid}\n",
             f"(delete) {zero} refs/heads/old {oid}\nmalformed\n",
+            f"refs/heads/new {oid} refs/heads/../bad {zero}\n",
+            f"(delete) {zero} refs/heads/old {oid}\n"
+            f"refs/heads/new {oid} refs/heads/../bad {zero}\n",
         ):
             with (
                 self.subTest(source=source),

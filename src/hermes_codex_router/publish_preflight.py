@@ -28,6 +28,9 @@ HOOK_ROOT = "hub-hooks"
 # The single mutable hook directory used before sets; removed on migration.
 LEGACY_HOOK_DIRECTORY = "hub-managed-hooks"
 _ZERO_OIDS = {"0" * 40, "0" * 64}
+_LOCAL_GIT_COMMANDS = frozenset(
+    {"check-ref-format", "config", "rev-parse", "show-ref", "status", "worktree"}
+)
 
 
 class PreflightError(RuntimeError):
@@ -37,9 +40,15 @@ class PreflightError(RuntimeError):
 def _command_timeout(argv: Sequence[str], timeout: int | None) -> int:
     if timeout is not None:
         return timeout
-    # Local Git can be delayed by a concurrent validation's disk I/O. Keep
-    # other commands on the shorter default and honor explicit budgets.
-    return 300 if argv and argv[0] == "git" else 60
+    # Only the local Git commands used here get extra time for disk contention.
+    # Network and unknown commands retain the shorter default.
+    if argv and argv[0] == "git":
+        args = argv[1:]
+        if args and args[0] == "--no-replace-objects":
+            args = args[1:]
+        if args and args[0] in _LOCAL_GIT_COMMANDS:
+            return 300
+    return 60
 
 
 def _run(
@@ -83,6 +92,7 @@ def _deletion_only(source: str) -> bool:
     lines = source.splitlines()
     if not lines:
         return False
+    remote_refs = []
     only_deletions = True
     for line in lines:
         fields = line.split()
@@ -97,11 +107,15 @@ def _deletion_only(source: str) -> bool:
             or (local_ref == "(delete)") != (local_oid in _ZERO_OIDS)
         ):
             raise PreflightError("pre-push reference input is malformed")
-        if _run(["git", "check-ref-format", remote_ref], cwd=ROOT).returncode != 0:
-            raise PreflightError("pre-push reference input is malformed")
+        remote_refs.append(remote_ref)
         if local_oid not in _ZERO_OIDS:
             only_deletions = False
-    return only_deletions
+    if not only_deletions:
+        return False
+    for remote_ref in remote_refs:
+        if _run(["git", "check-ref-format", remote_ref], cwd=ROOT).returncode != 0:
+            raise PreflightError("pre-push reference input is malformed")
+    return True
 
 
 def _validate_push_refs(
@@ -115,7 +129,9 @@ def _validate_push_refs(
         fields = line.split()
         if len(fields) != 4:
             raise PreflightError("pre-push reference input is malformed")
-        _local_ref, local_oid, _remote_ref, _remote_oid = fields
+        _local_ref, local_oid, remote_ref, _remote_oid = fields
+        if _run(["git", "check-ref-format", remote_ref], cwd=ROOT).returncode != 0:
+            raise PreflightError("pre-push reference input is malformed")
         if local_oid in _ZERO_OIDS:
             continue
         if not _local_ref.startswith("refs/"):
@@ -484,7 +500,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Publication preflight hook installed.")
             return 0
 
-        source = sys.stdin.read()
+        try:
+            if hasattr(sys.stdin, "buffer"):
+                source = sys.stdin.buffer.read().decode("utf-8")
+            else:
+                # In-memory test/embedded streams may only provide text.
+                source = sys.stdin.read()
+                source.encode("utf-8")
+        except UnicodeError:
+            raise PreflightError("pre-push reference input is malformed") from None
         if _deletion_only(source):
             print("Publication preflight: deletion-only push publishes no objects.")
             return 0

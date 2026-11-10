@@ -693,11 +693,13 @@ class ExternalCliAdapter:
             on_visible_assistant=on_visible_assistant,
             on_quota_observation=on_quota_observation,
         )
+        completed = None
         try:
             reader.feed(result.stdout.encode("utf-8"))
             reader.finish()
+            completed = result
         finally:
-            reader.publish_quota_observations()
+            reader.publish_quota_observations(completed, self._interrupt_requested.is_set())
 
     def _turn_environment(
         self, sandbox: FileToolSandboxConfig | ClaudeHostConfig | None, project_id: str | None
@@ -1075,6 +1077,7 @@ class ExternalCliAdapter:
         input_offset = 0
         next_input_poll = 0.0
         stop_draining = False
+        completed = None
         try:
             if on_process_started is not None:
                 try:
@@ -1186,7 +1189,8 @@ class ExternalCliAdapter:
             stdout = reader.finish()
             if deadline.remaining() <= 0:
                 raise subprocess.TimeoutExpired(argv, timeout)
-            return subprocess.CompletedProcess(argv, exit_code, stdout, "")
+            completed = subprocess.CompletedProcess(argv, exit_code, stdout, "")
+            return completed
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
             # A deadline does not prove EOF or complete reap/drain. A stop flag
@@ -1206,7 +1210,7 @@ class ExternalCliAdapter:
                 with self._process_lock:
                     if self._active_process is process:
                         self._active_process = None
-                reader.publish_quota_observations()
+                reader.publish_quota_observations(completed, self._interrupt_requested.is_set())
 
     def _terminate_claude_process(self, process: subprocess.Popen[str], *, graceful: bool) -> None:
         with self._process_lock:

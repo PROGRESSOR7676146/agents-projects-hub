@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import unittest
 from collections.abc import Mapping
 from typing import Any, cast
@@ -27,7 +28,7 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
         retained = reader.finish()
         # Persistence is outside the pipe drain and its productive deadline.
         self.assertEqual(observed, [])
-        reader.publish_quota_observations()
+        reader.publish_quota_observations(subprocess.CompletedProcess([], 0, retained, ""))
         reader.publish_quota_observations()
         return observed, retained
 
@@ -70,6 +71,7 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
                                 "rateLimitType": limit_type,
                                 "reset_present": True,
                                 "reset_at": expected,
+                                "stream_validated": True,
                             }
                         ],
                     )
@@ -92,6 +94,7 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
                     "status": "rejected",
                     "rateLimitType": None,
                     "reset_present": False,
+                    "stream_validated": True,
                 }
             ],
         )
@@ -113,6 +116,7 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
                     "status": "rejected",
                     "rateLimitType": None,
                     "reset_present": False,
+                    "stream_validated": True,
                 }
             ],
         )
@@ -162,6 +166,7 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
                             "status": None,
                             "rateLimitType": None,
                             "reset_present": True,
+                            "stream_validated": True,
                         }
                     ],
                 )
@@ -197,6 +202,7 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
                     "rateLimitType": None,
                     "reset_present": True,
                     "reset_at": "2030-01-01T00:00:00Z",
+                    "stream_validated": True,
                 }
             ],
         )
@@ -255,6 +261,58 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
         self.assertEqual(observed[0]["reset_at"], "2030-01-01T00:00:13Z")
         self.assertEqual(observed[-2]["reset_at"], "2030-01-01T00:00:19Z")
         self.assertEqual(observed[-1]["event_type"], "result")
+
+    def test_repeated_allowed_events_preserve_warning_without_filling_the_buffer(self) -> None:
+        allowed = {"type": "rate_limit_event", "status": "allowed"}
+        warning = {"type": "rate_limit_event", "status": "allowed_warning"}
+        observed, _ = self.observe(*([allowed] * 25), warning, *([allowed] * 25), result())
+        self.assertEqual(
+            [item["status"] for item in observed], ["allowed", "allowed_warning", "allowed"]
+        )
+        self.assertTrue(all(item["stream_validated"] is True for item in observed))
+
+    def test_identical_consecutive_warnings_are_coalesced(self) -> None:
+        warning = {"type": "rate_limit_event", "status": "allowed_warning"}
+        observed, _ = self.observe(warning, warning, warning, result())
+        self.assertEqual([item["status"] for item in observed], ["allowed_warning"])
+
+    def test_low_priority_changes_cannot_evict_more_important_observations(self) -> None:
+        warnings = [
+            {"type": "rate_limit_event", "status": "allowed_warning", "resetsAt": 1893456000 + i}
+            for i in range(8)
+        ]
+        allowed = [
+            {"type": "rate_limit_event", "status": "allowed", "resetsAt": 1893456000 + i}
+            for i in range(20)
+        ]
+        unknown = [{"type": "quota_event", "resetsAt": 1893456000 + i} for i in range(20)]
+        terminal = result(subtype="error_during_execution", is_error=True, api_error_status=429)
+        observed, _ = self.observe(*warnings, *allowed, *unknown, terminal)
+        self.assertEqual(len(observed), 8)
+        self.assertEqual([item["status"] for item in observed], ["allowed_warning"] * 7 + [429])
+        self.assertEqual(observed[0]["reset_at"], "2030-01-01T00:00:01Z")
+
+    def test_subsecond_reset_values_are_truncated_before_coalescing(self) -> None:
+        observed, _ = self.observe(
+            {"type": "rate_limit_event", "status": "allowed", "resetsAt": 1893456000.25},
+            {
+                "type": "rate_limit_event",
+                "status": "allowed",
+                "resetsAt": "2030-01-01T02:00:00.999999+02:00",
+            },
+            result(),
+        )
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0]["reset_at"], "2030-01-01T00:00:00Z")
+
+    def test_incomplete_stream_observation_is_not_validated(self) -> None:
+        observed: list[dict[str, object]] = []
+        reader = ClaudeStreamReader(
+            expected_session_id=SESSION, on_quota_observation=observed.append
+        )
+        reader.feed((output({"type": "rate_limit_event"}) + "\n").encode())
+        reader.publish_quota_observations()
+        self.assertIs(observed[0]["stream_validated"], False)
 
     def test_event_after_terminal_does_not_create_a_quota_observation(self) -> None:
         observed: list[dict[str, object]] = []

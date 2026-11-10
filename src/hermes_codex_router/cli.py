@@ -540,11 +540,8 @@ def _serve_command(args: argparse.Namespace) -> int:
         if args.agent == "codex"
         else ExternalAgentService(config, args.agent, direct_messages_only=True)
     )
-    try:
-        with stop_on_signals(service):
-            service.run_forever()
-    finally:
-        service.close()
+    with stop_on_signals(service, cleanup=service.close):
+        service.run_forever()
     return 0
 
 
@@ -554,11 +551,8 @@ def _controller_command(args: argparse.Namespace) -> int:
         config,
         ingress_identity="hub" if config.hub_bot is not None else "codex",
     )
-    try:
-        with stop_on_signals(service):
-            service.run_forever()
-    finally:
-        service.close()
+    with stop_on_signals(service, cleanup=service.close):
+        service.run_forever()
     return 0
 
 
@@ -575,29 +569,27 @@ def _worker_command(args: argparse.Namespace) -> int:
         worker = ExternalQueueWorker(
             config, args.agent, worker_slot=args.slot, claude_subscription_tokens=tokens
         )
-        with stop_on_signals(worker):
+
+        def close_worker() -> None:
             try:
-                with worker_control_session(
-                    args.drain_control_socket, worker_id=worker_id, worker=worker
-                ):
-                    worker.run_forever(poll_seconds=args.poll_seconds)
-            finally:
-                try:
-                    worker.close()
-                except Exception as error:
-                    survived("external_worker.shutdown", error)
-                    raise RuntimeError("worker cleanup is unconfirmed") from None
+                worker.close()
+            except Exception as error:
+                survived("external_worker.shutdown", error)
+                raise RuntimeError("worker cleanup is unconfirmed") from None
+
+        with stop_on_signals(worker, cleanup=close_worker):
+            with worker_control_session(
+                args.drain_control_socket, worker_id=worker_id, worker=worker
+            ):
+                worker.run_forever(poll_seconds=args.poll_seconds)
         _print({**worker.shutdown_receipt(), "release": asdict(CURRENT_RELEASE)})
     return 0
 
 
 def _sender_command(args: argparse.Namespace) -> int:
     sender = TelegramOutboxSender(load_outbox_sender_config(args.config))
-    try:
-        with stop_on_signals(sender):
-            sender.run_forever(poll_seconds=args.poll_seconds)
-    finally:
-        sender.close()
+    with stop_on_signals(sender, cleanup=sender.close):
+        sender.run_forever(poll_seconds=args.poll_seconds)
     return 0
 
 
@@ -796,14 +788,14 @@ def _project_provision_login_command(args: argparse.Namespace) -> int:
 
 def _project_provisioner_command(args: argparse.Namespace) -> int:
     worker = ProjectProvisioner(load_project_provisioner_config(args.config))
-    try:
-        if args.once:
+    if args.once:
+        try:
             _print({"ok": True, "processed": worker.run_cycle()})
-        else:
-            with stop_on_signals(worker):
-                worker.run_forever(poll_seconds=args.poll_seconds)
-    finally:
-        worker.close()
+        finally:
+            worker.close()
+    else:
+        with stop_on_signals(worker, cleanup=worker.close):
+            worker.run_forever(poll_seconds=args.poll_seconds)
     return 0
 
 

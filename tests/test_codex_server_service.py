@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import socket
+import stat
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 from hermes_codex_router import codex_server_service as service
+from hermes_codex_router import diagnostic_log
 from hermes_codex_router.state import HubState
 
 
@@ -239,14 +246,22 @@ class CodexServerServiceTests(unittest.TestCase):
     def test_run_uses_only_exact_pinned_argv_and_rechecks_release(self):
         from types import SimpleNamespace
 
+        events = []
         with (
             patch.object(service, "private_json", return_value=self.manifest),
             patch.object(
                 service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=True, git_sha="a" * 40)
             ),
-            patch.object(service, "authorize_start") as authorize,
-            patch.object(service.os, "execv") as execute,
-            patch.dict(service.os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False),
+            patch.object(
+                service, "authorize_start", side_effect=lambda *_: events.append("gate")
+            ) as authorize,
+            patch.object(service.os, "nice", side_effect=lambda _: events.append("nice")) as nice,
+            patch.object(
+                service.os, "execv", side_effect=lambda *_: events.append("exec")
+            ) as execute,
+            patch.dict(
+                service.os.environ, {"XDG_RUNTIME_DIR": "/tmp/example-runtime"}, clear=False
+            ),
         ):
             self.assertEqual(
                 service.main(
@@ -261,15 +276,18 @@ class CodexServerServiceTests(unittest.TestCase):
                 0,
             )
             authorize.assert_called_once_with(
-                self.manifest, Path("/tmp/example-receipt"), Path("/run/user/1000")
+                self.manifest, Path("/tmp/example-receipt"), Path("/tmp/example-runtime")
             )
             binary = self.manifest["codex_binary"]["path"]
+            nice.assert_called_once_with(10)
             execute.assert_called_once_with(binary, [binary, "app-server", "--listen", "unix://"])
+            self.assertEqual(events, ["gate", "nice", "exec"])
         with (
             patch.object(service, "private_json", return_value=self.manifest),
             patch.object(
                 service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=False, git_sha="a" * 40)
             ),
+            patch.object(service.os, "nice") as nice,
             patch.object(service.os, "execv") as execute,
         ):
             self.assertEqual(
@@ -284,7 +302,129 @@ class CodexServerServiceTests(unittest.TestCase):
                 ),
                 1,
             )
+            nice.assert_not_called()
             execute.assert_not_called()
+
+    def test_plan_ready_and_refused_start_do_not_lower_priority(self):
+        for action in ("plan", "ready", "run"):
+            with (
+                self.subTest(action=action),
+                patch.object(service, "private_json", return_value=self.manifest),
+                patch.object(
+                    service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=True, git_sha="a" * 40)
+                ),
+                patch.object(service, "prepare", return_value={}),
+                patch.object(service, "wait_ready"),
+                patch.object(service, "authorize_start", side_effect=ValueError("refused")),
+                patch.object(service.os, "nice") as nice,
+                patch.object(service.os, "execv") as execute,
+                patch.dict(service.os.environ, {"XDG_RUNTIME_DIR": "/tmp/example-runtime"}),
+                redirect_stdout(StringIO()),
+                redirect_stderr(StringIO()),
+            ):
+                result = service.main([action, "--manifest", "/tmp/example-manifest"])
+                self.assertEqual(result, 1 if action == "run" else 0)
+                nice.assert_not_called()
+                execute.assert_not_called()
+
+    def test_priority_failure_is_logged_and_does_not_block_exec(self):
+        for logging_failure in (None, OSError("diagnostic setup unavailable")):
+            error = PermissionError("fictional private diagnostic")
+            with (
+                self.subTest(logging_failure=logging_failure),
+                patch.object(service, "private_json", return_value=self.manifest),
+                patch.object(
+                    service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=True, git_sha="a" * 40)
+                ),
+                patch.object(service, "authorize_start"),
+                patch.object(service.os, "nice", side_effect=error),
+                patch.object(
+                    service, "configure_process_logging", side_effect=logging_failure
+                ) as configure,
+                patch.object(service, "survived") as survived,
+                patch.object(service.os, "execv") as execute,
+                patch.dict(service.os.environ, {"XDG_RUNTIME_DIR": "/tmp/example-runtime"}),
+            ):
+                self.assertEqual(service.main(["run", "--manifest", "/tmp/example-manifest"]), 0)
+                configure.assert_called_once_with()
+                survived.assert_called_once_with("codex_server_service.priority", error)
+                binary = self.manifest["codex_binary"]["path"]
+                execute.assert_called_once_with(
+                    binary, [binary, "app-server", "--listen", "unix://"]
+                )
+        self.assertIn("codex_server_service.priority", diagnostic_log.SITES)
+
+    def test_priority_failure_reaches_the_sanitized_process_log(self):
+        diagnostic_log.reset_repeat_state()
+        self.addCleanup(diagnostic_log.reset_repeat_state)
+        with (
+            patch.object(service, "private_json", return_value=self.manifest),
+            patch.object(
+                service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=True, git_sha="a" * 40)
+            ),
+            patch.object(service, "authorize_start"),
+            patch.object(service.os, "nice", side_effect=PermissionError("fictional private")),
+            patch.object(service.os, "execv") as execute,
+            patch.dict(service.os.environ, {"XDG_RUNTIME_DIR": "/tmp/example-runtime"}),
+            redirect_stderr(StringIO()),
+            self.assertLogs(diagnostic_log.LOGGER_NAME, level="WARNING") as captured,
+        ):
+            self.assertEqual(service.main(["run", "--manifest", "/tmp/example-manifest"]), 0)
+            binary = self.manifest["codex_binary"]["path"]
+            execute.assert_called_once_with(binary, [binary, "app-server", "--listen", "unix://"])
+        self.assertIn(
+            "survived PermissionError at codex_server_service.priority", captured.output[0]
+        )
+        self.assertNotIn("fictional private", captured.output[0])
+
+    def test_exec_and_descendant_inherit_relative_nice_and_pinned_identity(self):
+        root = Path(self.temp.name)
+        (root / "app-server").write_text(
+            "import json, os, subprocess, sys\n"
+            "from pathlib import Path\n"
+            "child = subprocess.check_output([sys.executable, '-c', "
+            "'import os; print(os.nice(0))'], text=True)\n"
+            "print(json.dumps({'nice': os.nice(0), 'child_nice': int(child), "
+            "'pid': os.getpid(), 'exe': os.readlink('/proc/self/exe'), "
+            "'cmdline': Path('/proc/self/cmdline').read_bytes().decode().split('\\0')[:-1], "
+            "'before': int(os.environ['EXAMPLE_NICE_BEFORE']), "
+            "'original_pid': int(os.environ['EXAMPLE_START_PID']), "
+            "'threads': int(os.environ['EXAMPLE_THREAD_COUNT'])}))\n"
+        )
+        driver = (
+            "import os, sys\n"
+            "from types import SimpleNamespace\n"
+            "from unittest.mock import patch\n"
+            "from hermes_codex_router import codex_server_service as service\n"
+            "binary = os.path.realpath(sys.executable)\n"
+            "manifest = {'hub_git_sha': 'a' * 40, 'codex_home': '/home/example', "
+            "'codex_binary': {'path': binary}}\n"
+            "os.environ['EXAMPLE_NICE_BEFORE'] = str(os.nice(0))\n"
+            "os.environ['EXAMPLE_START_PID'] = str(os.getpid())\n"
+            "os.environ['XDG_RUNTIME_DIR'] = '/tmp/example-runtime'\n"
+            "real_nice = os.nice\n"
+            "def observed_nice(increment):\n"
+            "    os.environ['EXAMPLE_THREAD_COUNT'] = str(len(os.listdir('/proc/self/task')))\n"
+            "    return real_nice(increment)\n"
+            "with patch.object(service, 'private_json', return_value=manifest), "
+            "patch.object(service, 'authorize_start'), "
+            "patch.object(service.os, 'nice', side_effect=observed_nice), "
+            "patch.object(service, 'CURRENT_RELEASE', "
+            "SimpleNamespace(clean_tree=True, git_sha='a' * 40)):\n"
+            "    service.main(['run', '--manifest', '/tmp/example-manifest'])\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", driver], cwd=root, capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = json.loads(result.stdout)
+        binary = str(Path(sys.executable).resolve())
+        self.assertEqual(observed["nice"], min(observed["before"] + 10, 19))
+        self.assertEqual(observed["child_nice"], observed["nice"])
+        self.assertEqual(observed["pid"], observed["original_pid"])
+        self.assertEqual(observed["threads"], 1)
+        self.assertEqual(observed["exe"], binary)
+        self.assertEqual(observed["cmdline"], [binary, "app-server", "--listen", "unix://"])
 
 
 class BootStartTests(unittest.TestCase):
@@ -575,6 +715,20 @@ class BootStartTests(unittest.TestCase):
                 service.wait_ready(manifest, timeout_seconds=1)
             listener.assert_called_once()
 
+    def test_ready_listener_does_not_lower_priority(self):
+        manifest = {"socket_path": "/tmp/example.sock"}
+        info = SimpleNamespace(st_mode=stat.S_IFSOCK)
+        with (
+            patch.object(service, "private_json", return_value=manifest),
+            patch.object(service.Path, "stat", return_value=info),
+            patch.object(service, "has_listener_for", return_value=True) as listener,
+            patch.object(service.os, "nice") as nice,
+            patch.dict(service.os.environ, {"MAINPID": ""}),
+        ):
+            self.assertEqual(service.main(["ready", "--manifest", "/tmp/example-manifest"]), 0)
+            listener.assert_called_once_with(info)
+            nice.assert_not_called()
+
     def test_readiness_ends_at_once_when_the_main_process_exited(self):
         manifest = dict(socket_path=str(self.root / "s.sock"))
         proc = self.root / "proc"
@@ -607,23 +761,12 @@ class BootStartTests(unittest.TestCase):
         self.assertGreater(timeout, service.READY_TIMEOUT_SECONDS)
         self.assertGreaterEqual(service.READY_TIMEOUT_SECONDS, 240)
 
-    def test_app_server_runs_below_the_hub_control_plane(self):
+    def test_hub_units_do_not_lower_priority(self):
         units = Path(__file__).resolve().parents[1] / "systemd"
-        app_server = units / "agents-projects-hub-codex-app-server.service"
-        service_section = app_server.read_text().split("[Service]\n", 1)[1].split("\n[", 1)[0]
-        nice = [
-            line.strip()
-            for line in service_section.splitlines()
-            if line.partition("=")[0].strip() == "Nice"
-        ]
-        self.assertEqual(nice, ["Nice=10"])
         for unit in units.glob("agents-projects-hub*.service"):
-            if unit != app_server:
-                with self.subTest(unit=unit.name):
-                    keys = [
-                        line.partition("=")[0].strip() for line in unit.read_text().splitlines()
-                    ]
-                    self.assertNotIn("Nice", keys)
+            with self.subTest(unit=unit.name):
+                keys = [line.partition("=")[0].strip() for line in unit.read_text().splitlines()]
+                self.assertNotIn("Nice", keys)
 
     def test_unit_is_opt_in_ordered_and_waits_for_readiness(self):
         root = Path(__file__).resolve().parents[1]

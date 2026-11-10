@@ -10,7 +10,7 @@ import time
 import unittest
 import uuid
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.claude_file_policy import require_file_tool_event
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from hermes_codex_router.claude_host_profile import ClaudeHostConfig
 from hermes_codex_router.claude_mount_pins import MountPins, SandboxLaunch
 from hermes_codex_router.claude_permission_wait import PermissionWaitClock, ProductiveDeadline
 from hermes_codex_router.claude_stream import (
@@ -467,6 +468,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             [event["event_type"] for event in observed], ["rate_limit_event", "result"]
         )
         self.assertEqual(observed[0]["reset_at"], "2030-01-01T00:00:00Z")
+        self.assertTrue(all(event["stream_validated"] is True for event in observed))
         self.assertNotIn("private sentinel", repr(observed))
 
     def test_owned_claude_pipe_keeps_observations_from_an_incomplete_stream(self) -> None:
@@ -479,6 +481,117 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
         self.assertEqual(len(observed), 1)
         self.assertEqual(observed[0]["event_type"], "rate_limit_event")
+        self.assertIs(observed[0]["stream_validated"], False)
+
+    def test_host_quota_failure_is_validated_before_host_scope_exits(self) -> None:
+        session = "00000000-0000-4000-8000-000000000001"
+        events = [
+            {"type": "rate_limit_event", "status": "rejected"},
+            {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                "session_id": session,
+                "api_error_status": 429,
+            },
+        ]
+        payload = "\n".join(map(json.dumps, events)) + "\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / "example-claude"
+            child.write_text(
+                f"#!{sys.executable}\nimport sys\nsys.stdout.write({payload!r})\nsys.exit(1)\n"
+            )
+            child.chmod(0o700)
+            adapter = ExternalCliAdapter("claude", executable=str(child))
+            sandbox = ClaudeHostConfig(root, root, child)
+            observed: list[dict[str, object]] = []
+            with (
+                patch("hermes_codex_router.external_runtime.validate_host_route_settings"),
+                patch.object(adapter, "_verified_claude_argv", side_effect=lambda argv, **_: argv),
+                patch.object(
+                    adapter._host_scopes, "turn", return_value=nullcontext(lambda argv: argv)
+                ),
+                self.assertRaises(ClaudeTerminalFailure),
+            ):
+                adapter._run_owned_claude_turn(
+                    (str(child),),
+                    cwd=root,
+                    environment={},
+                    timeout=HANG_GUARD_SECONDS,
+                    expected_session_id=session,
+                    on_visible_assistant=None,
+                    on_quota_observation=observed.append,
+                    on_process_started=None,
+                    sandbox=sandbox,
+                )
+            self.assertEqual(len(observed), 2)
+            self.assertTrue(all(item["stream_validated"] is True for item in observed))
+
+    def test_captured_quota_observations_reflect_final_stream_validation(self) -> None:
+        session = "00000000-0000-4000-8000-000000000001"
+        other = str(uuid.uuid4())
+        quota = {"type": "rate_limit_event", "status": "allowed_warning"}
+        success = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": session,
+            "result": "Visible answer",
+        }
+        failure = {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "session_id": session,
+            "api_error_status": 429,
+        }
+        cases = (
+            ([quota, success], 0, None, True),
+            ([quota, failure], 1, ClaudeTerminalFailure, True),
+            ([quota], 0, ClaudeStreamError, False),
+            ([quota, success], 1, ClaudeStreamError, False),
+            ([quota, failure], -9, ClaudeTerminalFailure, False),
+            ([quota, {**success, "session_id": other}], 0, ClaudeStreamError, False),
+            ([quota, {**success, "is_error": True}], 0, ClaudeStreamError, False),
+            ([quota, success, {"type": "system"}], 0, ClaudeStreamError, False),
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            for events, returncode, error, expected in cases:
+                with self.subTest(events=events, returncode=returncode):
+                    observed: list[dict[str, object]] = []
+
+                    def fake_run(
+                        argv: tuple[str, ...], **_: object
+                    ) -> subprocess.CompletedProcess[str]:
+                        return subprocess.CompletedProcess(
+                            argv, returncode, "\n".join(map(json.dumps, events)), ""
+                        )
+
+                    adapter = ExternalCliAdapter("claude", run=fake_run)
+                    if error is None:
+                        adapter.run_turn(
+                            cwd=Path(directory),
+                            prompt="work",
+                            new_session_id=session,
+                            on_quota_observation=observed.append,
+                        )
+                    else:
+                        with self.assertRaises(error):
+                            adapter.run_turn(
+                                cwd=Path(directory),
+                                prompt="work",
+                                new_session_id=session,
+                                on_quota_observation=observed.append,
+                            )
+                    self.assertIs(observed[0]["stream_validated"], expected)
 
     def test_claude_unexpected_permission_request_is_refused_before_eof(self) -> None:
         visible: list[ClaudeVisibleAssistant] = []
@@ -879,6 +992,7 @@ class ExternalRuntimeTests(unittest.TestCase):
         ):
             root = Path(directory)
             child = root / "provider"
+            quota = (json.dumps({"type": "rate_limit_event", "status": "rejected"}) + "\n").encode()
             event = (
                 json.dumps(
                     {
@@ -895,7 +1009,7 @@ class ExternalRuntimeTests(unittest.TestCase):
                 fictional_claude_source(
                     "import os, signal, time\n"
                     "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                    f"os.write(1, {event!r})\ntime.sleep(30)\n"
+                    f"os.write(1, {quota + event!r})\ntime.sleep(30)\n"
                 ),
                 encoding="utf-8",
             )
@@ -903,6 +1017,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             adapter = ExternalCliAdapter("claude", executable=str(child))
             processes: list[subprocess.Popen[str]] = []
             visible: list[ClaudeVisibleAssistant] = []
+            observed: list[dict[str, object]] = []
 
             def stop(item: ClaudeVisibleAssistant) -> None:
                 visible.append(item)
@@ -916,8 +1031,10 @@ class ExternalRuntimeTests(unittest.TestCase):
                     prompt="work",
                     timeout=HANG_GUARD_SECONDS,
                     on_visible_assistant=stop,
+                    on_quota_observation=observed.append,
                 )
             self.assertEqual([item.text for item in visible], ["Saved partial"])
+            self.assertIs(observed[0]["stream_validated"], False)
             self.assertIsNotNone(processes[0].poll())
             self.assertIsNone(adapter._active_process)
             self.assertTrue(processes[0].stdout and processes[0].stdout.closed)

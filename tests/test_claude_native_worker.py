@@ -573,6 +573,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
                     "rateLimitType": "five_hour",
                     "reset_present": True,
                     "reset_at": "2030-01-01T00:00:00Z",
+                    "stream_validated": True,
                 },
                 {
                     "event_type": "result",
@@ -580,6 +581,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
                     "rateLimitType": None,
                     "reset_present": True,
                     "reset_at": "2030-01-01T00:00:00Z",
+                    "stream_validated": True,
                 },
             ],
         )
@@ -625,7 +627,43 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
             [item["event_type"] for item in observations], ["rate_limit_event", "result"]
         )
         self.assertEqual(observations[0]["reset_at"], "2030-01-01T00:00:00Z")
+        self.assertTrue(all(item["stream_validated"] is True for item in observations))
         self.assertEqual(worker.state.get_provider_job(job_id).error_code, "claude_quota_exhausted")
+
+    def test_allowed_event_flood_persists_one_warning_and_only_changes(self) -> None:
+        job_id = self.enqueue(1)
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            native = argv[argv.index("--session-id") + 1]
+            allowed = {"type": "rate_limit_event", "status": "allowed"}
+            warning = {"type": "rate_limit_event", "status": "allowed_warning"}
+            terminal = {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": native,
+                "result": "Visible answer",
+            }
+            events = [*([allowed] * 25), warning, *([allowed] * 25), terminal]
+            return subprocess.CompletedProcess(argv, 0, "\n".join(map(json.dumps, events)), "")
+
+        worker = self.worker(cast(Any, ExternalCliAdapter("claude", run=fake_run)))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+        rows = worker.state._connection.execute(
+            "SELECT detail FROM runtime_events WHERE code=? ORDER BY event_id",
+            ("claude_quota_observation",),
+        ).fetchall()
+        observations = [json.loads(row[0]) for row in rows]
+        self.assertEqual(
+            [item["status"] for item in observations], ["allowed", "allowed_warning", "allowed"]
+        )
+        self.assertTrue(all(item["stream_validated"] is True for item in observations))
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
 
     def test_native_http_error_envelope_is_failed_without_result_replay_or_raw_diagnosis(
         self,

@@ -21,7 +21,7 @@ from hermes_codex_router.supervisor import CodexAppServerSupervisor
 from tests import test_external_worker as fixtures
 
 CHILD = r"""
-import json, sys, threading, time
+import json, signal, sys, threading, time
 from pathlib import Path
 from unittest.mock import patch
 from hermes_codex_router.cli import main
@@ -59,6 +59,7 @@ def thread(**kwargs):
     result.join = observed_join
     return result
 worker.activity.thread = thread
+received = []
 def background(name):
     (root / (name + "-entered")).touch()
     worker._stop.wait()
@@ -66,13 +67,23 @@ def background(name):
         time.sleep(0.01)
     (root / (name + "-finished")).touch()
 def cycle():
-    if all((root / (name + "-entered")).exists() for name in ("control", "connect")):
+    if not (root / "ready").exists() and all(
+        (root / (name + "-entered")).exists() for name in ("control", "connect")
+    ):
+        original_handler = signal.getsignal(signal.SIGTERM)
+        assert callable(original_handler)
+        def observe_signal(signum, frame):
+            received.append(signum)
+            original_handler(signum, frame)
+        signal.signal(signal.SIGTERM, observe_signal)
         (root / "ready").touch()
     return False
 original_close = worker.state.close
 def close():
     (root / "state-closing").touch()
     while not (root / "state-release").exists():
+        for number in range(1, len(received) + 1):
+            (root / ("signal-" + str(number))).touch()
         time.sleep(0.01)
     (root / "state-closed").touch()
     original_close()
@@ -96,7 +107,8 @@ class WorkerShutdownTests(unittest.TestCase):
         while not path.exists():
             returncode = process.poll()
             if returncode is not None:
-                self.fail(f"child exited before {path.name}: {returncode}")
+                detail = process.stderr.read() if process.stderr is not None else ""
+                self.fail(f"child exited before {path.name}: {returncode}\n{detail}")
             if time.monotonic() >= deadline:
                 self.fail(f"timed out waiting for {path.name}; child is still running")
             time.sleep(0.01)
@@ -130,13 +142,14 @@ class WorkerShutdownTests(unittest.TestCase):
                 process.send_signal(signal.SIGTERM)
                 (root / "connect-release").touch()
                 self.wait_file(root / "state-closing", process)
-                self.wait_file(root / "stop-3", process)
+                self.wait_file(root / "stop-2", process)  # close() also requests stop
+                self.wait_file(root / "signal-2", process)
                 self.assertTrue((root / "connect-finished").exists())
                 process.send_signal(signal.SIGTERM)
-                # close() called stop() once after the first two signals.
-                self.wait_file(root / "stop-4", process)
+                self.wait_file(root / "signal-3", process)
                 self.assertIsNone(process.poll(), "signal handler ended before resource close")
                 self.assertFalse((root / "state-closed").exists())
+                self.assertFalse((root / "stop-3").exists(), "repeated signals were not coalesced")
                 (root / "state-release").touch()
                 stdout, stderr = process.communicate(timeout=30)
                 self.assertEqual(process.returncode, 0, stderr)

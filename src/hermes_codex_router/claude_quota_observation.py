@@ -6,7 +6,10 @@ import re
 from datetime import datetime, timezone
 from typing import Callable
 
+from .diagnostic_log import survived
+
 QuotaObservationCallback = Callable[[dict[str, object]], None]
+TerminalFailureCode = Callable[[dict[str, object], str | None], str]
 MAX_QUOTA_OBSERVATIONS = 8
 _STATUSES = frozenset({"allowed", "allowed_warning", "rejected"})
 _LIMIT_TYPES = frozenset(
@@ -42,7 +45,7 @@ def _reset_time(value: object) -> str | None:
             return None
     except (ValueError, OverflowError, OSError):
         return None
-    return parsed.isoformat().replace("+00:00", "Z")
+    return parsed.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def quota_observation(event: dict[str, object], *, quota_result: bool) -> dict[str, object] | None:
@@ -80,3 +83,72 @@ def quota_observation(event: dict[str, object], *, quota_result: bool) -> dict[s
     if (reset := _reset_time(field("resetsAt"))) is not None:
         projection["reset_at"] = reset
     return projection
+
+
+def _priority(observation: dict[str, object]) -> int:
+    if observation["event_type"] == "result":
+        return 3
+    status = observation["status"]
+    if status in ("allowed_warning", "rejected", 429) or observation["event_type"] == "assistant":
+        return 2
+    return 0 if status == "allowed" else 1
+
+
+class QuotaObserver:
+    """Keep bounded, distinct evidence and publish it after stream validation."""
+
+    def __init__(self, callback: QuotaObservationCallback, failure_code: TerminalFailureCode):
+        self._callback = callback
+        self._failure_code = failure_code
+        self._observations: list[dict[str, object]] = []
+        self._last: dict[str, object] | None = None
+        self._assistant_error: str | None = None
+
+    @property
+    def has_observations(self) -> bool:
+        return bool(self._observations)
+
+    def observe(self, event: dict[str, object], session_id: str | None) -> None:
+        kind = event.get("type")
+        if kind == "assistant":
+            self._assistant_error = (
+                "rate_limit"
+                if session_id is not None
+                and event.get("session_id") == session_id
+                and event.get("error") == "rate_limit"
+                else None
+            )
+        api_status = event.get("api_error_status")
+        quota_result = (
+            kind == "result"
+            and event.get("is_error") is True
+            and (
+                (type(api_status) is int and api_status == 429)
+                or self._failure_code(event, self._assistant_error) == "claude_quota_exhausted"
+            )
+        )
+        if kind == "result":
+            self._assistant_error = None
+        observation = quota_observation(event, quota_result=quota_result)
+        if observation is None or observation == self._last:
+            return
+        self._last = observation
+        if len(self._observations) == MAX_QUOTA_OBSERVATIONS:
+            # Protect warnings and rejections from less informative events, and
+            # terminal results from everything else. Evict the oldest lowest priority.
+            lowest = min(map(_priority, self._observations))
+            if _priority(observation) < lowest:
+                return
+            index = next(
+                i for i, item in enumerate(self._observations) if _priority(item) == lowest
+            )
+            self._observations.pop(index)
+        self._observations.append(observation)
+
+    def publish(self, *, stream_validated: bool) -> None:
+        observations, self._observations = self._observations, []
+        for observation in observations:
+            try:
+                self._callback({**observation, "stream_validated": stream_validated})
+            except Exception as error:
+                survived("claude_stream.quota_observation", error)

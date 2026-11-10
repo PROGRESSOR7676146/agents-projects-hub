@@ -100,20 +100,25 @@ private exact-source, backup and rollback receipts outside Git.
    starts nor stops it. Its install target is opt-in; see
    [Opt-in start at boot](#opt-in-start-at-boot).
 
-   The unit starts the managed Codex app-server at CPU nice 10; its tool
-   processes inherit that priority unless they change it themselves. Hub service
-   templates do not lower their own priority. Claude turns also use a relative
-   `nice -n 10` when `/usr/bin/nice` is available. This scheduling preference
-   reduces CPU contention; it does not reserve CPU or control I/O.
+   After all start gates, `run` increases the calling thread's nice value by 10
+   immediately before replacing itself with the pinned Codex executable. The
+   value is relative to the inherited priority and capped at 19; tool processes
+   inherit it unless they change it themselves. A failed adjustment is logged
+   and does not prevent startup. Claude turns also use a relative `nice -n 10`
+   when `/usr/bin/nice` is available. The protected app-server unit template is
+   unchanged, so this does not block `hub_deploy`. Since that tool leaves the
+   server running, the setting takes effect at its next guarded start.
 
-   On an existing installation, `hub_deploy` refuses any mismatch of this
-   protected template, including a priority-only change. Separately plan and
-   stage the reviewed candidate template before that tool can plan the release;
-   retain the exact previous template and a verified rollback independently,
-   because the later Hub deployment snapshots the staged template as its
-   starting state. Installing the file and reloading systemd do not change the
-   priority of a running server. Apply the setting through the guarded server
-   start below, and verify its effective priority after start.
+   Nice orders CPU time across the Hub services only when they share the same
+   CPU scheduling group. A sufficient arrangement is no `cpu` controller
+   enabled for their parent slice, no separation at an ancestor, and kernel
+   autogrouping disabled. With the CPU controller enabled for sibling service
+   cgroups, nice orders tasks within the app-server cgroup rather than assigning
+   it a lower weight against siblings. Autogroups follow sessions and may not
+   match cgroups. Check the parent slice's `cgroup.subtree_control`, relevant
+   ancestor controls and `/proc/sys/kernel/sched_autogroup_enabled` (zero means
+   disabled); use `ps -o ni=` on the server, its tools and Hub processes to
+   check their actual nice values. This does not reserve CPU or control I/O.
 5. With old clients still quiesced, generate an exact start receipt from the
    installed clean Hub runtime and save stdout privately with umask 077:
 
