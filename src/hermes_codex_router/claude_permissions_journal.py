@@ -128,8 +128,11 @@ class ClaudePermissionJournal:
         profile: str,
         project_roots: Mapping[str, Path],
         execution_root: Callable[[int], Path],
+        statuses: tuple[str, ...] = ("active", "satellite"),
     ) -> tuple[int, int]:
         """Inspect resumable bindings without pinning, migrating or starting work."""
+        if not statuses or not set(statuses) <= {"active", "satellite"}:
+            raise StateError("unsupported session status filter")
         profile_tools(profile)
         if mode not in {"text_only", "file_tools"} or mode == "text_only" and profile != "editor":
             raise StateError("unsupported Claude session mode")
@@ -138,7 +141,9 @@ class ClaudePermissionJournal:
             "FROM agent_sessions s JOIN topics t ON t.topic_id=s.topic_id "
             "LEFT JOIN claude_permission_session_modes m "
             "ON m.provider_session_id=s.provider_session_id "
-            "WHERE s.status IN ('active','satellite') AND s.provider_session_id IS NOT NULL"
+            f"WHERE s.status IN ({','.join('?' * len(statuses))}) "
+            "AND s.provider_session_id IS NOT NULL",
+            statuses,
         ).fetchall()
         checked = incompatible = 0
         for row in rows:

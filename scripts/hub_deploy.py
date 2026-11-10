@@ -134,6 +134,42 @@ def _host_permissions(permissions: dict[str, Any]) -> bool:
     return True
 
 
+# Release-specific Claude permission keys; every other setting is policy.
+_RELEASE_PERMISSION_KEYS = frozenset(
+    {"runtime_roots", "python_executable", "hook_code_root", "user_releases"}
+)
+
+
+def claude_policy(config: object) -> dict[str, Any]:
+    """Claude settings that the Hub config and the Claude worker config must share.
+
+    Only the release overlay may differ: the CLI executable and the runtime paths
+    and pin of a confined profile. The monitor and Controller read the Hub config,
+    so a drifted copy there misreports the Claude workers' real configuration.
+    """
+    need(isinstance(config, dict), "Hub config must be an object")
+    assert isinstance(config, dict)
+    agents = config.get("agents", [])
+    need(isinstance(agents, list), "invalid agents")
+    permissions = config.get("claude_file_permissions")
+    claude = [
+        {key: value for key, value in agent.items() if key != "executable"}
+        for agent in agents
+        if isinstance(agent, dict) and agent.get("runtime") == "claude"
+    ]
+    identities = [json.dumps(agent.get("agent_id")) for agent in claude]
+    need(len(set(identities)) == len(identities), "duplicate Claude agent identity")
+    return {
+        # Compared by agent identity, never by list position.
+        "agents": sorted(claude, key=lambda agent: json.dumps(agent.get("agent_id"))),
+        "claude_file_permissions": {
+            key: value for key, value in permissions.items() if key not in _RELEASE_PERMISSION_KEYS
+        }
+        if isinstance(permissions, dict)
+        else None,
+    }
+
+
 def verify_config_pin(
     config: dict[str, Any], old: str, verify: Callable[[str, str], bool], *, user_owned: bool
 ) -> None:
@@ -1025,6 +1061,12 @@ def create_plan(
 
     hub_path = Path(installation["hub_config"])
     hub_bytes = _file_bytes(hub_path)
+    if hub_bytes is None:
+        raise Refused("missing Hub config")
+    need(
+        claude_policy(json.loads(hub_bytes)) == claude_policy(candidate_config),
+        "Claude settings differ between the Hub config and the Claude worker config",
+    )
     target_config = old_config.with_name(new_name)
     files: list[tuple[str, Path, bytes | None, bytes | None]] = [
         ("hub_config", hub_path, hub_bytes, hub_bytes),

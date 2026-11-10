@@ -13,6 +13,12 @@ and releases use semantic versioning while the public API is still evolving.
   spawns (builds, test suites) run below the Hub control plane and cannot starve
   its SQLite writers. Codex tools still run at the app-server's priority: its
   protected unit template is unchanged here (deployment refuses such changes).
+- Refuse a deployment plan when the Hub config's Claude settings drift from the
+  Claude worker config (only the release overlay may differ), so the Controller
+  and monitor always see the Claude workers' real profile and route.
+- Doctor: an incompatible inactive Claude session is an informational check
+  (`claude_inactive_session_modes`); only active sessions keep the required
+  `claude_session_modes` check, since switching back is refused explicitly.
 
 - Report a Claude turn that ends on HTTP 500/502/503/504 after the CLI's own
   retries as `claude_provider_unavailable` (temporary network, DNS or upstream

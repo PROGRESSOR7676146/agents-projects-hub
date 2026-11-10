@@ -5,6 +5,7 @@ import shutil
 import stat
 import subprocess
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,6 +36,46 @@ class Check:
     ok: bool
     detail: str
     required: bool = True
+
+
+def _claude_session_mode_checks(config: HubConfig, state: HubState, registry: Any) -> list[Check]:
+    claude_agents = tuple(agent.agent_id for agent in config.agents if agent.runtime == "claude")
+    if not claude_agents:
+        return []
+    settings = config.claude_file_permissions
+    compatibility = partial(
+        ClaudePermissionJournal(state).session_mode_compatibility,
+        agent_ids=claude_agents,
+        mode="text_only" if settings is None else "file_tools",
+        home=Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"))
+        if settings is None
+        else settings.provider_home,
+        profile="editor" if settings is None else settings.profile,
+        project_roots={project.project_id: project.root for project in registry.projects},
+        execution_root=lambda topic_id: resolve_topic_execution_root(
+            state, registry, state.get_topic(topic_id)
+        ),
+    )
+    advice = (
+        "Keep the previous configuration to resume existing conversations; "
+        "use /new only when deliberately changing their access profile or storage."
+    )
+    checked, incompatible = compatibility(statuses=("active",))
+    active = Check(
+        "claude_session_modes",
+        incompatible == 0,
+        f"checked={checked} incompatible={incompatible}. {advice}",
+    )
+    # An inactive session blocks nothing until the owner switches back to it,
+    # and that turn is refused explicitly before any work.
+    checked, incompatible = compatibility(statuses=("satellite",))
+    inactive = Check(
+        "claude_inactive_session_modes",
+        incompatible == 0,
+        f"checked={checked} incompatible={incompatible}. {advice}",
+        required=False,
+    )
+    return [active, inactive]
 
 
 def _command(name: str, *, required: bool = True) -> Check:
@@ -194,34 +235,8 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
             checks.extend(_telegram_contract_checks(state.telegram_contract_provenance()))
             if config.codex_permission_profile == "full":
                 checks.append(_codex_full_session_check(state))
-            claude_agents = tuple(
-                agent.agent_id for agent in config.agents if agent.runtime == "claude"
-            )
-            if registry is not None and claude_agents:
-                settings = config.claude_file_permissions
-                checked, incompatible = ClaudePermissionJournal(state).session_mode_compatibility(
-                    agent_ids=claude_agents,
-                    mode="text_only" if settings is None else "file_tools",
-                    home=Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"))
-                    if settings is None
-                    else settings.provider_home,
-                    profile="editor" if settings is None else settings.profile,
-                    project_roots={
-                        project.project_id: project.root for project in registry.projects
-                    },
-                    execution_root=lambda topic_id: resolve_topic_execution_root(
-                        state, registry, state.get_topic(topic_id)
-                    ),
-                )
-                checks.append(
-                    Check(
-                        "claude_session_modes",
-                        incompatible == 0,
-                        f"checked={checked} incompatible={incompatible}. "
-                        "Keep the previous configuration to resume existing conversations; "
-                        "use /new only when deliberately changing their access profile or storage.",
-                    )
-                )
+            if registry is not None:
+                checks.extend(_claude_session_mode_checks(config, state, registry))
         finally:
             state.close()
     except Exception as exc:

@@ -6,7 +6,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router import diagnostics
@@ -76,6 +76,22 @@ class ClaudeSessionModePreflightTests(unittest.TestCase):
         with connection:
             connection.execute("UPDATE agent_sessions SET status='satellite'")
         self.assertEqual(self.check_modes(profile="workstation"), (1, 1))
+        state = HubState.open_read_only(self.fixture.root.parent / "state.db")
+        self.addCleanup(state.close)
+        journal = ClaudePermissionJournal(state)
+        for statuses, expected in ((("active",), (0, 0)), (("satellite",), (1, 1))):
+            self.assertEqual(
+                journal.session_mode_compatibility(
+                    agent_ids=("claude",),
+                    mode="file_tools",
+                    home=self.home,
+                    profile="workstation",
+                    project_roots={"example-project": self.fixture.root},
+                    execution_root=lambda _: self.fixture.root,
+                    statuses=statuses,
+                ),
+                expected,
+            )
         with connection:
             connection.execute("UPDATE agent_sessions SET status='archived'")
         self.assertEqual(self.check_modes(profile="workstation"), (0, 0))
@@ -190,6 +206,21 @@ class ClaudeSessionModePreflightTests(unittest.TestCase):
             self.assertFalse(check["ok"])
             self.assertTrue(check["required"])
             self.assertIn("checked=1 incompatible=1", cast(str, check["detail"]))
+            inactive = next(
+                item for item in checks if item["name"] == "claude_inactive_session_modes"
+            )
+            self.assertEqual((inactive["ok"], inactive["required"]), (True, False))
+            with self.fixture.state._connection as connection:
+                connection.execute("UPDATE agent_sessions SET status='satellite'")
+            satellite = diagnostics.run_doctor(config)
+            by_name = {
+                item["name"]: item for item in cast(list[dict[str, Any]], satellite["checks"])
+            }
+            self.assertTrue(by_name["claude_session_modes"]["ok"])
+            self.assertFalse(by_name["claude_inactive_session_modes"]["ok"])
+            self.assertFalse(by_name["claude_inactive_session_modes"]["required"])
+            with self.fixture.state._connection as connection:
+                connection.execute("UPDATE agent_sessions SET status='active'")
             assert config.claude_file_permissions is not None
             compatible = replace(
                 config,
