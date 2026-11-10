@@ -412,8 +412,10 @@ def _terminal_failure_message(code: str) -> str:
     check_route = "Check the configured Claude/CPA route locally before sending new work."
     reason, action = {
         "claude_quota_exhausted": (
-            "Claude reported a terminal quota rejection; reset time is unknown.",
-            inspect_work,
+            "Claude's account usage limit was reached; the route reported no reset time, "
+            "so reset time is unknown.",
+            "The conversation and saved partial work are preserved; send the request again "
+            "after the limit resets.",
         ),
         "claude_authentication_failed": ("Claude reported an authentication failure.", check_route),
         "claude_billing_error": ("Claude reported a billing rejection.", check_route),

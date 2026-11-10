@@ -32,6 +32,7 @@ from hermes_codex_router.external_runtime import (
     ExternalTurnResult,
     ProviderLimitError,
     ProviderUnavailableError,
+    below_hub_priority,
 )
 from hermes_codex_router.owned_process_exit import peek_exit_code
 from tests.test_claude_cli_capabilities import HELP, LeaderExitClock
@@ -391,6 +392,28 @@ class ExternalRuntimeTests(unittest.TestCase):
                     self.assertTrue(process.stdout and process.stdout.closed)
                     self.assertTrue(process.stderr and process.stderr.closed)
                 self.assertIsNone(adapter._active_process)
+
+    def test_without_nice_the_argv_is_unchanged(self) -> None:
+        with patch("hermes_codex_router.external_runtime.os.access", return_value=False):
+            self.assertEqual(below_hub_priority(("claude", "-p")), ("claude", "-p"))
+        with patch("hermes_codex_router.external_runtime.os.access", return_value=True):
+            self.assertEqual(
+                below_hub_priority(("claude", "-p")), ("/usr/bin/nice", "-n", "10", "claude", "-p")
+            )
+
+    @unittest.skipUnless(os.access("/usr/bin/nice", os.X_OK), "requires /usr/bin/nice")
+    def test_claude_turn_and_its_children_run_below_hub_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "niceness"
+            with self.assertRaises(ClaudeStreamError):
+                self._claude_process(
+                    "import os, subprocess, sys\n"
+                    "child = subprocess.run([sys.executable, '-c', 'import os; print(os.nice(0))'],"
+                    " capture_output=True, text=True, check=True)\n"
+                    f"open({str(marker)!r}, 'w').write(f'{{os.nice(0)}} {{child.stdout.strip()}}')\n"
+                )
+            expected = min(os.nice(0) + 10, 19)  # relative to the worker, like `nice -n 10`
+            self.assertEqual(marker.read_text(), f"{expected} {expected}")
 
     def test_claude_stdout_overflow_is_rejected_before_eof(self) -> None:
         with self.assertRaisesRegex(ClaudeStreamError, "output.*limit"):
