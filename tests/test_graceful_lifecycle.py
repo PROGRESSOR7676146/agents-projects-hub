@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import signal
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -18,12 +20,57 @@ from hermes_codex_router.service import ProjectHubService, ServiceError
 class Stoppable:
     def __init__(self) -> None:
         self.stop_calls = 0
+        self.lock = threading.Lock()
+        self.stopped_twice = threading.Event()
 
     def stop(self) -> None:
-        self.stop_calls += 1
+        with self.lock:
+            self.stop_calls += 1
+            if self.stop_calls == 2:
+                self.stopped_twice.set()
 
 
 class GracefulLifecycleTests(unittest.TestCase):
+    def test_signal_returns_while_stop_waits_for_interrupted_thread_lock(self) -> None:
+        child = r"""
+import signal
+import threading
+from hermes_codex_router.lifecycle import stop_on_signals
+
+lock = threading.Lock()
+started = threading.Semaphore(0)
+finished = threading.Semaphore(0)
+
+class Component:
+    def stop(self):
+        started.release()
+        with lock:
+            finished.release()
+
+class ComponentWithStopProperty:
+    @property
+    def stop(self):
+        started.release()
+        with lock:
+            return finished.release
+
+for component in (Component(), ComponentWithStopProperty()):
+    with stop_on_signals(component), lock:
+        for _ in range(3):
+            signal.raise_signal(signal.SIGTERM)
+            assert started.acquire(timeout=10), "stop request did not start"
+        assert not finished.acquire(blocking=False), "stop acquired the held lock"
+    for _ in range(3):
+        assert finished.acquire(timeout=10), "stop did not finish after the lock was released"
+"""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", child], capture_output=True, text=True, timeout=25
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("signal handler deadlocked while the main thread held the stop lock")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_signal_handlers_only_request_stop_and_restore_previous_handlers(self) -> None:
         component = Stoppable()
         previous = {
@@ -37,6 +84,7 @@ class GracefulLifecycleTests(unittest.TestCase):
                 self.assertTrue(callable(handler))
                 handler(signum, None)  # type: ignore[misc]
 
+            self.assertTrue(component.stopped_twice.wait(10), "stop requests did not finish")
         self.assertEqual(component.stop_calls, 2)
         self.assertEqual(signal.getsignal(signal.SIGINT), previous[signal.SIGINT])
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous[signal.SIGTERM])
@@ -64,12 +112,12 @@ class GracefulLifecycleTests(unittest.TestCase):
         class Component:
             def __init__(self, *_args: object, **kwargs: object) -> None:
                 self.kwargs = kwargs
-                self.stopped = False
+                self.stopped = threading.Event()
                 self.closed = False
                 instances.append(self)
 
             def stop(self) -> None:
-                self.stopped = True
+                self.stopped.set()
 
             def run_forever(self, **_kwargs: object) -> None:
                 handler = signal.getsignal(signal.SIGTERM)
@@ -101,6 +149,7 @@ class GracefulLifecycleTests(unittest.TestCase):
             ("worker", ["worker", "example.json"], "ExternalQueueWorker"),
             ("worker slot", ["worker", "example.json", "--slot", "2"], "ExternalQueueWorker"),
             ("sender", ["sender", "example.json"], "TelegramOutboxSender"),
+            ("provisioner", ["project-provisioner", "example.json"], "ProjectProvisioner"),
         )
         for label, argv, component_name in commands:
             with self.subTest(label=label):
@@ -123,11 +172,15 @@ class GracefulLifecycleTests(unittest.TestCase):
                         "hermes_codex_router.cli.load_outbox_sender_config",
                         return_value=object(),
                     ),
+                    patch(
+                        "hermes_codex_router.cli.load_project_provisioner_config",
+                        return_value=object(),
+                    ),
                     patch(f"hermes_codex_router.cli.{component_name}", Component),
                 ):
                     self.assertEqual(main(argv), 0)
                 self.assertEqual(len(instances), 1)
-                self.assertTrue(instances[0].stopped)
+                self.assertTrue(instances[0].stopped.wait(10), "stop request did not finish")
                 self.assertTrue(instances[0].closed)
                 if label == "worker slot":
                     self.assertEqual(

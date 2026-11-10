@@ -32,6 +32,34 @@ def _isolated_git_environment() -> dict[str, str]:
 
 
 class PublishPreflightTests(unittest.TestCase):
+    def test_command_timeouts_allow_local_git_extra_time(self) -> None:
+        commands = (
+            (["git", "status", "--porcelain"], {}, 300),
+            (["git", "rev-parse", "HEAD"], {}, 300),
+            (["gh", "status"], {}, 60),
+            (["git", "status"], {"timeout": 7}, 7),
+        )
+        for run in (publish_preflight._run, publish_preflight._run_bytes):
+            for argv, options, expected in commands:
+                with (
+                    self.subTest(run=run.__name__, argv=argv, options=options),
+                    patch("hermes_codex_router.publish_preflight.subprocess.run") as subprocess_run,
+                ):
+                    run(argv, cwd=Path("/home/example"), **options)
+                    self.assertEqual(subprocess_run.call_args.kwargs["timeout"], expected)
+
+    def test_command_timeouts_remain_fail_closed(self) -> None:
+        for run in (publish_preflight._run, publish_preflight._run_bytes):
+            with (
+                self.subTest(run=run.__name__),
+                patch(
+                    "hermes_codex_router.publish_preflight.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(["git", "status"], 300),
+                ),
+                self.assertRaises(publish_preflight.PreflightError),
+            ):
+                run(["git", "status"], cwd=Path("/home/example"))
+
     def test_nested_fixture_drops_outer_identity_and_policy(self) -> None:
         names = ["HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"] + [
             f"GIT_{role}_{field}" for role in ("AUTHOR", "COMMITTER") for field in ("NAME", "EMAIL")
@@ -60,6 +88,85 @@ class PublishPreflightTests(unittest.TestCase):
                 f"(unknown) {head} refs/tags/v1.0.0 {'0' * 40}\n",
                 head,
             )
+
+    def test_deletion_only_push_skips_checkout_and_publication_validation(self) -> None:
+        for oid_length in (40, 64):
+            source = f"(delete) {'0' * oid_length} refs/heads/old {'a' * oid_length}\n"
+            with (
+                self.subTest(oid_length=oid_length),
+                patch("sys.stdin", io.StringIO(source)),
+                patch.object(publish_preflight, "_require_checkout_import") as checkout,
+                patch.object(publish_preflight, "_git_stdout") as git_stdout,
+                patch.object(publish_preflight, "_run", wraps=publish_preflight._run) as run,
+                patch.object(publish_preflight.privacy_scan, "scan_history") as history,
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(publish_preflight.main([]), 0)
+                checkout.assert_not_called()
+                git_stdout.assert_not_called()
+                history.assert_not_called()
+                self.assertTrue(
+                    all(
+                        call.args[0][:2] == ["git", "check-ref-format"]
+                        for call in run.call_args_list
+                    )
+                )
+
+    def test_mixed_deletion_and_update_runs_full_preflight(self) -> None:
+        head = "a" * 40
+        source = (
+            f"(delete) {'0' * 40} refs/heads/old {'b' * 40}\n"
+            f"refs/heads/new {head} refs/heads/new {'0' * 40}\n"
+        )
+        calls: list[list[str]] = []
+
+        def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        with (
+            patch("sys.stdin", io.StringIO(source)),
+            patch.object(publish_preflight, "_require_checkout_import"),
+            patch.object(publish_preflight, "_git_stdout", return_value=head),
+            patch.object(publish_preflight, "_resolve_exact_ref", return_value=head),
+            patch.object(
+                publish_preflight, "_resolve_commit_without_replacements", return_value=head
+            ),
+            patch.object(publish_preflight, "_run", side_effect=run),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(publish_preflight.main([]), 0)
+
+        self.assertEqual(sum(Path(argv[-1]).name == "validate.py" for argv in calls), 1)
+        self.assertEqual(sum(argv[:2] == ["git", "status"] for argv in calls), 2)
+
+    def test_malformed_deletion_input_fails_closed(self) -> None:
+        zero, oid = "0" * 40, "a" * 40
+        real_run = publish_preflight._run
+
+        def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if argv[:2] == ["git", "check-ref-format"]:
+                return real_run(argv, **kwargs)  # type: ignore[arg-type]
+            if argv[:2] == ["git", "status"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            self.fail(f"malformed input reached an unexpected command: {argv}")
+
+        for source in (
+            f"(delete) {zero} refs/heads/old\n",
+            f"(delete) {zero} refs/heads/old not-an-oid\n",
+            f"(unknown) {zero} refs/heads/old {oid}\n",
+            f"(delete) {zero} refs/heads/../bad {oid}\n",
+            f"(delete) {zero} refs/heads/old {oid}\nmalformed\n",
+        ):
+            with (
+                self.subTest(source=source),
+                patch("sys.stdin", io.StringIO(source)),
+                patch.object(publish_preflight, "_require_checkout_import"),
+                patch.object(publish_preflight, "_git_stdout", return_value=oid),
+                patch.object(publish_preflight, "_run", side_effect=run),
+                redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(publish_preflight.main([]), 1)
 
     def test_install_places_hook_in_shared_git_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

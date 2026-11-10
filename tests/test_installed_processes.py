@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +16,7 @@ from hermes_codex_router.installed_processes import observe_units
 class InstalledProcessesTests(unittest.TestCase):
     def test_passive_readback_of_owned_native_fixture_process(self) -> None:
         unit = "agents-projects-hub-example.service"
-        argv = [sys.executable, "-I", "-B", "-c", "import time; time.sleep(10)"]
+        argv = [sys.executable, "-I", "-B", "-c", "import signal; signal.pause()"]
         child = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         calls = []
 
@@ -26,6 +27,16 @@ class InstalledProcessesTests(unittest.TestCase):
             return str(child.pid)
 
         try:
+            expected_cmdline = b"\0".join(os.fsencode(arg) for arg in argv) + b"\0"
+            deadline = time.monotonic() + 30
+            cmdline_path = Path("/proc") / str(child.pid) / "cmdline"
+            while True:
+                self.assertIsNone(child.poll(), "fixture exited before exec")
+                if cmdline_path.read_bytes() == expected_cmdline:
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail("fixture did not exec with the expected command line")
+                time.sleep(0.01)
             with patch("hermes_codex_router.installed_processes._systemctl", side_effect=systemctl):
                 result = observe_units((unit,))
             self.assertEqual(result[unit]["argv"], argv)

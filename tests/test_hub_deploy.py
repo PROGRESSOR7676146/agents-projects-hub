@@ -1998,6 +1998,8 @@ class WindowTests(StageFixture):
 
     def test_rollback_never_restores_database_backup(self):
         original = self.manager.start
+        manifest_bytes = self.manifest.read_bytes()
+        manifest_mode = self.manifest.stat().st_mode & 0o777
 
         def start(unit):
             if unit == "controller.service":
@@ -2013,7 +2015,8 @@ class WindowTests(StageFixture):
         self.assertEqual(self.execute()["outcome"], "ROLLED_BACK")
         with closing(sqlite3.connect(self.db)) as db:
             self.assertEqual(db.execute("SELECT value FROM after_backup").fetchone()[0], "retained")
-        self.assertEqual(self.manifest.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.manifest.read_bytes(), manifest_bytes)
+        self.assertEqual(self.manifest.stat().st_mode & 0o777, manifest_mode)
 
     def test_monitor_failure_is_incomplete_without_rollback(self):
         self.manager.monitor_failures = 2

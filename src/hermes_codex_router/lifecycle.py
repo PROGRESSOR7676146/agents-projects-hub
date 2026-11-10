@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import _thread
 import signal
 import threading
 from contextlib import contextmanager
@@ -28,8 +29,13 @@ def stop_on_signals(component: Stoppable) -> Iterator[None]:
 
     previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
 
-    def request_stop(_signum: int, _frame: FrameType | None) -> None:
+    def stop_component() -> None:
         component.stop()
+
+    def request_stop(_signum: int, _frame: FrameType | None) -> None:
+        # Starting a low-level daemon thread avoids threading.Thread.start()'s
+        # shared bookkeeping locks and startup wait in the signal handler.
+        _thread.start_new_thread(stop_component, ())
 
     for signum in previous:
         signal.signal(signum, request_stop)

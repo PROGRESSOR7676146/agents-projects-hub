@@ -37,11 +37,26 @@ worker.agent = replace(worker.agent, runtime="codex", agent_id="codex")
 supervisor = CodexAppServerSupervisor(root / "example.sock", manage_process=False)
 worker.supervisor = worker._owned_supervisor = supervisor
 supervisor.start = lambda: None
+original_stop = worker.stop
+stop_calls = 0
+stop_lock = threading.Lock()
+def stop():
+    global stop_calls
+    original_stop()
+    with stop_lock:
+        stop_calls += 1
+        (root / ("stop-" + str(stop_calls))).touch()
+worker.stop = stop
 original_thread = worker.activity.thread
 def thread(**kwargs):
     result = original_thread(**kwargs)
     join = result.join
-    result.join = lambda timeout=None: join(timeout=None if timeout is None else 0.01)
+    def observed_join(timeout=None):
+        if timeout is None:
+            name = kwargs["name"].rsplit("-", 1)[-1]
+            (root / (name + "-joining")).touch()
+        return join(timeout=None if timeout is None else 0.01)
+    result.join = observed_join
     return result
 worker.activity.thread = thread
 def background(name):
@@ -77,10 +92,13 @@ finally:
 
 class WorkerShutdownTests(unittest.TestCase):
     def wait_file(self, path: Path, process: subprocess.Popen[str]) -> None:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while not path.exists():
-            if process.poll() is not None or time.monotonic() >= deadline:
-                self.fail(f"child failed before {path.name}: {process.poll()}")
+            returncode = process.poll()
+            if returncode is not None:
+                self.fail(f"child exited before {path.name}: {returncode}")
+            if time.monotonic() >= deadline:
+                self.fail(f"timed out waiting for {path.name}; child is still running")
             time.sleep(0.01)
 
     def test_real_sigterm_keeps_state_and_process_until_both_background_threads_exit(self):
@@ -95,22 +113,32 @@ class WorkerShutdownTests(unittest.TestCase):
             try:
                 self.wait_file(root / "ready", process)
                 process.send_signal(signal.SIGTERM)
-                time.sleep(0.15)
+                self.wait_file(root / "stop-1", process)
+                self.wait_file(root / "control-joining", process)
                 self.assertIsNone(process.poll(), "worker abandoned its live cleanup threads")
+                self.assertFalse((root / "control-finished").exists())
+                self.assertFalse((root / "connect-finished").exists())
+                self.assertFalse((root / "state-closing").exists())
                 self.assertFalse((root / "state-closed").exists())
                 (root / "control-release").touch()
                 self.wait_file(root / "control-finished", process)
-                time.sleep(0.05)
+                self.wait_file(root / "connect-joining", process)
                 self.assertIsNone(process.poll(), "worker abandoned connect cleanup")
+                self.assertFalse((root / "connect-finished").exists())
+                self.assertFalse((root / "state-closing").exists())
                 self.assertFalse((root / "state-closed").exists())
                 process.send_signal(signal.SIGTERM)
                 (root / "connect-release").touch()
                 self.wait_file(root / "state-closing", process)
+                self.wait_file(root / "stop-3", process)
+                self.assertTrue((root / "connect-finished").exists())
                 process.send_signal(signal.SIGTERM)
-                time.sleep(0.05)
+                # close() called stop() once after the first two signals.
+                self.wait_file(root / "stop-4", process)
                 self.assertIsNone(process.poll(), "signal handler ended before resource close")
+                self.assertFalse((root / "state-closed").exists())
                 (root / "state-release").touch()
-                stdout, stderr = process.communicate(timeout=10)
+                stdout, stderr = process.communicate(timeout=30)
                 self.assertEqual(process.returncode, 0, stderr)
                 self.assertTrue((root / "state-closed").exists())
                 self.assertTrue((root / "returned").exists())

@@ -464,13 +464,15 @@ class CodexQueueWorkerTests(unittest.TestCase):
         parent_id = self.enqueue(1, "first")
         entered = threading.Event()
         release = threading.Event()
+        cancelled = threading.Event()
         steered: list[str] = []
 
         class MainClient(WorkerClient):
             def wait_for_turn(self, _turn_id: str) -> TurnResult:
                 entered.set()
                 self.release = release
-                release.wait(3)
+                if not release.wait(30):
+                    raise AssertionError("follow-up was not steered into the running turn")
                 return TurnResult("Combined answer", 1000, 100)
 
         class ControlClient:
@@ -514,22 +516,25 @@ class CodexQueueWorkerTests(unittest.TestCase):
         child_ids: list[str] = []
 
         def send_followup() -> None:
-            if entered.wait(1):
+            if entered.wait(30) and not cancelled.is_set():
                 child_ids.append(self.enqueue(2, "follow up now"))
 
         sender = threading.Thread(target=send_followup)
         try:
             sender.start()
             self.assertTrue(worker.run_cycle())
-            sender.join(2)
+            sender.join(30)
+            self.assertFalse(sender.is_alive(), "follow-up sender did not finish")
             self.assertEqual(len(child_ids), 1)
             child_id = child_ids[0]
             self.assertEqual(steered, ["follow up now"])
             self.assertEqual(worker.state.get_provider_job(parent_id).status, "result_ready")
             self.assertEqual(worker.state.get_provider_job(child_id).status, "completed")
         finally:
+            cancelled.set()
+            entered.set()
             release.set()
-            sender.join(1)
+            sender.join(30)
             worker.close()
 
     def test_stop_after_a_follow_up_lease_never_steers_it_into_the_turn(self) -> None:

@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import select
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -15,7 +15,11 @@ from unittest.mock import patch
 
 from hermes_codex_router.claude_image_input import encode_claude_image_input
 from hermes_codex_router.claude_image_receipt import ClaudeImageReceipt
-from hermes_codex_router.claude_stream import ClaudeStreamError, VisibleAssistantCallback
+from hermes_codex_router.claude_stream import (
+    ClaudeStreamError,
+    ClaudeStreamReader,
+    VisibleAssistantCallback,
+)
 from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalTurnInterrupted
 from tests.test_claude_image_input import SESSION, image
 
@@ -105,19 +109,21 @@ print(json.dumps({{'type':'result','subtype':'success','is_error':False,'session
         self.assertIsNone(self.adapter._active_process)
 
     def test_stop_while_input_is_blocked_cleans_owned_process(self) -> None:
-        stopped = threading.Event()
+        original_write = os.write
+        stopped: list[bool] = []
 
-        def on_start() -> None:
-            def stop() -> None:
-                self.adapter.interrupt()
-                stopped.set()
+        def write_until_blocked(fd: int, data: bytes) -> int:
+            written = original_write(fd, data)
+            if not select.select([], [fd], [], 0)[1]:
+                stopped.append(self.adapter.interrupt())
+            return written
 
-            timer = threading.Timer(0.1, stop)
-            timer.start()
-
-        with self.assertRaises(ExternalTurnInterrupted):
-            self.capture("import time;time.sleep(30)", b"x" * 200000, on_process_started=on_start)
-        self.assertTrue(stopped.wait(1))
+        with patch(
+            "hermes_codex_router.external_runtime.os.write", side_effect=write_until_blocked
+        ):
+            with self.assertRaises(ExternalTurnInterrupted):
+                self.capture("import time;time.sleep(60)", b"x" * 200000, timeout=30)
+        self.assertEqual(stopped, [True])
         self.assertIsNone(self.adapter._active_process)
 
     @contextmanager
@@ -211,24 +217,36 @@ print(json.dumps({{'type':'result','subtype':'success','is_error':False,'session
 
     def test_stop_or_timeout_while_processed_ack_is_incomplete_closes_process(self) -> None:
         data = encode_claude_image_input("Example", (image(),), SESSION)
+        partial = b'{"type":"user",'
+        original_feed = ClaudeStreamReader.feed
         for stopped in (False, True):
             with self.subTest(stopped=stopped):
                 self.adapter.prepare_interruptible_turn()
                 receipt = ClaudeImageReceipt(data, expected_session_id=SESSION)
-                script = 'import sys,time;sys.stdin.buffer.read();sys.stdout.write(\'{\\"type\\":\\"user\\",\');sys.stdout.flush();time.sleep(30)'
-                timer = threading.Timer(0.15, self.adapter.interrupt) if stopped else None
-                if timer:
-                    timer.start()
-                try:
+                observed = bytearray()
+                interrupts: list[bool] = []
+                script = (
+                    f"import os,sys,time;sys.stdin.buffer.read();os.write(1,{partial!r});"
+                    "time.sleep(60)"
+                )
+
+                def feed(reader: ClaudeStreamReader, chunk: bytes) -> None:
+                    original_feed(reader, chunk)
+                    observed.extend(chunk)
+                    if stopped and observed == partial:
+                        interrupts.append(self.adapter.interrupt())
+
+                with patch.object(ClaudeStreamReader, "feed", feed):
                     with self.assert_process_closed():
                         with self.assertRaises(
                             ExternalTurnInterrupted if stopped else RuntimeError
                         ):
-                            self.capture(script, data, image_receipt=receipt, timeout=0.3)
-                finally:
-                    if timer:
-                        timer.cancel()
-                        timer.join()
+                            self.capture(
+                                script, data, image_receipt=receipt, timeout=30 if stopped else 0.3
+                            )
+                if stopped:
+                    self.assertEqual(observed, partial)
+                    self.assertEqual(interrupts, [True])
 
 
 if __name__ == "__main__":
