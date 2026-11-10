@@ -5,6 +5,26 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-11-10
+
+- Fix a shutdown deadlock: the SIGTERM handler called `stop()` directly and
+  could block on a lock the interrupted main thread held, so a worker hung
+  until systemd killed it. One stopper thread now receives queued requests,
+  and resources close only after the stop finished (bounded).
+- Run the managed Codex app-server and its tool processes at nice +10, applied
+  by `codex_server_service run` right before exec of the pinned binary; start
+  gates and readiness keep the default priority. Takes effect at the next
+  guarded app-server start; the unit template is unchanged.
+- Record an allowlisted `claude_quota_observation` runtime event from Claude
+  rate-limit and quota stream events (status, limit type, reset presence and
+  time in whole seconds, stream validation), coalesced per turn. No provider
+  text is kept; the quota notice is unchanged.
+- Gate reliability: condition-based waits in four timing-sensitive tests, a
+  umask-independent deploy rollback test, 300 s for local git calls in the
+  publication preflight, and no canonical validation for a push that only
+  deletes refs.
+- Move earlier project-status checkpoints into `PROJECT_STATUS_HISTORY.md`.
+
 ## [0.11.10] - 2026-11-10
 
 - Word the Claude quota notice for the owner: the account usage limit was
