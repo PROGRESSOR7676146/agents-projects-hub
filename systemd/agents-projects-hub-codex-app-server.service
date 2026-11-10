@@ -19,6 +19,8 @@ KillMode=mixed
 SendSIGKILL=no
 TimeoutStopSec=30
 UMask=0077
+# Codex runs agent tools as children; keep them below the Hub control plane.
+Nice=10
 NoNewPrivileges=true
 # Keep the owning socket visible to existing private-tmp clients.
 PrivateTmp=false

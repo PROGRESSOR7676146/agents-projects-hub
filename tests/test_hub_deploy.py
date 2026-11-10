@@ -747,6 +747,31 @@ class StageTests(StageFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "protected"):
             hub_deploy.create_plan(self.install, old, new, self.runner)
 
+    def test_codex_priority_template_is_protected_until_staged(self):
+        unit = "agents-projects-hub-codex-app-server.service"
+        self.install["untouched_units"][0] = unit
+        candidate = (Path(__file__).resolve().parents[1] / "systemd" / unit).read_bytes()
+        before = candidate.replace(b"Nice=10\n", b"", 1)
+        self.assertNotEqual(before, candidate)
+        (self.units / unit).write_bytes(before)
+        self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
+        templates = hub_deploy._templates(new)
+        templates[unit] = candidate
+        with patch.object(hub_deploy, "_templates", return_value=templates):
+            with self.assertRaisesRegex(hub_deploy.Refused, "protected unit template changed"):
+                hub_deploy.create_plan(self.install, old, new, self.runner)
+            (self.units / unit).write_bytes(candidate)
+            plan = hub_deploy.verify_saved_plan(
+                hub_deploy.create_plan(self.install, old, new, self.runner)
+            )
+        entry = next(item for item in plan["files"] if item["path"] == str(self.units / unit))
+        self.assertEqual(entry["kind"], "base_guard")
+        self.assertFalse(entry["changed"])
+
     def test_template_and_instance_dropins_are_planned_and_stray_ignored(self):
         self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
         worker = self.units / "worker.service.d/override.conf"

@@ -607,6 +607,24 @@ class BootStartTests(unittest.TestCase):
         self.assertGreater(timeout, service.READY_TIMEOUT_SECONDS)
         self.assertGreaterEqual(service.READY_TIMEOUT_SECONDS, 240)
 
+    def test_app_server_runs_below_the_hub_control_plane(self):
+        units = Path(__file__).resolve().parents[1] / "systemd"
+        app_server = units / "agents-projects-hub-codex-app-server.service"
+        service_section = app_server.read_text().split("[Service]\n", 1)[1].split("\n[", 1)[0]
+        nice = [
+            line.strip()
+            for line in service_section.splitlines()
+            if line.partition("=")[0].strip() == "Nice"
+        ]
+        self.assertEqual(nice, ["Nice=10"])
+        for unit in units.glob("agents-projects-hub*.service"):
+            if unit != app_server:
+                with self.subTest(unit=unit.name):
+                    keys = [
+                        line.partition("=")[0].strip() for line in unit.read_text().splitlines()
+                    ]
+                    self.assertNotIn("Nice", keys)
+
     def test_unit_is_opt_in_ordered_and_waits_for_readiness(self):
         root = Path(__file__).resolve().parents[1]
         unit = (root / "systemd/agents-projects-hub-codex-app-server.service").read_text()

@@ -87,8 +87,9 @@ private exact-source, backup and rollback receipts outside Git.
    unknown process custody and pin mismatches. Fresh server creation is independent of historical
    delivery and execution uncertainty; it never resolves, resumes, replays or
    confirms either. Jobs, delivery records and control fences remain intact.
-4. Stage the independent unit (the installer only copies it) and explicitly
-   install the reviewed `systemd/tlive.service.d/30-external-codex.conf` opt-in
+4. Stage the independent unit (the bootstrap installer only copies it and
+   refuses existing installations) and explicitly install the reviewed
+   `systemd/tlive.service.d/30-external-codex.conf` opt-in
    in the operator's unit drop-in directory. Preserve any stronger local
    namespace/permission restrictions. Verify effective tlive `UMask=0077` and
    an existing canonical, same-UID tlive home at mode 0700; umask cannot repair
@@ -98,6 +99,21 @@ private exact-source, backup and rollback receipts outside Git.
    The service intentionally has no automatic restart, and tlive neither
    starts nor stops it. Its install target is opt-in; see
    [Opt-in start at boot](#opt-in-start-at-boot).
+
+   The unit starts the managed Codex app-server at CPU nice 10; its tool
+   processes inherit that priority unless they change it themselves. Hub service
+   templates do not lower their own priority. Claude turns also use a relative
+   `nice -n 10` when `/usr/bin/nice` is available. This scheduling preference
+   reduces CPU contention; it does not reserve CPU or control I/O.
+
+   On an existing installation, `hub_deploy` refuses any mismatch of this
+   protected template, including a priority-only change. Separately plan and
+   stage the reviewed candidate template before that tool can plan the release;
+   retain the exact previous template and a verified rollback independently,
+   because the later Hub deployment snapshots the staged template as its
+   starting state. Installing the file and reloading systemd do not change the
+   priority of a running server. Apply the setting through the guarded server
+   start below, and verify its effective priority after start.
 5. With old clients still quiesced, generate an exact start receipt from the
    installed clean Hub runtime and save stdout privately with umask 077:
 
