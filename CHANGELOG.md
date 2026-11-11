@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.15] - 2026-11-12
+
 - Images for Claude under the host profile (ADR 0102): with
   `claude_stream_input` enabled, `claude_image_input` may be enabled too, and
   photos/screenshots reach Claude in the first frame of the streamed channel
