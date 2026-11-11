@@ -13,6 +13,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.claude_stream import ClaudeStreamError, ClaudeTerminalFailure
+from hermes_codex_router.claude_usage import usage_from_metadata
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.external_runtime import (
     ExternalCliAdapter,
@@ -38,6 +39,7 @@ class ObservingClaudeAdapter:
         self.stop = stop
         self.calls: list[dict[str, Any]] = []
         self.observed: list[tuple[Any, ...]] = []
+        self.usage: dict[str, object] | None = None
 
     def run_turn(
         self, *, session_id: str | None = None, new_session_id: str | None = None, **kwargs: Any
@@ -94,7 +96,9 @@ class ObservingClaudeAdapter:
             if self.outcome == "wrong_result"
             else expected
         )
-        return ExternalTurnResult("claude", "Fictional visible answer", returned, "example-model")
+        return ExternalTurnResult(
+            "claude", "Fictional visible answer", returned, "example-model", self.usage
+        )
 
 
 class ClaudeNativeWorkerTests(unittest.TestCase):
@@ -299,6 +303,27 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
             self.assertEqual(marker.read_text(), native)
             self.assertEqual(worker.state.get_provider_job(first).status, "failed")
             self.assertEqual(worker.state.get_provider_job(second).status, "result_ready")
+
+    def test_success_saves_usage_summary_and_shows_it_in_the_footer(self) -> None:
+        job_id = self.enqueue(1)
+        adapter = ObservingClaudeAdapter(self.path)
+        adapter.usage = {"requests": 3, "last_context": 162_300, "large_cache_writes": 1}
+        worker = self.worker(adapter)
+
+        self.assertTrue(worker.run_cycle())
+
+        result = worker.state.get_provider_result(job_id)
+        self.assertEqual(usage_from_metadata(result.safe_metadata_json), adapter.usage)
+        html = worker.state.get_telegram_outbox_for_job(job_id).telegram_html
+        self.assertIn("Context: 162k (last request)", html)
+        self.assertIn("Large cache writes: 1", html)
+        self.assertIn("Consider /new for the next task", html)
+
+        adapter.usage = None
+        second = self.fixture.enqueue("claude", 2, thread_id=78)
+        self.assertTrue(worker.run_cycle())
+        self.assertIsNone(worker.state.get_provider_result(second).safe_metadata_json)
+        self.assertNotIn("Context:", worker.state.get_telegram_outbox_for_job(second).telegram_html)
 
     def test_already_queued_none_snapshot_resumes_previous_native_uuid(self) -> None:
         first = self.enqueue(1)
@@ -692,8 +717,8 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
             (
                 "rate_limit",
                 "error_during_execution",
-                "claude_quota_exhausted",
-                "reset time is unknown",
+                "claude_rate_limited",
+                "did not identify the limit",
             ),
             (None, "error_max_turns", "claude_turn_limit", "execution limits"),
             (None, "error_max_budget_usd", "claude_budget_exhausted", "execution limits"),

@@ -45,6 +45,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-secur
   masked account and limit/reset data; stale or missing values MUST remain unknown.
   - Context remainder MUST use current context, not lifetime usage; quota labels MUST use reported
     durations, never guessed windows.
+  - Claude context MUST come from the last native request of the latest finished turn (ADR 0098)
+    and show as last-request tokens; a failed, stopped or unsummarized latest turn, or a later
+    compaction, leaves it unknown. Reply footers MAY add a count of suspected large cache writes
+    and a `/new` suggestion above a fixed size, without claiming a cause.
   - A goal footer MAY report exact accepted-turn events as “observed,” preserving distinct states;
     it MUST NOT infer current completion, delivery-time state or fast mode.
   - Observation MUST add no calls or authority and MUST NOT disrupt mandatory processing; retries

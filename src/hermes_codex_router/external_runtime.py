@@ -51,6 +51,7 @@ from .claude_stream import (
     VisibleAssistantCallback,
     parse_claude_stream,
 )
+from .claude_usage import UsageSummaryCallback
 from .diagnostic_log import survived
 from .hub_config import CLAUDE_PROJECT_TOKEN
 from .owned_process_exit import peek_exit_code
@@ -101,9 +102,13 @@ class ExternalTurnResult:
     text: str
     provider_session_id: str | None
     model: str | None
+    # Passive per-request Claude usage for this turn; None when not observed.
+    usage: dict[str, object] | None = None
 
 
 _NICE = Path("/usr/bin/nice")
+CLAUDE_PROMPT_CACHE_TTL = "CLAUDE_CODE_PROMPT_CACHE_TTL"
+DEFAULT_CLAUDE_PROMPT_CACHE_TTL = "1h"
 
 
 def below_hub_priority(argv: tuple[str, ...]) -> tuple[str, ...]:
@@ -306,6 +311,7 @@ class ExternalCliAdapter:
         self._active_process: subprocess.Popen[str] | None = None
         self._claude_stop_process: subprocess.Popen[str] | None = None
         self._interrupt_requested = threading.Event()
+        self._turn_usage: dict[str, object] | None = None
         self._claude_capabilities = ClaudeCliCapabilities()
         self._host_scopes = ClaudeHostScopes(ProviderUnavailableError)
 
@@ -692,6 +698,7 @@ class ExternalCliAdapter:
             expected_session_id=expected_session_id,
             on_visible_assistant=on_visible_assistant,
             on_quota_observation=on_quota_observation,
+            on_usage_summary=self._usage_recorder(),
         )
         completed = None
         try:
@@ -718,6 +725,10 @@ class ExternalCliAdapter:
                 self.claude_token_by_project,
                 project_id,
             )
+            # The CLI keeps a 5-minute cache on proxy/API routes. Hub turns often
+            # resume after longer pauses, so each would rewrite the whole context.
+            # The service environment may still choose another supported value.
+            environment.setdefault(CLAUDE_PROMPT_CACHE_TTL, DEFAULT_CLAUDE_PROMPT_CACHE_TTL)
         else:
             # Claude subscription accounts never reach another provider.
             _pop_claude_project_tokens(environment)
@@ -1052,6 +1063,7 @@ class ExternalCliAdapter:
             event_policy=event_policy,
             image_receipt=image_receipt,
             correction_input=correction_input,
+            on_usage_summary=self._usage_recorder(),
         )
         try:
             process = subprocess.Popen(
@@ -1240,6 +1252,15 @@ class ExternalCliAdapter:
                     pass
             process.wait(timeout=5)
 
+    def _usage_recorder(self) -> UsageSummaryCallback:
+        """Start a new stream's usage; its reader publishes only after a complete drain."""
+        self._turn_usage = None
+
+        def record(summary: dict[str, object]) -> None:
+            self._turn_usage = summary
+
+        return record
+
     def _parse_result(
         self,
         result: subprocess.CompletedProcess[str],
@@ -1259,7 +1280,8 @@ class ExternalCliAdapter:
                 returncode=result.returncode,
                 event_policy=event_policy,
             )
-            return ExternalTurnResult("claude", parsed.text, parsed.session_id, parsed.model)
+            usage, self._turn_usage = self._turn_usage, None
+            return ExternalTurnResult("claude", parsed.text, parsed.session_id, parsed.model, usage)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:1000]
             if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):

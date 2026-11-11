@@ -159,6 +159,10 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 - Reply choice buttons (ADR 0097): an answer ending with `[[choices: …]]` shows
   Hub-bot buttons in a project topic; one press arrives as the owner's reply,
   a second press and old-session buttons are refused. Not yet installed.
+- Claude context cost visibility (ADR 0098): on a genuine owner turn after
+  installation, the transcript shows one-hour cache writes, the reply footer
+  shows the last request context, and `/status` shows the same value. Checked
+  passively from saved evidence; no probe turn is sent.
 - Private copy of a saved answer with unknown delivery (ADR 0093): the owner
   receives the copy in the private chat; delivery status and queue hold stay
   unchanged. Not yet exercised: it needs a genuine active delivery hold.

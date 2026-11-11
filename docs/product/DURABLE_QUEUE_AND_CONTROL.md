@@ -79,7 +79,8 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#durable-queue-and-co
     notices MUST recover atomically without invocation, and missing historical material availability
     MUST stay unknown.
   - Verified provider/quota failure MUST remain distinct from uncertainty; no invented quota/reset
-    values or replay, and covering stops retain precedence.
+    values or replay, and covering stops retain precedence. A Claude 429 MUST NOT be reported as
+    an exhausted usage limit unless a native rejection names that limit (ADR 0098).
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider
   rollout Planned):** Queue rollout MUST be additive, gated, backed up and reversibly preserve
   accepted jobs. Switching to external management MUST refuse startup until local accepted work is

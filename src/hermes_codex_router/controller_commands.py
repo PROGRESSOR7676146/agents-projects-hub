@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import cast
 
+from .claude_usage_state import ClaudeUsageStatus
 from .codex_appserver import LimitWindow, RateLimits
 from .hub_config import HubConfig
 from .model_selection import ModelSelectionError
@@ -114,6 +115,11 @@ class ControllerCommandOrchestrator:
             timezone_name="Europe/Moscow",
             provider_state=(worker_health.provider_state if worker_health is not None else None),
             provider_error_code=(worker_health.error_code if worker_health is not None else None),
+            context_tokens=(
+                ClaudeUsageStatus(self.state).last_context(active.session_id)
+                if agent.runtime == "claude"
+                else None
+            ),
         )
         if active.agent_id == "codex":
             from .turn_continuation_state import TurnContinuationState

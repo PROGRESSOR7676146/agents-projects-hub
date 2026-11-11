@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from .claude_usage import format_tokens
 from .codex_appserver import LimitWindow, RateLimits
 from .provider_limits import ProviderLimit
 from .quota_windows import quota_window_label
@@ -68,6 +69,7 @@ def format_session_status(
     limits_stale: bool = False,
     provider_state: str | None = None,
     provider_error_code: str | None = None,
+    context_tokens: int | None = None,
 ) -> str:
     headline = f"{agent} · {_name(model)} · {effort.title()}"
     if writer != "telegram":
@@ -75,6 +77,8 @@ def format_session_status(
     detail: list[str] = []
     if context_remaining is not None:
         detail.append(f"Context {context_remaining:.1f}%")
+    elif context_tokens is not None:
+        detail.append(f"Context {format_tokens(context_tokens)} (last request)")
     if account_hint:
         detail.append(f"Account {account_hint}")
     lines = [headline]

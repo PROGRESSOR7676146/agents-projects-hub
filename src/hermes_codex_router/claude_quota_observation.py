@@ -124,7 +124,8 @@ class QuotaObserver:
             and event.get("is_error") is True
             and (
                 (type(api_status) is int and api_status == 429)
-                or self._failure_code(event, self._assistant_error) == "claude_quota_exhausted"
+                or self._failure_code(event, self._assistant_error)
+                in {"claude_quota_exhausted", "claude_rate_limited"}
             )
         )
         if kind == "result":

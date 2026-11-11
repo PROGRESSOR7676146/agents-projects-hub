@@ -18,6 +18,7 @@ from .claude_image_input import VerifiedClaudeImage
 from .claude_permission_wait import PermissionWaitClock
 from .claude_quota_observation import QuotaObservationCallback
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
+from .claude_usage import usage_footer_details, usage_metadata_json
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError, CodexRetryBindingError
 from .codex_permissions import CodexPermissionProfileError
@@ -73,6 +74,7 @@ class PreparedWorkerResult:
 
     visible_response: str
     telegram_html: str
+    safe_metadata_json: str | None = None
 
 
 class ProviderTurnStopped(RuntimeError):
@@ -155,7 +157,9 @@ def classify_worker_failure(
     if isinstance(error, ClaudeTerminalFailure):
         return WorkerFailureClassification(
             "failed",
-            "quota" if error.code == "claude_quota_exhausted" else "provider_terminal",
+            "quota"
+            if error.code in {"claude_quota_exhausted", "claude_rate_limited"}
+            else "provider_terminal",
             error.code,
             False,
             "claude_terminal",
@@ -607,20 +611,21 @@ def prepare_external_worker_result(
     """Render an accepted external-provider result without durable side effects."""
     visible_text = result.text.strip() if trim_visible_text else result.text
     visible_response = visible_text + prepared_materials.visible_notice + artifact_notice
+    details = {
+        "Session": session_label,
+        "Agent": agent_name,
+        "Runtime": runtime,
+        "Model": model,
+        "Effort": effort,
+        "Context remaining": "unavailable",
+        "Usage windows": "unavailable",
+    }
+    if runtime == "claude":
+        details.update(usage_footer_details(result.usage))
     return PreparedWorkerResult(
         visible_response=visible_response,
-        telegram_html=format_agent_response(
-            visible_response,
-            {
-                "Session": session_label,
-                "Agent": agent_name,
-                "Runtime": runtime,
-                "Model": model,
-                "Effort": effort,
-                "Context remaining": "unavailable",
-                "Usage windows": "unavailable",
-            },
-        ),
+        telegram_html=format_agent_response(visible_response, details),
+        safe_metadata_json=usage_metadata_json(result.usage) if runtime == "claude" else None,
     )
 
 

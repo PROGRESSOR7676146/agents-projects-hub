@@ -5,6 +5,18 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Claude turns default to a one-hour prompt cache (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`
+  unless the service sets another value), so resuming after a pause no longer
+  rewrites the whole conversation (ADR 0098).
+- Claude replies show the last request's context size, the number of suspected
+  large cache writes and, from 150k tokens, a `/new` suggestion; `/status` shows
+  the same context for the latest finished turn. The per-turn usage summary is
+  saved with the result, without a schema change.
+- A Claude 429 without a named usage-limit rejection is now
+  `claude_rate_limited` with an honest notice instead of "usage limit reached".
+- The Claude transport note asks for one task per session, short tool output
+  and one bounded wait instead of repeated polling.
+
 ## [0.11.11] - 2026-11-10
 
 - Fix a shutdown deadlock: the SIGTERM handler called `stop()` directly and
