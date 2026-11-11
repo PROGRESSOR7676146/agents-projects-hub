@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,12 +24,14 @@ from hermes_codex_router.status_view import format_session_status
 SESSION = "00000000-0000-4000-8000-000000000001"
 
 
-def assistant(message_id: str, *, parent: str | None = None, **usage: object) -> dict[str, object]:
+def assistant(
+    message_id: str, usage: Mapping[str, object] | None = None, *, parent: str | None = None
+) -> dict[str, object]:
     return {
         "type": "assistant",
         "session_id": SESSION,
         "parent_tool_use_id": parent,
-        "message": {"id": message_id, "content": [], "usage": usage},
+        "message": {"id": message_id, "content": [], "usage": dict(usage or {})},
     }
 
 
@@ -44,19 +47,19 @@ def request_usage(
     }
 
 
-def summarize(*events: dict[str, object]) -> dict[str, object] | None:
+def summarize(*events: Mapping[str, object]) -> dict[str, object] | None:
     observer = ClaudeUsageObserver()
     for event in events:
-        observer.observe(event)
+        observer.observe(dict(event))
     return observer.summary()
 
 
 class ClaudeUsageObserverTests(unittest.TestCase):
     def test_repeated_blocks_of_one_request_are_counted_once_with_latest_usage(self) -> None:
         summary = summarize(
-            assistant("msg-1", **request_usage(read=1000, write=200_000, w1h=200_000, out=1)),
-            assistant("msg-1", **request_usage(read=1000, write=200_000, w1h=200_000, out=80)),
-            assistant("msg-2", **request_usage(read=201_000, write=500, w1h=500, out=20)),
+            assistant("msg-1", request_usage(read=1000, write=200_000, w1h=200_000, out=1)),
+            assistant("msg-1", request_usage(read=1000, write=200_000, w1h=200_000, out=80)),
+            assistant("msg-2", request_usage(read=201_000, write=500, w1h=500, out=20)),
         )
         assert summary is not None
         self.assertEqual(summary["requests"], 2)
@@ -71,8 +74,8 @@ class ClaudeUsageObserverTests(unittest.TestCase):
 
     def test_subagent_requests_do_not_define_main_context(self) -> None:
         summary = summarize(
-            assistant("msg-1", **request_usage(read=50_000)),
-            assistant("sub-1", parent="toolu_1", **request_usage(read=900_000)),
+            assistant("msg-1", request_usage(read=50_000)),
+            assistant("sub-1", parent="toolu_1", usage=request_usage(read=900_000)),
         )
         assert summary is not None
         self.assertEqual((summary["requests"], summary["subagent_requests"]), (1, 1))
@@ -80,22 +83,22 @@ class ClaudeUsageObserverTests(unittest.TestCase):
 
     def test_compaction_after_last_request_makes_current_context_unknown(self) -> None:
         compacted = {"type": "system", "subtype": "compact_boundary", "session_id": SESSION}
-        summary = summarize(assistant("msg-1", **request_usage(read=300_000)), compacted)
+        summary = summarize(assistant("msg-1", request_usage(read=300_000)), compacted)
         assert summary is not None
         self.assertIsNone(summary["last_context"])
         self.assertEqual(summary["max_context"], 300_005)
         summary = summarize(
-            assistant("msg-1", **request_usage(read=300_000)),
+            assistant("msg-1", request_usage(read=300_000)),
             compacted,
-            assistant("msg-2", **request_usage(write=30_000)),
+            assistant("msg-2", request_usage(write=30_000)),
         )
         assert summary is not None
         self.assertEqual(summary["last_context"], 30_005)
 
     def test_missing_fields_stay_unknown_not_zero(self) -> None:
         summary = summarize(
-            assistant("msg-1", input_tokens=5, output_tokens=3),
-            assistant("msg-2", **request_usage(read=100)),
+            assistant("msg-1", {"input_tokens": 5, "output_tokens": 3}),
+            assistant("msg-2", request_usage(read=100)),
         )
         assert summary is not None
         self.assertIsNone(summary["cache_write"])
@@ -103,13 +106,13 @@ class ClaudeUsageObserverTests(unittest.TestCase):
         self.assertEqual(summary["output"], 13)
         self.assertEqual(summary["last_context"], 105)
         self.assertIsNone(summarize({"type": "result", "session_id": SESSION}))
-        boolean = summarize(assistant("msg-1", **{**request_usage(), "input_tokens": True}))
+        boolean = summarize(assistant("msg-1", {**request_usage(), "input_tokens": True}))
         assert boolean is not None
         self.assertIsNone(boolean["last_context"])
 
     def test_a_later_request_without_usage_makes_context_unknown(self) -> None:
         summary = summarize(
-            assistant("msg-1", **request_usage(read=160_000)),
+            assistant("msg-1", request_usage(read=160_000)),
             {**assistant("msg-2"), "message": {"id": "msg-2", "content": []}},
         )
         assert summary is not None
@@ -120,16 +123,16 @@ class ClaudeUsageObserverTests(unittest.TestCase):
     def test_untracked_requests_beyond_the_bound_make_context_unknown(self) -> None:
         with patch("hermes_codex_router.claude_usage._MAX_TRACKED_REQUESTS", 1):
             summary = summarize(
-                assistant("msg-1", **request_usage(read=160_000)),
-                assistant("msg-2", **request_usage(read=10)),
+                assistant("msg-1", request_usage(read=160_000)),
+                assistant("msg-2", request_usage(read=10)),
             )
         assert summary is not None
         self.assertEqual(summary["requests"], 1)
         self.assertIsNone(summary["last_context"])
 
     def test_large_write_needs_at_least_twenty_thousand_written_tokens(self) -> None:
-        small = summarize(assistant("msg-1", **request_usage(input=15_000, write=16_000)))
-        large = summarize(assistant("msg-1", **request_usage(input=15_000, write=20_000)))
+        small = summarize(assistant("msg-1", request_usage(input=15_000, write=16_000)))
+        large = summarize(assistant("msg-1", request_usage(input=15_000, write=20_000)))
         assert small is not None and large is not None
         self.assertEqual((small["large_cache_writes"], large["large_cache_writes"]), (0, 1))
 
@@ -139,7 +142,7 @@ class ClaudeUsageObserverTests(unittest.TestCase):
         stream = "\n".join(
             json.dumps(event)
             for event in (
-                assistant("msg-1", **request_usage(write=40_000)),
+                assistant("msg-1", request_usage(write=40_000)),
                 {
                     "type": "result",
                     "subtype": "success",
@@ -159,7 +162,7 @@ class ClaudeUsageObserverTests(unittest.TestCase):
             raise RuntimeError("fictional telemetry failure")
 
         reader = ClaudeStreamReader(expected_session_id=SESSION, on_usage_summary=broken)
-        reader.feed((json.dumps(assistant("msg-1", **request_usage())) + "\n").encode())
+        reader.feed((json.dumps(assistant("msg-1", request_usage())) + "\n").encode())
         reader.finish()
 
 
@@ -175,7 +178,7 @@ class ClaudeUsagePresentationTests(unittest.TestCase):
         self.assertEqual(usage_footer_details(None), {"Context": "unavailable"})
 
     def test_metadata_round_trip_is_bounded_and_ignores_other_shapes(self) -> None:
-        summary = summarize(*(assistant(f"msg-{i}", **request_usage()) for i in range(3)))
+        summary = summarize(*(assistant(f"msg-{i}", request_usage()) for i in range(3)))
         metadata = usage_metadata_json(summary)
         assert metadata is not None
         self.assertLessEqual(len(metadata), 4000)
