@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from .claude_stream import MAX_CLAUDE_VISIBLE_CHARACTERS, ClaudeStreamError
+
+if TYPE_CHECKING:
+    from .claude_image_input import VerifiedClaudeImage
+    from .claude_image_receipt import ClaudeImageReceipt
 
 MAX_CORRECTION_CHARACTERS = 20_000
 
@@ -62,10 +67,33 @@ class ClaudeCorrectionCallbacks:
 class ClaudeCorrectionInput:
     """One initial input and at most one durable FIFO correction per launch."""
 
-    def __init__(self, prompt: str, session_id: str, callbacks: ClaudeCorrectionCallbacks):
+    def __init__(
+        self,
+        prompt: str,
+        session_id: str,
+        callbacks: ClaudeCorrectionCallbacks,
+        images: Sequence[VerifiedClaudeImage] = (),
+    ):
         self.callbacks = callbacks
-        self.initial = ClaudeInputFrame(str(uuid.uuid4()), session_id, prompt)
-        self.initial_data = self.initial.encode()
+        self._image_receipt: ClaudeImageReceipt | None = None
+        if images:
+            # Images travel only in the initial frame, with the same bounded
+            # encoding and replay check as the tools-disabled image path.
+            from .claude_image_input import ClaudeImageInputError, encode_claude_image_input
+            from .claude_image_receipt import ClaudeImageReceipt
+
+            try:
+                self.initial_data = encode_claude_image_input(prompt, images, session_id)
+                self._image_receipt = ClaudeImageReceipt(
+                    self.initial_data, expected_session_id=session_id
+                )
+            except ClaudeImageInputError as exc:
+                raise ClaudeStreamError("claude image input could not be prepared") from exc
+            identity = json.loads(self.initial_data)["uuid"]
+            self.initial = ClaudeInputFrame(identity, session_id, prompt)
+        else:
+            self.initial = ClaudeInputFrame(str(uuid.uuid4()), session_id, prompt)
+            self.initial_data = self.initial.encode()
         self.frames = [self.initial]
         self.receipts: list[int] = []
         self.results: list[dict[str, object]] = []
@@ -82,6 +110,10 @@ class ClaudeCorrectionInput:
             raise
         except Exception as exc:
             raise ClaudeStreamError("claude text input persistence failed") from exc
+
+    @property
+    def has_images(self) -> bool:
+        return self._image_receipt is not None
 
     def poll(self) -> bytes | None:
         if self.sealed or len(self.frames) == 2:
@@ -125,7 +157,9 @@ class ClaudeCorrectionInput:
             if len(self.receipts) >= len(self.frames) or self.complete:
                 raise ClaudeStreamError("claude text input receipt is duplicated")
             frame = self.frames[len(self.receipts)]
-            if (
+            if frame is self.initial and self._image_receipt is not None:
+                self._image_receipt.observe(event)
+            elif (
                 event.get("uuid") != frame.uuid
                 or event.get("session_id") != frame.session_id
                 or "parent_tool_use_id" not in event

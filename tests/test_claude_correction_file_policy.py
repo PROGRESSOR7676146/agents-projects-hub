@@ -259,7 +259,7 @@ assert sys.stdin.read()==''
         )
         adapter = ExternalCliAdapter("claude")
         with self.assertRaises(ProviderUnavailableError) as raised:
-            adapter._prepare_claude_corrections("Example", SESSION, callbacks, False)
+            adapter._prepare_claude_corrections("Example", SESSION, callbacks, (), None)
         self.assertEqual(raised.exception.code, "claude_stream_input_unverified")
         self.assertIsNone(adapter._active_process)
 

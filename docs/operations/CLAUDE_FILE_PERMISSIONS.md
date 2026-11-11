@@ -350,6 +350,9 @@ is involved. It requires CPA and refuses conflicting route settings. Other
 profiles retain their boundaries and never fall back to `host`. Changing profile
 or storage requires `/new`; doctor reports incompatible saved sessions.
 
+With `claude_stream_input` enabled, `claude_image_input` may also be enabled for
+`host`: images reach Claude in the first frame of the streamed channel (ADR 0102).
+
 This is an unrestricted execution mode: Claude can access credentials, files,
 processes and services available to the owner. Review [ADR 0095](../decisions/0095-claude-host-profile.md)
 for consequences. Source tests do not establish installed or live acceptance.

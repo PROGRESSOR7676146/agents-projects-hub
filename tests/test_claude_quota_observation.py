@@ -226,6 +226,8 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
 
     def test_assistant_error_does_not_cross_correction_result_boundaries(self) -> None:
         class TwoResults:
+            has_images = False
+
             count = 0
 
             def observe(self, event: dict[str, object]) -> bool:
@@ -336,6 +338,8 @@ class ClaudeQuotaObservationTests(unittest.TestCase):
 
     def test_quota_result_is_observed_even_if_an_input_receipt_rejects_it(self) -> None:
         class RejectingReceipt:
+            has_images = False
+
             def observe(self, _: object) -> bool:
                 raise ClaudeStreamError("fictional receipt is unverified")
 

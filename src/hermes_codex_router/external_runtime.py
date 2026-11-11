@@ -495,7 +495,7 @@ class ExternalCliAdapter:
     ) -> ExternalTurnResult:
         prompt = self._claude_turn_prompt(prompt, claude_sandbox)
         correction_input = self._prepare_claude_corrections(
-            prompt, session_id or new_session_id, claude_corrections, bool(claude_images)
+            prompt, session_id or new_session_id, claude_corrections, claude_images, claude_sandbox
         )
         argv = self.build_argv(
             cwd=cwd,
@@ -508,7 +508,10 @@ class ExternalCliAdapter:
         )
         environment = self._turn_environment(claude_sandbox, project_id)
         input_data = self._prepare_claude_input(
-            prompt, claude_images, session_id or new_session_id, claude_sandbox
+            prompt,
+            () if correction_input else claude_images,
+            session_id or new_session_id,
+            claude_sandbox,
         )
         if correction_input is not None:
             input_data = correction_input.initial_data
@@ -794,7 +797,8 @@ class ExternalCliAdapter:
         prompt: str,
         session_id: str | None,
         callbacks: ClaudeCorrectionCallbacks | None,
-        images: bool,
+        images: tuple[VerifiedClaudeImage, ...],
+        sandbox: FileToolSandboxConfig | ClaudeHostConfig | None,
     ) -> ClaudeCorrectionInput | None:
         if callbacks is None:
             return None
@@ -802,14 +806,17 @@ class ExternalCliAdapter:
             self.runtime != "claude"
             or not self._uses_default_runner
             or session_id is None
+            # Images share the streamed channel only for the unconfined host
+            # profile; confined profiles keep their tools-disabled image path.
             or images
+            and not isinstance(sandbox, ClaudeHostConfig)
         ):
             raise ProviderUnavailableError(
                 "claude_stream_input_unverified",
                 "Claude streamed text requires the owned runner without images.",
             )
         try:
-            return ClaudeCorrectionInput(prompt, session_id, callbacks)
+            return ClaudeCorrectionInput(prompt, session_id, callbacks, images)
         except ClaudeStreamError as exc:
             raise ProviderUnavailableError(
                 "claude_stream_input_unverified", "Claude text input could not be prepared."
