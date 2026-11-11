@@ -84,7 +84,8 @@ input; selected/pasted quotations are context, not Reply addressing.
   - Runtimes with interim delivery (Codex, Claude) MUST be asked for an early message stating
     how the request was understood (goal, reasons, context, scope, approach) and for progress at
     milestones and at least every ten minutes; Claude texts followed by a tool call or a newer
-    native request MUST be delivered as progress, never the final answer twice (ADR 0099).
+    native request MUST be submitted to the progress outbox, subject to its rate limit and
+    supersession, and the final answer MUST NOT be submitted as progress (ADR 0099).
 - **REQ-UX-002 (Implemented):** Replies MUST be concise, outcome-first and copyable, with restrained
   emoji and visible progress but no hidden reasoning. Materially missing audience, facts, format or
   language MUST prompt one focused question before drafting; presentation notes cannot change safety

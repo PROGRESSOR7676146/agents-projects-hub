@@ -100,7 +100,26 @@ class ClaudeStreamTests(unittest.TestCase):
         self.assertNotIn("Final answer", [text for text, _ in interim])
         self.assertNotIn("sub", [item.text for item in items])
 
-    def test_interim_promotion_is_off_for_streamed_corrections_and_never_fails_a_turn(
+    def test_a_replayed_older_request_never_promotes_the_final_text(self) -> None:
+        items: list[ClaudeVisibleAssistant] = []
+        reader = ClaudeStreamReader(
+            expected_session_id=SESSION,
+            on_visible_assistant=items.append,
+            event_policy=lambda _: None,
+        )
+        tool = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+        tool_only = self.block_event(31, "msg_a", tool)
+        events = (
+            tool_only,
+            self.block_event(32, "msg_b", {"type": "text", "text": "Final answer"}),
+            tool_only,
+            result(),
+        )
+        reader.feed((output(*events) + "\n").encode())
+        reader.finish()
+        self.assertEqual([item.interim for item in items], [False])
+
+    def test_a_failing_interim_promotion_never_fails_a_turn(
         self,
     ) -> None:
         def broken(item: ClaudeVisibleAssistant) -> None:

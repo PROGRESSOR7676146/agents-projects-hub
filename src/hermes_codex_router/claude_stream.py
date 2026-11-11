@@ -172,6 +172,9 @@ class ClaudeStreamReader:
         # Recorded main-thread texts per native request id, not yet known to be
         # interim. Streamed corrections keep their own input boundaries.
         self._unclassified: dict[str, list[str]] = {}
+        # Every main-thread native request seen, so a replayed older request
+        # can never promote texts of a newer one (such as the final answer).
+        self._seen_requests: set[str] = set()
         self._promote_interim = correction_input is None
         self._visible_characters = 0
         self._received_bytes = 0
@@ -410,7 +413,13 @@ class ClaudeStreamReader:
         uses_tool = isinstance(blocks, list) and any(
             isinstance(block, dict) and block.get("type") == "tool_use" for block in blocks
         )
-        ready = [key for key in self._unclassified if key != request or uses_tool]
+        first_seen = request not in self._seen_requests
+        self._seen_requests.add(request)
+        ready = [
+            key
+            for key in self._unclassified
+            if (key == request and uses_tool) or (key != request and first_seen)
+        ]
         for key in ready:
             for message_id in self._unclassified.pop(key):
                 self._publish_interim(message_id)
