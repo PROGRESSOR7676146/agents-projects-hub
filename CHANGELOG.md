@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.13] - 2026-11-11
+
 - Claude interim text written before a tool call (or before a newer request)
   now reaches Telegram as a progress message during the turn, through the same
   durable progress outbox as Codex commentary; the final answer is not
