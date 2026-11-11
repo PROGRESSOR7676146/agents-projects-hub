@@ -33,8 +33,10 @@ understanding message conditional on the runtime's ability to publish one.
    queues it in the existing progress outbox (external outbox only), with the
    existing rate limit, silent notification and supersession by the final
    result. The last text before the terminal result is never promoted, so the
-   final answer is not duplicated. Subagent texts and streamed corrections are
-   excluded. A failed promotion never changes the turn's outcome.
+   final answer is not duplicated. Subagent texts are excluded. Every `result`
+   event, including the first segment of a corrected turn under ADR 0083, ends
+   the pending texts: they belong to that result and are never promoted. A
+   failed promotion never changes the turn's outcome.
 3. The Claude and Codex transport notes explain the progress channel and carry
    the cost-aware practice of ADR 0098 (one task per session at task
    boundaries, short tool output).

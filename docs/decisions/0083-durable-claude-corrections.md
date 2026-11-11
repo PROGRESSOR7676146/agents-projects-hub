@@ -1,6 +1,9 @@
 # ADR 0083: Durable Claude corrections in one owned process
 
 Status: implemented offline; activation and native/Telegram acceptance pending.
+Amendment 2026-11-11: the owned `host` profile (ADR 0095) passes corrections
+through the same branch; an offline real-subprocess test covers a correction
+and interim progress (ADR 0099) on that branch.
 Date: 2026-10-30
 Owner: Hub maintainer; sole implementation writer: primary development agent.
 Contract: [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md).
