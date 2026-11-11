@@ -122,3 +122,4 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 
 - [0095: Claude host profile](0095-claude-host-profile.md) — explicit unconfined, prompt-free owner authority.
 - [0097: Reply choices as Telegram buttons](0097-reply-choice-buttons.md) — a provider's last `[[choices: …]]` line becomes session-bound Hub-bot buttons; a press is the owner's ordinary reply.
+- [0098: Claude context cost visibility](0098-claude-context-cost-visibility.md) — one-hour prompt cache by default, per-request usage in the reply footer and `/status`, honest 429 notices and cost-aware working practice.

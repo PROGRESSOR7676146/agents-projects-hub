@@ -34,6 +34,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
 | Inbound Telegram materials (schema 33) | Implemented | Pending | [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md), [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md) |
 | Context and quota telemetry | Implemented | Pending | [REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md) |
+| Claude context cost visibility | Implemented offline: one-hour cache default, per-request usage footer and `/status`, 429 split | Pending (genuine turn with one-hour writes) | [REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0098](../decisions/0098-claude-context-cost-visibility.md) |
 | Observed goal footer | Goal-only offline candidate; `/fast` remains open | Pending | [REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) |
 | Root exclusion, bounded concurrency, worktree lanes (schemas 31–32) | Implemented | Pending | [REQ-QUEUE-003](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0031](../decisions/0031-bounded-root-concurrency.md) |
 | Saved Codex session connect | Implemented | Pending | [REQ-CMD-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0023](../decisions/0023-deterministic-session-connect.md) |

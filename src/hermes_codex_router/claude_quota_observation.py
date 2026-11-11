@@ -24,6 +24,8 @@ _LIMIT_TYPES = frozenset(
         "iguana_necktie",
     }
 )
+# Account usage windows; other or unknown limit types do not prove exhaustion.
+USAGE_LIMIT_TYPES = frozenset(_LIMIT_TYPES - {"iguana_necktie"})
 _TIMESTAMP = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z"
@@ -124,7 +126,8 @@ class QuotaObserver:
             and event.get("is_error") is True
             and (
                 (type(api_status) is int and api_status == 429)
-                or self._failure_code(event, self._assistant_error) == "claude_quota_exhausted"
+                or self._failure_code(event, self._assistant_error)
+                in {"claude_quota_exhausted", "claude_rate_limited"}
             )
         )
         if kind == "result":

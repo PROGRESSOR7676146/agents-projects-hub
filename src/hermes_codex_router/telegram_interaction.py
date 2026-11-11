@@ -56,6 +56,15 @@ _RUNTIME_NOTES = {
         "CODEX NOTE: Use visible commentary updates for meaningful progress on long work; "
         "do not turn hidden reasoning into progress narration."
     ),
+    "claude": (
+        "CLAUDE NOTE: A Hub turn ends with your reply and cannot keep background work "
+        "running, and every request re-reads the whole conversation. Keep one task per "
+        "session; finish a large task with a short handoff (state, open checks, next step) "
+        "so the user can start the next task with /new. Keep tool output short: filter logs "
+        "and files with tail, grep or counts instead of printing them whole. Wait for a long "
+        "check with one bounded command of at most about ten minutes rather than repeated "
+        "polling; if it takes longer, end the turn stating what is running and how to check it."
+    ),
     "opencode": (
         "OPENCODE NOTE: Keep provider diagnostics out of the conversational answer unless "
         "they are directly relevant to the user's request."

@@ -1301,5 +1301,6 @@ class ExternalQueueWorker:
                 actual_model=actual_model,
                 telegram_contract_version=telegram_contract_version(self.agent.runtime),
                 artifacts=artifacts.artifacts,
+                safe_metadata_json=prepared_result.safe_metadata_json,
             )
         )

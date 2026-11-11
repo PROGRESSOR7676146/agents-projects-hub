@@ -29,6 +29,17 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertIn("For substantial work with findings", prompt)
         self.assertIn("simple work needs only a short answer", prompt)
 
+    def test_claude_turns_carry_cost_aware_working_practice(self) -> None:
+        for new_session in (True, False):
+            prompt = telegram_developer_instructions(runtime="claude", new_session=new_session)
+            self.assertIn("CLAUDE NOTE", prompt)
+            self.assertIn("one task per session", prompt)
+            self.assertIn("/new", prompt)
+            self.assertIn("rather than repeated polling", prompt)
+        self.assertNotIn(
+            "CLAUDE NOTE", telegram_developer_instructions(runtime="codex", new_session=True)
+        )
+
     def test_existing_session_receives_compact_transport_reminder(self) -> None:
         prompt = telegram_developer_instructions(runtime="opencode", new_session=False)
 

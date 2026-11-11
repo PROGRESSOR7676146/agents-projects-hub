@@ -6,7 +6,8 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from .claude_quota_observation import QuotaObservationCallback, QuotaObserver
+from .claude_quota_observation import USAGE_LIMIT_TYPES, QuotaObservationCallback, QuotaObserver
+from .claude_usage import ClaudeUsageObserver, UsageSummaryCallback
 from .diagnostic_log import survived
 
 if TYPE_CHECKING:
@@ -142,9 +143,12 @@ class ClaudeStreamReader:
         event_policy: Callable[[dict[str, object]], None] | None = None,
         image_receipt: ClaudeImageReceipt | None = None,
         correction_input: ClaudeCorrectionInput | None = None,
+        on_usage_summary: UsageSummaryCallback | None = None,
     ) -> None:
         self.session_id = expected_session_id
         self.on_visible_assistant = on_visible_assistant
+        self._usage = ClaudeUsageObserver() if on_usage_summary is not None else None
+        self._on_usage_summary = on_usage_summary
         self._quota = (
             QuotaObserver(on_quota_observation, _terminal_failure_code)
             if on_quota_observation is not None
@@ -232,9 +236,22 @@ class ClaudeStreamReader:
         if self.correction_input is not None:
             self.correction_input.finish()
         try:
-            return self._output.decode("utf-8")
+            output = self._output.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ClaudeStreamError("claude returned invalid structured encoding") from exc
+        self._publish_usage()
+        return output
+
+    def _publish_usage(self) -> None:
+        # Telemetry is optional: it must never change the turn's outcome.
+        if self._usage is None or self._on_usage_summary is None:
+            return
+        try:
+            summary = self._usage.summary()
+            if summary is not None:
+                self._on_usage_summary(summary)
+        except Exception as error:
+            survived("claude_stream.usage_summary", error)
 
     def validate_interrupted_tail(self) -> None:
         """Validate a complete final JSON event even without its line delimiter.
@@ -282,6 +299,8 @@ class ClaudeStreamReader:
             _validate_terminal(event)
         if self._quota is not None and not self._terminal_seen:
             self._quota.observe(event, self.session_id)
+        if self._usage is not None and not self._terminal_seen:
+            self._usage.observe(event)
         retain = (
             self.correction_input.observe(event)
             if self.correction_input
@@ -410,7 +429,13 @@ def _session_id(value: object) -> str:
     return value
 
 
-def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | None) -> str:
+def _terminal_failure_code(
+    terminal: dict[str, object], assistant_error: str | None, *, quota_rejected: bool = False
+) -> str:
+    # A 429 alone does not say which limit applied: short-term rate limits,
+    # proxy credential cooldowns and the account usage limit all return it.
+    # Only the native rejected rate-limit event identifies the usage limit.
+    rate_limit = "claude_quota_exhausted" if quota_rejected else "claude_rate_limited"
     subtype_codes = {
         "error_max_turns": "claude_turn_limit",
         "error_max_budget_usd": "claude_budget_exhausted",
@@ -421,7 +446,7 @@ def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | N
         return subtype_codes[subtype]
     status = terminal.get("api_error_status")
     if type(status) is int and status == 429:
-        return "claude_quota_exhausted"
+        return rate_limit
     if type(status) is int and status == 401:
         return "claude_authentication_failed"
     if type(status) is int and status == 529:
@@ -434,13 +459,22 @@ def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | N
         # assistant text must not turn another 4xx/5xx into quota evidence.
         return "claude_provider_failure"
     error_codes = {
-        "rate_limit": "claude_quota_exhausted",
+        "rate_limit": rate_limit,
         "authentication_failed": "claude_authentication_failed",
         "billing_error": "claude_billing_error",
         "overloaded": "claude_provider_overloaded",
         "model_not_found": "claude_model_not_found",
     }
     return error_codes.get(assistant_error or "", "claude_provider_failure")
+
+
+def _usage_limit_rejected(event: dict[str, object]) -> bool:
+    """Return whether a native rate-limit event rejected the request on a named limit."""
+    if event.get("type") != "rate_limit_event":
+        return False
+    info = event.get("rate_limit_info")
+    fields = info if isinstance(info, dict) else event
+    return fields.get("status") == "rejected" and fields.get("rateLimitType") in USAGE_LIMIT_TYPES
 
 
 def _terminal_failure_message(code: str) -> str:
@@ -455,6 +489,12 @@ def _terminal_failure_message(code: str) -> str:
             "so reset time is unknown.",
             "The conversation and saved partial work are preserved; send the request again "
             "after the limit resets.",
+        ),
+        "claude_rate_limited": (
+            "Claude rejected this request with HTTP 429. The route did not identify the limit "
+            "or its reset time.",
+            "The conversation and any saved partial work are preserved; you can send a short "
+            "follow-up such as “continue” later.",
         ),
         "claude_authentication_failed": ("Claude reported an authentication failure.", check_route),
         "claude_billing_error": ("Claude reported a billing rejection.", check_route),
@@ -565,9 +605,11 @@ def parse_claude_stream(
     initialized_model: str | None = None
     answered_model: str | None = None
     assistant_error: str | None = None
+    quota_rejected = False
     for event in events:
         if "session_id" in event and _session_id(event["session_id"]) != session_id:
             raise ClaudeStreamError("claude stream session identity changed")
+        quota_rejected = quota_rejected or _usage_limit_rejected(event)
         if event.get("type") == "system" and event.get("subtype") == "init":
             model = event.get("model")
             if isinstance(model, str) and model.strip():
@@ -585,7 +627,7 @@ def parse_claude_stream(
                 answered_model = model.strip()[:200]
     is_error = _validate_terminal(terminal)
     if is_error:
-        code = _terminal_failure_code(terminal, assistant_error)
+        code = _terminal_failure_code(terminal, assistant_error, quota_rejected=quota_rejected)
         raise ClaudeTerminalFailure(code, _terminal_failure_message(code), session_id)
     if returncode != 0:
         raise ClaudeStreamError("claude process exit conflicts with its successful result")

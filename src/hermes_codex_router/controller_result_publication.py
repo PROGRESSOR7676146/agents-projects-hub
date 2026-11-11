@@ -31,6 +31,7 @@ class PreparedResultPublication:
     actual_model: str | None
     telegram_contract_version: int
     artifacts: tuple[ValidatedArtifact, ...] = ()
+    safe_metadata_json: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ class PreparedResultPublisher:
                 telegram_html=publication.telegram_html,
                 provider_session_id=publication.provider_session_id,
                 actual_model=publication.actual_model,
+                safe_metadata_json=publication.safe_metadata_json,
                 user_excerpt=publication.job.payload_text,
                 acknowledge_context=publication.job.context_watermark is not None,
                 acknowledge_handoff=publication.job.handoff_id is not None,

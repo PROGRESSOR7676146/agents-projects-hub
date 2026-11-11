@@ -304,10 +304,61 @@ class ClaudeStreamTests(unittest.TestCase):
         ):
             with self.subTest(events=events), self.assertRaises(ClaudeTerminalFailure) as raised:
                 parse_claude_stream(output(*events), expected_session_id=SESSION)
-            self.assertEqual(raised.exception.code, "claude_quota_exhausted")
+            self.assertEqual(raised.exception.code, "claude_rate_limited")
             self.assertEqual(raised.exception.session_id, SESSION)
             self.assertNotIn("secret diagnosis", str(raised.exception))
             self.assertFalse(hasattr(raised.exception, "resets_at"))
+
+    def test_only_a_rejected_named_limit_proves_usage_limit_exhaustion(self) -> None:
+        failure = result(subtype="error_during_execution", is_error=True, api_error_status=429)
+        for event, code in (
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"},
+                },
+                "claude_quota_exhausted",
+            ),
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {"status": "allowed_warning", "rateLimitType": "five_hour"},
+                },
+                "claude_rate_limited",
+            ),
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {"status": "rejected"},
+                },
+                "claude_rate_limited",
+            ),
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {"status": "rejected", "rateLimitType": ""},
+                },
+                "claude_rate_limited",
+            ),
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {
+                        "status": "rejected",
+                        "rateLimitType": "requests_per_minute",
+                    },
+                },
+                "claude_rate_limited",
+            ),
+        ):
+            with self.subTest(event=event), self.assertRaises(ClaudeTerminalFailure) as raised:
+                parse_claude_stream(output(event, failure), expected_session_id=SESSION)
+            self.assertEqual(raised.exception.code, code)
 
     def test_success_after_transient_quota_is_success(self) -> None:
         parsed = parse_claude_stream(
@@ -352,7 +403,7 @@ class ClaudeStreamTests(unittest.TestCase):
         for status, code in (
             (400, "claude_provider_failure"),
             (401, "claude_authentication_failed"),
-            (429, "claude_quota_exhausted"),
+            (429, "claude_rate_limited"),
             (529, "claude_provider_overloaded"),
             (500, "claude_provider_unavailable"),
             (503, "claude_provider_unavailable"),
@@ -393,7 +444,7 @@ class ClaudeStreamTests(unittest.TestCase):
             ("billing_error", "error_during_execution", "billing", "route locally"),
             ("model_not_found", "error_during_execution", "selected model", "model selection"),
             ("overloaded", "error_during_execution", "overload", "partial work"),
-            ("rate_limit", "error_during_execution", "reset time is unknown", "partial work"),
+            ("rate_limit", "error_during_execution", "did not identify the limit", "partial work"),
             (None, "error_max_turns", "turn limit", "execution limits"),
             (None, "error_max_budget_usd", "budget", "execution limits"),
             (None, "error_max_structured_output_retries", "structured", "output format"),
@@ -534,7 +585,7 @@ class ClaudeStreamTests(unittest.TestCase):
                 expected_session_id=SESSION,
                 returncode=1,
             )
-        self.assertEqual(raised.exception.code, "claude_quota_exhausted")
+        self.assertEqual(raised.exception.code, "claude_rate_limited")
 
     def test_output_and_visible_text_are_bounded(self) -> None:
         for stream in (
