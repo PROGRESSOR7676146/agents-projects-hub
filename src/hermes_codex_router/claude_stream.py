@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from .claude_quota_observation import QuotaObservationCallback, QuotaObserver
+from .claude_quota_observation import USAGE_LIMIT_TYPES, QuotaObservationCallback, QuotaObserver
 from .claude_usage import ClaudeUsageObserver, UsageSummaryCallback
 from .diagnostic_log import survived
 
@@ -474,7 +474,7 @@ def _usage_limit_rejected(event: dict[str, object]) -> bool:
         return False
     info = event.get("rate_limit_info")
     fields = info if isinstance(info, dict) else event
-    return fields.get("status") == "rejected" and isinstance(fields.get("rateLimitType"), str)
+    return fields.get("status") == "rejected" and fields.get("rateLimitType") in USAGE_LIMIT_TYPES
 
 
 def _terminal_failure_message(code: str) -> str:

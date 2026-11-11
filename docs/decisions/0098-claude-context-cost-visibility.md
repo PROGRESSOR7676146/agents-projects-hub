@@ -26,17 +26,19 @@ not say which limit applied.
    request context (input + cache read + cache write), cache writes with their
    5m/1h split, cache reads, output, and the number of suspected large cache
    writes (a write above half of that request's context, at least 20k tokens).
-   Missing fields stay unknown; a compaction after the last request makes the
-   current context unknown. Only these numbers are kept.
+   Missing fields stay unknown; a request without usage, a compaction after the
+   last request, or requests beyond the tracking bound make the current context
+   unknown. Only these numbers are kept.
 3. The summary is saved in the existing bounded `safe_metadata_json` of the
    turn's result, so no schema migration is needed. The reply footer shows
    `Context: 238k (last request)`, the count of large cache writes, and, from
    150k tokens, a note suggesting `/new` for the next task. `/status` shows the
    last request context of the session's latest finished turn; a failed,
    stopped or uncertain latest turn, or a turn without the summary, shows none.
-4. A 429 without a native rejected rate-limit event naming its limit becomes
-   `claude_rate_limited`: the notice says the route did not identify the limit
-   or its reset. `claude_quota_exhausted` remains for the named rejection. Both
+4. A 429 without a native rejected rate-limit event naming a known account
+   usage window (five-hour, weekly or overage) becomes `claude_rate_limited`:
+   the notice says the route did not identify the limit or its reset.
+   `claude_quota_exhausted` remains for such a named rejection. Both
    keep the worker's existing limited state until its next success; neither
    retries automatically.
 5. The Claude transport note asks agents to keep one task per session, end a

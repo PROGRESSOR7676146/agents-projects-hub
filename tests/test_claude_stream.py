@@ -336,6 +336,25 @@ class ClaudeStreamTests(unittest.TestCase):
                 },
                 "claude_rate_limited",
             ),
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {"status": "rejected", "rateLimitType": ""},
+                },
+                "claude_rate_limited",
+            ),
+            (
+                {
+                    "type": "rate_limit_event",
+                    "session_id": SESSION,
+                    "rate_limit_info": {
+                        "status": "rejected",
+                        "rateLimitType": "requests_per_minute",
+                    },
+                },
+                "claude_rate_limited",
+            ),
         ):
             with self.subTest(event=event), self.assertRaises(ClaudeTerminalFailure) as raised:
                 parse_claude_stream(output(event, failure), expected_session_id=SESSION)

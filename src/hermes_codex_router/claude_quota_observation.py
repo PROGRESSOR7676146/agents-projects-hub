@@ -24,6 +24,8 @@ _LIMIT_TYPES = frozenset(
         "iguana_necktie",
     }
 )
+# Account usage windows; other or unknown limit types do not prove exhaustion.
+USAGE_LIMIT_TYPES = frozenset(_LIMIT_TYPES - {"iguana_necktie"})
 _TIMESTAMP = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z"

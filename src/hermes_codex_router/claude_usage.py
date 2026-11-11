@@ -13,8 +13,9 @@ from collections.abc import Callable
 
 USAGE_METADATA_KEY = "claude_usage_v1"
 LARGE_CONTEXT_TOKENS = 150_000
-# A cache write covering most of a request's context means the cached prefix
-# was rebuilt (expiry, prefix change or compaction); the cause is not known.
+# A cache write of at least 20k tokens covering most of a request's context means
+# the cached prefix was rebuilt (expiry, prefix change or compaction); the cause
+# is not known.
 _LARGE_WRITE_SHARE = 0.5
 _LARGE_WRITE_MIN_TOKENS = 20_000
 _MAX_TRACKED_REQUESTS = 10_000
@@ -30,9 +31,9 @@ def _tokens(usage: dict[str, object], name: str) -> int | None:
     return None
 
 
-def _snapshot(usage: object) -> dict[str, int | None] | None:
+def _snapshot(usage: object) -> dict[str, int | None]:
     if not isinstance(usage, dict):
-        return None
+        usage = {}
     creation = usage.get("cache_creation")
     split = creation if isinstance(creation, dict) else {}
     return {
@@ -62,6 +63,7 @@ class ClaudeUsageObserver:
         self._main: dict[str, dict[str, int | None]] = {}
         self._subagent: set[str] = set()
         self._context_after_last_request = True
+        self._untracked = False
 
     def observe(self, event: dict[str, object]) -> None:
         kind = event.get("type")
@@ -82,10 +84,11 @@ class ClaudeUsageObserver:
             if len(self._subagent) < _MAX_TRACKED_REQUESTS:
                 self._subagent.add(message_id)
             return
+        # A request without usage still counts: its fields stay unknown, so it
+        # cannot leave an older request looking like the latest one.
         snapshot = _snapshot(message.get("usage"))
-        if snapshot is None:
-            return
         if message_id not in self._main and len(self._main) >= _MAX_TRACKED_REQUESTS:
+            self._untracked = True
             return
         # Re-inserting keeps stream order: the latest request is the last key.
         self._main.pop(message_id, None)
@@ -102,14 +105,16 @@ class ClaudeUsageObserver:
             1
             for snapshot, context in zip(snapshots, contexts)
             if context is not None
-            and context >= _LARGE_WRITE_MIN_TOKENS
             and snapshot["cache_write"] is not None
+            and snapshot["cache_write"] >= _LARGE_WRITE_MIN_TOKENS
             and snapshot["cache_write"] > context * _LARGE_WRITE_SHARE
         )
         return {
             "requests": len(snapshots),
             "subagent_requests": len(self._subagent),
-            "last_context": contexts[-1] if self._context_after_last_request else None,
+            "last_context": (
+                contexts[-1] if self._context_after_last_request and not self._untracked else None
+            ),
             "max_context": max(known) if known else None,
             "cache_write": _total(snapshots, "cache_write"),
             "cache_write_5m": _total(snapshots, "cache_write_5m"),

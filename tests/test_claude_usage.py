@@ -107,6 +107,32 @@ class ClaudeUsageObserverTests(unittest.TestCase):
         assert boolean is not None
         self.assertIsNone(boolean["last_context"])
 
+    def test_a_later_request_without_usage_makes_context_unknown(self) -> None:
+        summary = summarize(
+            assistant("msg-1", **request_usage(read=160_000)),
+            {**assistant("msg-2"), "message": {"id": "msg-2", "content": []}},
+        )
+        assert summary is not None
+        self.assertEqual(summary["requests"], 2)
+        self.assertIsNone(summary["last_context"])
+        self.assertIsNone(summary["cache_read"])
+
+    def test_untracked_requests_beyond_the_bound_make_context_unknown(self) -> None:
+        with patch("hermes_codex_router.claude_usage._MAX_TRACKED_REQUESTS", 1):
+            summary = summarize(
+                assistant("msg-1", **request_usage(read=160_000)),
+                assistant("msg-2", **request_usage(read=10)),
+            )
+        assert summary is not None
+        self.assertEqual(summary["requests"], 1)
+        self.assertIsNone(summary["last_context"])
+
+    def test_large_write_needs_at_least_twenty_thousand_written_tokens(self) -> None:
+        small = summarize(assistant("msg-1", **request_usage(input=15_000, write=16_000)))
+        large = summarize(assistant("msg-1", **request_usage(input=15_000, write=20_000)))
+        assert small is not None and large is not None
+        self.assertEqual((small["large_cache_writes"], large["large_cache_writes"]), (0, 1))
+
     def test_reader_publishes_summary_after_a_complete_drain_only(self) -> None:
         published: list[dict[str, object]] = []
         reader = ClaudeStreamReader(expected_session_id=SESSION, on_usage_summary=published.append)
