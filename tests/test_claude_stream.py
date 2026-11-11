@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+import uuid
 from collections.abc import Mapping
 
 from hermes_codex_router.claude_stream import (
@@ -118,6 +119,63 @@ class ClaudeStreamTests(unittest.TestCase):
         reader.feed((output(*events) + "\n").encode())
         reader.finish()
         self.assertEqual([item.interim for item in items], [False])
+
+    def test_corrected_turn_never_promotes_a_segment_result_text(self) -> None:
+        from hermes_codex_router.claude_corrections import (
+            ClaudeCorrectionCallbacks,
+            ClaudeCorrectionInput,
+            ClaudeInputFrame,
+        )
+
+        child = ClaudeInputFrame(str(uuid.uuid4()), SESSION, "Example correction")
+        channel = ClaudeCorrectionInput(
+            "Example request",
+            SESSION,
+            ClaudeCorrectionCallbacks(
+                prepare=lambda frame: None,
+                claim=lambda: child,
+                receipt=lambda identifier, boundary: None,
+                result=lambda boundary: None,
+            ),
+        )
+        self.assertIsNotNone(channel.poll())
+        items: list[ClaudeVisibleAssistant] = []
+        reader = ClaudeStreamReader(
+            expected_session_id=SESSION,
+            on_visible_assistant=items.append,
+            event_policy=lambda _: None,
+            correction_input=channel,
+        )
+
+        def replay(frame: ClaudeInputFrame) -> dict[str, object]:
+            return {
+                "type": "user",
+                "isReplay": True,
+                "uuid": frame.uuid,
+                "session_id": SESSION,
+                "parent_tool_use_id": None,
+                "message": {"role": "user", "content": frame.text},
+            }
+
+        tool = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+        events = (
+            replay(channel.initial),
+            self.block_event(41, "msg_a", {"type": "text", "text": "Plan"}, tool),
+            {
+                "type": "user",
+                "session_id": SESSION,
+                "parent_tool_use_id": None,
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]},
+            },
+            self.block_event(42, "msg_b", {"type": "text", "text": "Parent final"}),
+            result(result="Parent final"),
+            replay(child),
+            self.block_event(43, "msg_c", {"type": "text", "text": "Child final"}),
+            result(result="Child final"),
+        )
+        reader.feed((output(*events) + "\n").encode())
+        reader.finish()
+        self.assertEqual([item.text for item in items if item.interim], ["Plan"])
 
     def test_a_failing_interim_promotion_never_fails_a_turn(
         self,

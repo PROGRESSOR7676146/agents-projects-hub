@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Claude interim progress (ADR 0099) now also works when streamed corrections
+  (ADR 0083) are enabled: each result, including a corrected turn's first
+  segment, ends the pending texts, so no result text is sent as progress.
+- Offline coverage for a correction on the Claude `host` branch.
+
 ## [0.11.13] - 2026-11-11
 
 - Claude interim text written before a tool call (or before a newer request)

@@ -170,12 +170,12 @@ class ClaudeStreamReader:
         self._terminal_seen = False
         self._visible: dict[str, str] = {}
         # Recorded main-thread texts per native request id, not yet known to be
-        # interim. Streamed corrections keep their own input boundaries.
+        # interim. Any result, including a corrected turn's first segment, ends
+        # them: their text belongs to that result, never to progress.
         self._unclassified: dict[str, list[str]] = {}
         # Every main-thread native request seen, so a replayed older request
         # can never promote texts of a newer one (such as the final answer).
         self._seen_requests: set[str] = set()
-        self._promote_interim = correction_input is None
         self._visible_characters = 0
         self._received_bytes = 0
 
@@ -324,8 +324,10 @@ class ClaudeStreamReader:
             and not (not retain and event.get("type") == "command_lifecycle")
         ):
             raise ClaudeStreamError("claude returned events after its terminal outcome")
-        if event.get("type") == "result" and retain:
-            self._terminal_seen = True
+        if event.get("type") == "result":
+            self._unclassified.clear()
+            if retain:
+                self._terminal_seen = True
         if not retain:
             return
         if self.image_receipt is not None:
@@ -334,8 +336,7 @@ class ClaudeStreamReader:
             self._output.extend(raw + b"\n")
         if self.on_visible_assistant is not None:
             self._visible_assistant(event)
-            if self._promote_interim:
-                self._classify_interim(event)
+            self._classify_interim(event)
         if self.event_policy is not None or self.correction_input is not None:
             retained = _file_result_evidence(event)
             if retained is not None:
