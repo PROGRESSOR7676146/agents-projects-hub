@@ -53,6 +53,63 @@ class ClaudeHostImageChannelTests(unittest.TestCase):
         with self.assertRaises(ClaudeStreamError):
             channel.observe({**dropped, "isReplay": True})
 
+    def test_success_without_the_initial_image_replay_is_refused(self) -> None:
+        child = ClaudeInputFrame(str(uuid.uuid4()), SESSION, "Example correction")
+        result = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": SESSION,
+            "result": "Example complete",
+        }
+        channel = ClaudeCorrectionInput("Example", SESSION, callbacks([]), (image(),))
+        with self.assertRaises(ClaudeStreamError):
+            channel.observe(dict(result))
+        channel = ClaudeCorrectionInput("Example", SESSION, callbacks([], child), (image(),))
+        self.assertIsNotNone(channel.poll())
+        substituted = {
+            "type": "user",
+            "isReplay": True,
+            "uuid": child.uuid,
+            "session_id": SESSION,
+            "parent_tool_use_id": None,
+            "message": {"role": "user", "content": child.text},
+        }
+        with self.assertRaises(ClaudeStreamError):
+            channel.observe(substituted)
+
+    def test_image_channel_event_limit_is_raised_but_still_bounded(self) -> None:
+        from hermes_codex_router.claude_stream import (
+            MAX_CLAUDE_FILE_EVENT_BYTES,
+            MAX_IMAGE_EVENT_BYTES,
+            ClaudeStreamReader,
+        )
+
+        def reader(images: bool) -> ClaudeStreamReader:
+            channel = ClaudeCorrectionInput(
+                "Example", SESSION, callbacks([]), (image(),) if images else ()
+            )
+            return ClaudeStreamReader(
+                expected_session_id=SESSION,
+                event_policy=lambda _: None,
+                correction_input=channel,
+            )
+
+        def padded(size: int) -> bytes:
+            skeleton = {"type": "system", "subtype": "example", "session_id": SESSION, "pad": ""}
+            overhead = len(json.dumps(skeleton).encode())
+            return json.dumps({**skeleton, "pad": "a" * (size - overhead)}).encode()
+
+        large = padded(MAX_CLAUDE_FILE_EVENT_BYTES + 1024)
+        reader(images=True).feed(large + b"\n")
+        with self.assertRaises(ClaudeStreamError):
+            reader(images=False).feed(large + b"\n")
+        oversized = padded(MAX_IMAGE_EVENT_BYTES + 1)
+        with self.assertRaises(ClaudeStreamError):
+            reader(images=True).feed(oversized + b"\n")
+        with self.assertRaises(ClaudeStreamError):
+            reader(images=True).feed(oversized)  # incomplete line, no newline yet
+
     def test_text_only_channel_is_unchanged(self) -> None:
         channel = ClaudeCorrectionInput("Example request", SESSION, callbacks([]))
         self.assertFalse(channel.has_images)
