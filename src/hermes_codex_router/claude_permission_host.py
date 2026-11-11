@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shutil
 import socket
-import stat
 import tempfile
 import threading
 import time
@@ -18,7 +17,7 @@ from .claude_bash_grants import BASH_GRANTS
 from .claude_file_policy import validate_file_tool_input
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from .claude_host_profile import ClaudeHostConfig
-from .claude_local import ClaudeSessionBusy, acquire_writer_lock
+from .claude_local import ClaudeSessionBusy, acquire_writer_lock, host_session_home
 from .claude_permission_protocol import (
     canonical_json,
     canonical_uuid,
@@ -334,27 +333,9 @@ def _hosted_host_launch(
     """Prepare the unconfined host session directory under its writer lock."""
     try:
         executable = shutil.which(agent.executable or "claude")
-        home_base = settings.provider_home
-        if (
-            executable is None
-            or home_base.is_symlink()
-            or not home_base.is_dir()
-            or home_base.resolve() != home_base
-            or home_base.stat().st_uid != os.geteuid()
-            or home_base.stat().st_mode & 0o077
-        ):
-            raise ValueError("unsafe host session storage")
-        home = home_base / session_id
-        home.mkdir(mode=0o700, exist_ok=True)
-        if (
-            home.is_symlink()
-            or not home.is_dir()
-            or home.stat().st_uid != os.geteuid()
-            or stat.S_IMODE(home.stat().st_mode) != 0o700
-        ):
-            raise ValueError("unsafe host session storage")
-        if (home / ".credentials.json").exists() or (home / ".credentials.json").is_symlink():
-            raise ValueError("host session contains native credentials")
+        if executable is None:
+            raise ValueError("Claude executable is missing")
+        home = host_session_home(settings.provider_home, session_id, create=True)
         # The same lock is held by a local CLI hand-off (claude_local); a Hub
         # turn never starts while the owner works on the session locally.
         writer_lock = acquire_writer_lock(home)

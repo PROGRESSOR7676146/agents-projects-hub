@@ -17,13 +17,17 @@ shell would neither find the session nor use the route.
    and token for the workers. Without it, Claude transfer keeps refusing.
 2. `/local` for a Claude host session sets the local writer lease and shows
    `python -I -m hermes_codex_router.claude_local --config <hub config> <hub session>`
-   from the running release. That command rechecks that Hub recorded local
-   ownership and the registered root, verifies the session directory, takes the
-   session writer lock, loads only the two route keys, removes other provider
-   credentials, sets `CLAUDE_CONFIG_DIR` to the same session directory and
-   replaces itself with the release's interactive CLI
-   (`--resume <native id> --permission-mode bypassPermissions` and the session
-   model). The lock descriptor is inherited by the CLI and its children.
+   from the running release. That command reads local ownership, the registered
+   root and the saved model/effort, verifies the private session directory with
+   the same check the workers use, loads only the two route keys (the URL must
+   parse to an exact loopback host and port), takes the session writer lock and
+   then rechecks ownership under that lock, so a `/return` that completed in
+   between refuses the hand-off. It removes other provider credentials, sets
+   `CLAUDE_CONFIG_DIR` to the same session directory and replaces itself with the
+   release's interactive CLI (`--resume <native id> --permission-mode
+   bypassPermissions` with the session's model and effort mapped as for Hub
+   turns; an effort it cannot map refuses). The lock descriptor is inherited by
+   the CLI and its children.
 3. Every Hub host turn takes the same lock before opening its journal launch
    record; while the local CLI runs, the turn is refused before invocation with
    `claude_session_local_busy`.

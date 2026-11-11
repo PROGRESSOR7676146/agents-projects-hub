@@ -13,12 +13,16 @@ import fcntl
 import os
 import stat
 import sys
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 WRITER_LOCK_NAME = ".hub-writer.lock"
 _ROUTE_KEYS = frozenset({"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"})
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_CLAUDE_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 class ClaudeSessionBusy(RuntimeError):
@@ -67,9 +71,65 @@ def read_route_environment(path: Path) -> dict[str, str]:
             values[key] = value.strip().strip("'\"")
     if set(values) != _ROUTE_KEYS or not all(values.values()):
         raise ValueError("the Claude route environment file is incomplete")
-    if not values["ANTHROPIC_BASE_URL"].startswith(("http://127.0.0.1", "http://localhost")):
+    if not _is_loopback_url(values["ANTHROPIC_BASE_URL"]):
         raise ValueError("the Claude route must stay on loopback")
     return values
+
+
+def _is_loopback_url(value: str) -> bool:
+    try:
+        url = urlsplit(value)
+        port = url.port
+    except ValueError:
+        return False
+    return (
+        url.scheme == "http"
+        and url.hostname in _LOOPBACK_HOSTS
+        and url.username is None
+        and url.password is None
+        and port is not None
+        and not url.query
+        and not url.fragment
+    )
+
+
+def host_session_home(provider_home: Path, native_session_id: str, *, create: bool) -> Path:
+    """Return a verified private session directory; workers and hand-off share it."""
+    if str(uuid.UUID(native_session_id)) != native_session_id:
+        raise ValueError("invalid Claude session id")
+    if (
+        provider_home.is_symlink()
+        or not provider_home.is_dir()
+        or provider_home.resolve() != provider_home
+        or provider_home.stat().st_uid != os.geteuid()
+        or provider_home.stat().st_mode & 0o077
+    ):
+        raise ValueError("unsafe host session storage")
+    home = provider_home / native_session_id
+    if create:
+        home.mkdir(mode=0o700, exist_ok=True)
+    if (
+        home.is_symlink()
+        or not home.is_dir()
+        or home.stat().st_uid != os.geteuid()
+        or stat.S_IMODE(home.stat().st_mode) != 0o700
+    ):
+        raise ValueError("unsafe host session storage")
+    if (home / ".credentials.json").exists() or (home / ".credentials.json").is_symlink():
+        raise ValueError("host session contains native credentials")
+    return home
+
+
+def model_effort_arguments(model: str | None, effort: str | None) -> list[str]:
+    """The same model/effort mapping as Hub's Claude turns, or refuse."""
+    arguments: list[str] = []
+    if model and model not in {"unknown", "default"}:
+        arguments += ["--model", model]
+    if effort and effort not in {"none", "minimal", "default"}:
+        if effort not in _CLAUDE_EFFORTS:
+            raise ValueError("the saved Claude effort cannot be applied locally")
+        arguments += ["--effort", effort]
+    return arguments
 
 
 def local_environment(base: dict[str, str], route: dict[str, str], home: Path) -> dict[str, str]:
@@ -113,54 +173,60 @@ def main(argv: list[str] | None = None) -> int:
         or permissions.route_environment is None
     ):
         return _fail("local hand-off needs the Claude host profile with a route environment")
-    try:
+
+    def verified_binding() -> tuple[str, Path, list[str]]:
+        """Read local ownership, root and model/effort from the current Hub state."""
         state = HubState.open_existing(
             config.state_path, codex_permission_profile=config.codex_permission_profile
         )
-    except (StateError, OSError) as error:
-        return _fail(f"Hub state is unavailable ({type(error).__name__})")
-    try:
-        session = state.get_session(args.session_id)
-        agent = config.require_agent(session.agent_id)
-        if agent.runtime != "claude" or session.writer_mode != "local":
-            return _fail("this Hub session is not handed to the local CLI; send /local first")
-        if not session.provider_session_id:
-            return _fail("this Hub session has no Claude conversation yet")
-        topic = state.get_topic(session.topic_id)
-        registry = load_registry(config.registry_path)
-        root = resolve_topic_execution_root(state, registry, topic)
-    except (StateError, ExecutionRootError, KeyError, ValueError) as error:
-        return _fail(f"the session could not be verified ({type(error).__name__})")
-    finally:
-        state.close()
+        try:
+            session = state.get_session(args.session_id)
+            if config.require_agent(session.agent_id).runtime != "claude":
+                raise ValueError("this Hub session is not a Claude session")
+            if session.writer_mode != "local":
+                raise ValueError(
+                    "this Hub session is not handed to the local CLI; send /local first"
+                )
+            if not session.provider_session_id:
+                raise ValueError("this Hub session has no Claude conversation yet")
+            topic = state.get_topic(session.topic_id)
+            root = resolve_topic_execution_root(state, load_registry(config.registry_path), topic)
+            arguments = model_effort_arguments(session.model, session.effort)
+            return session.provider_session_id, root, arguments
+        finally:
+            state.close()
 
-    # Host session directories are keyed by the native Claude session id.
-    home = permissions.provider_home / session.provider_session_id
     executable = Path(sys.prefix).parent / "bin" / "claude"
+    lock: int | None = None
     try:
-        if home.is_symlink() or not home.is_dir() or home.stat().st_uid != os.geteuid():
-            raise ValueError("unsafe Claude session directory")
+        native, root, arguments = verified_binding()
+        home = host_session_home(permissions.provider_home, native, create=False)
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise ValueError("the release Claude CLI is missing")
         validate_host_route_settings(root, home)
         route = read_route_environment(permissions.route_environment)
         lock = acquire_writer_lock(home)
+        # Recheck under the lock: a /return may have completed meanwhile.
+        if verified_binding() != (native, root, arguments):
+            raise ValueError("the Hub session changed; send /local again")
     except ClaudeSessionBusy:
         return _fail("the session is busy: a Hub turn or another local CLI is running")
-    except (OSError, ValueError) as error:
-        return _fail(str(error) if isinstance(error, ValueError) else type(error).__name__)
+    except (StateError, ExecutionRootError, KeyError, OSError, ValueError) as error:
+        if lock is not None:
+            os.close(lock)
+        detail = str(error) if type(error) is ValueError else type(error).__name__
+        return _fail(f"the session could not be opened locally ({detail})")
     # The lock descriptor stays open through exec and in every CLI child, so a
     # Hub turn cannot start until the whole local session has exited.
     os.set_inheritable(lock, True)
     argv = [
         str(executable),
         "--resume",
-        session.provider_session_id,
+        native,
         "--permission-mode",
         "bypassPermissions",
+        *arguments,
     ]
-    if session.model and session.model != "default":
-        argv += ["--model", session.model]
     os.chdir(root)
     os.execve(str(executable), argv, local_environment(dict(os.environ), route, home))
     return 1  # pragma: no cover - execve does not return

@@ -40,8 +40,9 @@ class ClaudeLocalTests(unittest.TestCase):
             f"ANTHROPIC_BASE_URL=http://127.0.0.1:8317\nANTHROPIC_AUTH_TOKEN={TOKEN}\nOTHER=x\n"
         )
         self.route.chmod(0o600)
+        (self.base / "sessions").mkdir(mode=0o700)
         self.home = self.base / "sessions" / NATIVE
-        self.home.mkdir(parents=True, mode=0o700)
+        self.home.mkdir(mode=0o700)
 
     def permissions(self, **extra: str) -> ClaudeFilePermissionsConfig:
         permissions = parse_claude_file_permissions(
@@ -73,6 +74,17 @@ class ClaudeLocalTests(unittest.TestCase):
         self.route.write_text("ANTHROPIC_BASE_URL=http://127.0.0.1:8317\n")
         with self.assertRaises(ValueError):
             read_route_environment(self.route)
+        for url in (
+            "http://localhost.example.com:8317",
+            "http://127.0.0.1.example.com:8317",
+            "http://user@example.com@127.0.0.1:8317",
+            "http://127.0.0.1@example.com:8317",
+            "https://127.0.0.1:8317",
+            "http://127.0.0.1",
+        ):
+            self.route.write_text(f"ANTHROPIC_BASE_URL={url}\nANTHROPIC_AUTH_TOKEN=x\n")
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                read_route_environment(self.route)
 
     def test_local_environment_replaces_other_credentials_and_selects_the_session(self) -> None:
         environment = local_environment(
@@ -141,7 +153,29 @@ class ClaudeLocalTests(unittest.TestCase):
                 )
             self.assertEqual(str(error.exception), CLAUDE_LOCAL_REFUSAL)
 
-    def run_main(self, *, writer_mode: str = "local", busy: bool = False):
+    def test_model_and_effort_follow_hub_turns_or_refuse(self) -> None:
+        self.assertEqual(
+            claude_local.model_effort_arguments("claude-example", "xhigh"),
+            ["--model", "claude-example", "--effort", "xhigh"],
+        )
+        self.assertEqual(claude_local.model_effort_arguments("default", "default"), [])
+        with self.assertRaises(ValueError):
+            claude_local.model_effort_arguments("claude-example", "turbo")
+
+    def test_session_storage_must_stay_private(self) -> None:
+        self.assertEqual(
+            claude_local.host_session_home(self.base / "sessions", NATIVE, create=False), self.home
+        )
+        self.home.chmod(0o777)
+        with self.assertRaises(ValueError):
+            claude_local.host_session_home(self.base / "sessions", NATIVE, create=False)
+        self.home.chmod(0o700)
+        with self.assertRaises(ValueError):
+            claude_local.host_session_home(self.base / "sessions", "../escape", create=False)
+
+    def run_main(
+        self, *, writer_mode: str = "local", busy: bool = False, flip_after_lock: bool = False
+    ):
         permissions = self.permissions(route_environment=str(self.route))
         config = SimpleNamespace(
             claude_file_permissions=permissions,
@@ -156,9 +190,18 @@ class ClaudeLocalTests(unittest.TestCase):
             provider_session_id=NATIVE,
             topic_id=7,
             model="claude-example",
+            effort="high",
         )
+        reads = [0]
+
+        def get_session(_: str) -> SimpleNamespace:
+            reads[0] += 1
+            if flip_after_lock and reads[0] > 1:
+                return SimpleNamespace(**{**vars(session), "writer_mode": "telegram"})
+            return session
+
         state = SimpleNamespace(
-            get_session=lambda _: session, get_topic=lambda _: object(), close=lambda: None
+            get_session=get_session, get_topic=lambda _: object(), close=lambda: None
         )
         prefix = self.base / "release" / "venv"
         (self.base / "release" / "bin").mkdir(parents=True, exist_ok=True)
@@ -206,6 +249,8 @@ class ClaudeLocalTests(unittest.TestCase):
                 "bypassPermissions",
                 "--model",
                 "claude-example",
+                "--effort",
+                "high",
             ],
         )
         self.assertEqual(environment["CLAUDE_CONFIG_DIR"], str(self.home))
@@ -219,6 +264,9 @@ class ClaudeLocalTests(unittest.TestCase):
         self.assertEqual((code, calls), (1, []))
         code, calls, _ = self.run_main(busy=True)
         self.assertEqual((code, calls), (1, []))
+        code, calls, _ = self.run_main(flip_after_lock=True)
+        self.assertEqual((code, calls), (1, []))
+        os.close(acquire_writer_lock(self.home))  # a refused hand-off releases the lock
 
 
 def replace_namespace(namespace: SimpleNamespace, permissions: object) -> SimpleNamespace:
