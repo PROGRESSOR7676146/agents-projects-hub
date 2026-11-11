@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 TELEGRAM_CONTRACT_VERSION = 1
-CODEX_TELEGRAM_CONTRACT_VERSION = 2
+CODEX_TELEGRAM_CONTRACT_VERSION = 3
+# Runtimes whose interim messages reach the user during the turn.
+_PROGRESS_RUNTIMES = frozenset({"codex", "claude"})
 TLIVE_APPROVAL_ONLY_MARKER = "TLIVE APPROVAL-ONLY SESSION"
 
 # Provider parity is deliberately phased. Keep prompt-fallback runtimes on the
 # accepted v1 contract until each native instruction channel is reviewed.
+# v3 (Codex and Claude) replaces the conditional "state your understanding"
+# line with an early understanding message and regular progress updates.
 
-_FULL_CONTRACT = """TELEGRAM INTERACTION CONTRACT v2
+_BASE_CONTRACT = """TELEGRAM INTERACTION CONTRACT v2
 You are communicating with the user through Telegram, often from a phone.
 
 - Lead with the outcome. Prefer concise, plain, conversational language and short paragraphs.
@@ -27,12 +31,29 @@ You are communicating with the user through Telegram, often from a phone.
 - Treat Replies, forwarded quotes, and shared topic excerpts according to their explicit labels. Respond only to the current user turn.
 """
 
-_REMINDER = """TELEGRAM TRANSPORT REMINDER v2
-Reply for a Telegram conversation: concise, conversational, and outcome-first. Start simple work immediately; for complex work publish a brief understanding and approach when possible, then continue without an artificial delay. Ask only materially useful clarification questions. When a requested deliverable lacks audience, facts, format, or language and those choices materially affect it, ask one focused question before drafting; do not silently invent them. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Attach a Markdown report only when substantial work merits it; choose the report structure for the actual result, with tables, diagrams, or images when they clarify it and real screenshots only when available and relevant. Never fabricate evidence; simple work needs only a short answer. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning. For a small closed choice, end with one last line `[[choices: A | B]]`; the Hub shows it as buttons.
+_FULL_CONTRACT = _BASE_CONTRACT.replace(
+    "TELEGRAM INTERACTION CONTRACT v2", "TELEGRAM INTERACTION CONTRACT v3", 1
+).replace(
+    """- For a complex or long task, briefly state your understanding, intended approach, and material assumptions before substantial work when your runtime can publish an interim message, then proceed without an artificial delay.\n""",
+    "- Messenger requests are often short, lack context or contain typos. Within the first "
+    "minute or two of a new request, send an interim message saying how you understood it, "
+    "in your own words rather than repeating it: the goal, why it matters, the relevant "
+    "context, what you will and will not do, and the approach and means you intend to use. "
+    "If you need a quick look at materials first, send a short note that you understood the "
+    "request and are checking the materials, then the understanding and plan. Keep working "
+    "after it; do not wait for confirmation unless an ambiguity materially changes the result.\n"
+    "- During longer work, send a short progress update at each meaningful milestone and at "
+    "least every ten minutes: what is done, what you found, and what comes next. Never work "
+    "silently until the final answer; the user sees nothing else of your work.\n",
+    1,
+)
+
+_REMINDER = """TELEGRAM TRANSPORT REMINDER v3
+Reply for a Telegram conversation: concise, conversational, and outcome-first. Start simple work immediately. For other work, within a minute or two send how you understood the request in your own words (goal, context, what you will and will not do, approach), then keep working; send progress at meaningful milestones and at least every ten minutes, and never work silently until the final answer. Ask only materially useful clarification questions. When a requested deliverable lacks audience, facts, format, or language and those choices materially affect it, ask one focused question before drafting; do not silently invent them. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Attach a Markdown report only when substantial work merits it; choose the report structure for the actual result, with tables, diagrams, or images when they clarify it and real screenshots only when available and relevant. Never fabricate evidence; simple work needs only a short answer. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning. For a small closed choice, end with one last line `[[choices: A | B]]`; the Hub shows it as buttons.
 """
 
 _FULL_CONTRACT_V1 = (
-    _FULL_CONTRACT.replace(
+    _BASE_CONTRACT.replace(
         "TELEGRAM INTERACTION CONTRACT v2", "TELEGRAM INTERACTION CONTRACT v1", 1
     )
     .replace(
@@ -54,11 +75,16 @@ Reply for a Telegram conversation: concise, conversational, and outcome-first. A
 _RUNTIME_NOTES = {
     "codex": (
         "CODEX NOTE: Use visible commentary updates for meaningful progress on long work; "
-        "do not turn hidden reasoning into progress narration."
+        "do not turn hidden reasoning into progress narration. Keep a thread to one task: "
+        "at a genuine task boundary, finish with a short handoff (state, open checks, next "
+        "step) so the user can start the next task with /new. Keep tool output short: filter "
+        "logs and files with tail, grep or counts instead of printing them whole."
     ),
     "claude": (
-        "CLAUDE NOTE: A Hub turn ends with your reply and cannot keep background work "
-        "running, and every request re-reads the whole conversation. Keep one task per "
+        "CLAUDE NOTE: Text you write before a tool call reaches the user as a progress "
+        "message, so state your understanding before your first tool call. A Hub turn ends "
+        "with your reply and cannot keep background work running, and every request "
+        "re-reads the whole conversation. Keep one task per "
         "session; finish a large task with a short handoff (state, open checks, next step) "
         "so the user can start the next task with /new. Keep tool output short: filter logs "
         "and files with tail, grep or counts instead of printing them whole. Wait for a long "
@@ -87,7 +113,7 @@ _RUNTIME_NOTES = {
 def telegram_developer_instructions(*, runtime: str, new_session: bool) -> str:
     """Return stable Telegram instructions for a provider-native instruction channel."""
 
-    if runtime == "codex":
+    if runtime in _PROGRESS_RUNTIMES:
         contract = _FULL_CONTRACT if new_session else _REMINDER
     else:
         contract = _FULL_CONTRACT_V1 if new_session else _REMINDER_V1
@@ -101,7 +127,11 @@ def telegram_developer_instructions(*, runtime: str, new_session: bool) -> str:
 def telegram_contract_version(runtime: str) -> int:
     """Return the accepted contract version for one runtime."""
 
-    return CODEX_TELEGRAM_CONTRACT_VERSION if runtime == "codex" else TELEGRAM_CONTRACT_VERSION
+    return (
+        CODEX_TELEGRAM_CONTRACT_VERSION
+        if runtime in _PROGRESS_RUNTIMES
+        else TELEGRAM_CONTRACT_VERSION
+    )
 
 
 def telegram_user_turn_prompt(user_turn: str, *, staging_dir: object | None = None) -> str:

@@ -23,6 +23,11 @@ def claude_stream_observers(
         if item.session_id != binding.session_id:
             raise ClaudeStreamError("claude visible message has a different session")
         try:
+            if item.interim:
+                journal.promote_claude_progress(
+                    job_id, token, binding.session_id, item.message_id, cwd=project_root
+                )
+                return
             journal.record_claude_item(
                 job_id, token, binding.session_id, item.message_id, item.text, cwd=project_root
             )

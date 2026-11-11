@@ -159,6 +159,10 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 - Reply choice buttons (ADR 0097): an answer ending with `[[choices: …]]` shows
   Hub-bot buttons in a project topic; one press arrives as the owner's reply,
   a second press and old-session buttons are refused. Not yet installed.
+- Early understanding and Claude progress (ADR 0099): on a genuine owner request
+  after installation, Claude's first interim message arrives in the topic within
+  a minute or two and states its understanding; later progress arrives during the
+  turn and the final answer is not duplicated. Checked from saved evidence.
 - Claude context cost visibility (ADR 0098): on a genuine owner turn after
   installation, the transcript shows one-hour cache writes, the reply footer
   shows the last request context, and `/status` shows the same value. Checked

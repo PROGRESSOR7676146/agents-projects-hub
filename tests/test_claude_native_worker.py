@@ -325,6 +325,57 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertIsNone(worker.state.get_provider_result(second).safe_metadata_json)
         self.assertNotIn("Context:", worker.state.get_telegram_outbox_for_job(second).telegram_html)
 
+    def test_interim_claude_text_is_queued_as_progress_but_the_final_is_not(self) -> None:
+        job_id = self.enqueue(1)
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            native = argv[argv.index("--session-id") + 1]
+
+            def text(suffix: int, request: str, body: str) -> dict[str, object]:
+                return {
+                    "type": "assistant",
+                    "session_id": native,
+                    "uuid": f"00000000-0000-4000-8000-{suffix:012d}",
+                    "parent_tool_use_id": None,
+                    "message": {"id": request, "content": [{"type": "text", "text": body}]},
+                }
+
+            events = (
+                text(1, "msg_a", "Understood: fictional goal, scope and plan."),
+                text(2, "msg_b", "Fictional final answer."),
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "session_id": native,
+                    "result": "Fictional final answer.",
+                },
+            )
+            return subprocess.CompletedProcess(argv, 0, "\n".join(map(json.dumps, events)), "")
+
+        adapter = cast(Any, ExternalCliAdapter("claude", run=fake_run))
+        worker = self.worker(adapter)
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+
+        progress = worker.state._connection.execute(
+            "SELECT telegram_html FROM provider_progress_deliveries WHERE job_id = ?", (job_id,)
+        ).fetchall()
+        self.assertEqual(len(progress), 1)
+        self.assertIn("Understood: fictional goal", progress[0][0])
+        phases = worker.state._connection.execute(
+            "SELECT phase FROM provider_visible_items WHERE job_id = ? ORDER BY sequence",
+            (job_id,),
+        ).fetchall()
+        self.assertEqual([row[0] for row in phases], ["commentary", "unknown"])
+        self.assertEqual(
+            worker.state.get_provider_result(job_id).visible_response, "Fictional final answer."
+        )
+
     def test_already_queued_none_snapshot_resumes_previous_native_uuid(self) -> None:
         first = self.enqueue(1)
         second = self.enqueue(2)

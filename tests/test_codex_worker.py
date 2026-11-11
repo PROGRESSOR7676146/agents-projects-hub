@@ -451,12 +451,12 @@ class CodexQueueWorkerTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             instructions = str(resume_calls[0]["developer_instructions"])
-            self.assertIn("TELEGRAM INTERACTION CONTRACT v2", instructions)
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v3", instructions)
             self.assertNotIn("TELEGRAM INTERACTION CONTRACT", turn_prompts[0])
             self.assertNotIn("TELEGRAM TRANSPORT REMINDER", turn_prompts[0])
             self.assertIn("CURRENT USER TURN:\nCurrent question", turn_prompts[0])
             job = worker.state.get_provider_job(job_id)
-            self.assertEqual(worker.state.telegram_contract_version(job.session_id), 2)
+            self.assertEqual(worker.state.telegram_contract_version(job.session_id), 3)
         finally:
             worker.close()
 

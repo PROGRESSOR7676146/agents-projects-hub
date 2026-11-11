@@ -63,7 +63,8 @@ def latest_claude_visible(db: sqlite3.Connection, job_id: str) -> tuple[int, str
     ).fetchone()
     if row is None:
         return 0, None
-    if row["phase"] != "unknown" or row["sequence"] <= 0:
+    # Interim Claude texts become commentary once a tool call follows them.
+    if row["phase"] not in {"unknown", "commentary"} or row["sequence"] <= 0:
         return None
     return row["sequence"], row["created_at"]
 

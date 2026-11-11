@@ -62,6 +62,88 @@ class ClaudeStreamTests(unittest.TestCase):
         reader.feed(output(result()).encode())
         self.assertEqual(parse_claude_stream(reader.finish()).text, "Visible answer")
 
+    def block_event(
+        self, uuid_suffix: int, request: str, *blocks: dict[str, object], parent: object = None
+    ) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "session_id": SESSION,
+            "uuid": f"00000000-0000-4000-8000-{uuid_suffix:012d}",
+            "parent_tool_use_id": parent,
+            "message": {"id": request, "content": list(blocks)},
+        }
+
+    def test_text_followed_by_a_tool_call_or_newer_request_is_interim(self) -> None:
+        items: list[ClaudeVisibleAssistant] = []
+        reader = ClaudeStreamReader(
+            expected_session_id=SESSION,
+            on_visible_assistant=items.append,
+            event_policy=lambda _: None,
+        )
+        tool = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+        events = (
+            self.block_event(11, "msg_a", {"type": "text", "text": "Understood: plan"}),
+            self.block_event(12, "msg_a", tool),
+            self.block_event(13, "msg_b", {"type": "text", "text": "Found the cause"}),
+            self.block_event(14, "msg_c", {"type": "text", "text": "Checking"}, tool),
+            self.block_event(15, "msg_s", {"type": "text", "text": "sub"}, parent="toolu_1"),
+            self.block_event(16, "msg_d", {"type": "text", "text": "Final answer"}),
+            result(),
+        )
+        reader.feed((output(*events) + "\n").encode())
+        reader.finish()
+        interim = [(item.text, item.interim) for item in items if item.interim]
+        self.assertEqual(
+            interim,
+            [("Understood: plan", True), ("Found the cause", True), ("Checking", True)],
+        )
+        self.assertNotIn("Final answer", [text for text, _ in interim])
+        self.assertNotIn("sub", [item.text for item in items])
+
+    def test_a_replayed_older_request_never_promotes_the_final_text(self) -> None:
+        items: list[ClaudeVisibleAssistant] = []
+        reader = ClaudeStreamReader(
+            expected_session_id=SESSION,
+            on_visible_assistant=items.append,
+            event_policy=lambda _: None,
+        )
+        tool = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+        tool_only = self.block_event(31, "msg_a", tool)
+        events = (
+            tool_only,
+            self.block_event(32, "msg_b", {"type": "text", "text": "Final answer"}),
+            tool_only,
+            result(),
+        )
+        reader.feed((output(*events) + "\n").encode())
+        reader.finish()
+        self.assertEqual([item.interim for item in items], [False])
+
+    def test_a_failing_interim_promotion_never_fails_a_turn(
+        self,
+    ) -> None:
+        def broken(item: ClaudeVisibleAssistant) -> None:
+            if item.interim:
+                raise RuntimeError("fictional progress failure")
+
+        tool = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+        reader = ClaudeStreamReader(
+            expected_session_id=SESSION, on_visible_assistant=broken, event_policy=lambda _: None
+        )
+        reader.feed(
+            (
+                output(
+                    self.block_event(21, "msg_a", {"type": "text", "text": "Plan"}, tool),
+                    result(),
+                )
+                + "\n"
+            ).encode()
+        )
+        self.assertEqual(
+            parse_claude_stream(reader.finish(), event_policy=lambda _: None).text,
+            "Visible answer",
+        )
+
     def test_incremental_callback_rejects_missing_or_changed_native_identity(self) -> None:
         base: dict[str, object] = {
             "type": "assistant",

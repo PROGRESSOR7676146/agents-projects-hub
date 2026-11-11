@@ -12,8 +12,9 @@ from hermes_codex_router.telegram_interaction import (
 
 
 class TelegramInteractionPromptTests(unittest.TestCase):
-    def test_v2_rollout_is_codex_only(self) -> None:
-        self.assertEqual(telegram_contract_version("codex"), 2)
+    def test_v3_rollout_covers_runtimes_with_interim_delivery(self) -> None:
+        self.assertEqual(telegram_contract_version("codex"), 3)
+        self.assertEqual(telegram_contract_version("claude"), 3)
         self.assertEqual(telegram_contract_version("opencode"), 1)
         self.assertEqual(telegram_contract_version("antigravity"), 1)
         self.assertEqual(telegram_contract_version("hermes"), 1)
@@ -21,13 +22,29 @@ class TelegramInteractionPromptTests(unittest.TestCase):
     def test_new_session_receives_full_contract_and_provider_note(self) -> None:
         prompt = telegram_developer_instructions(runtime="codex", new_session=True)
 
-        self.assertIn("TELEGRAM INTERACTION CONTRACT v2", prompt)
+        self.assertIn("TELEGRAM INTERACTION CONTRACT v3", prompt)
         self.assertIn("Telegram", prompt)
         self.assertIn("commentary", prompt)
         self.assertIn("Do not switch into a provider-specific plan-only mode", prompt)
-        self.assertIn("without an artificial delay", prompt)
+        self.assertIn("Within the first minute or two of a new request", prompt)
+        self.assertIn("what you will and will not do", prompt)
+        self.assertIn("at least every ten minutes", prompt)
+        self.assertNotIn("when your runtime can publish", prompt)
         self.assertIn("For substantial work with findings", prompt)
         self.assertIn("simple work needs only a short answer", prompt)
+
+    def test_claude_receives_the_same_early_understanding_contract_as_codex(self) -> None:
+        full = telegram_developer_instructions(runtime="claude", new_session=True)
+        reminder = telegram_developer_instructions(runtime="claude", new_session=False)
+        self.assertIn("TELEGRAM INTERACTION CONTRACT v3", full)
+        self.assertIn("Within the first minute or two of a new request", full)
+        self.assertIn("TELEGRAM TRANSPORT REMINDER v3", reminder)
+        self.assertIn("never work silently until the final answer", reminder)
+        self.assertIn("before your first tool call", reminder)
+        for runtime in ("opencode", "antigravity"):
+            prompt = telegram_developer_instructions(runtime=runtime, new_session=True)
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", prompt)
+            self.assertNotIn("Within the first minute", prompt)
 
     def test_claude_turns_carry_cost_aware_working_practice(self) -> None:
         for new_session in (True, False):
