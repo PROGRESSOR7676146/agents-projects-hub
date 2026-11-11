@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- `/local` and `/return` for Claude under the host profile (ADR 0101): Telegram
+  shows a Hub command that opens the same Claude session in the terminal with
+  the configured route, without showing credentials; a shared session writer
+  lock keeps Hub turns out while the local CLI runs. Requires the new optional
+  `route_environment` in the host `claude_file_permissions`.
+
 - Claude interim progress (ADR 0099) now also works when streamed corrections
   (ADR 0083) are enabled: each result, including a corrected turn's first
   segment, ends the pending texts, so no result text is sent as progress.

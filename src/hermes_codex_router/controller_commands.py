@@ -274,6 +274,15 @@ class ControllerCommandOrchestrator:
     def native_transfer_refusal(self, session: SessionRecord | None) -> TextCommandDecision | None:
         if session is None or self.config.require_agent(session.agent_id).runtime != "claude":
             return None
+        permissions = self.config.claude_file_permissions
+        if (
+            permissions is not None
+            and permissions.profile == "host"
+            and permissions.route_environment is not None
+        ):
+            # The local hand-off opens the same session directory under the
+            # session writer lock (claude_local); every Hub turn takes that lock.
+            return None
         detail = (
             "Claude native session transfer is not supported yet. Writer ownership is "
             "unchanged; this command did not invoke the provider."

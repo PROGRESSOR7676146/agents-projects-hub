@@ -74,7 +74,7 @@ from .ingress_decisions import (
     decide_ingress,
 )
 from .inline_codex_execution import commit_inline_codex_completion, run_inline_codex_turn
-from .local_transfer import LocalTransferError, local_resume_command
+from .local_transfer import LocalTransferError, session_resume_command
 from .model_selection import (
     ModelSelectionError,
     available_openai_models,
@@ -3199,17 +3199,7 @@ class ProjectHubService:
                     topic, session, allow_held=session.agent_id == "codex"
                 )
                 execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
-                resume = local_resume_command(
-                    agent.runtime,
-                    agent.executable,
-                    session.provider_session_id,
-                    execution_root,
-                    model_provider=self.config.codex_model_provider,
-                    permission_profile=session.codex_permission_profile,
-                    model=session.model,
-                    codex_socket_path=self.config.codex_socket_path,
-                    effort=session.effort,
-                )
+                resume = session_resume_command(self.config, agent, session, execution_root)
                 self.state.set_writer_mode(
                     session.session_id, "local", expected_transfer=expected_transfer
                 )

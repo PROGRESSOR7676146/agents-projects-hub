@@ -25,6 +25,7 @@ CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
         "claude_session_mode_changed",
         "claude_material_notice_unverified",
         "claude_stream_input_unverified",
+        "claude_session_local_busy",
     }
 )
 
