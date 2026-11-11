@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -147,6 +147,8 @@ class HubConfig:
     claude_file_permissions: ClaudeFilePermissionsConfig | None = None
     claude_image_input: bool = False
     claude_stream_input: bool = False
+    # The file this configuration was loaded from, for local hand-off commands.
+    source_path: Path | None = None
     # Consecutive productive messages with identical routing are collected
     # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
     message_batch_quiet_ms: int = 0
@@ -1121,16 +1123,11 @@ def load_hub_config(
     claude_stream_input = root.get("claude_stream_input", False)
     if type(claude_stream_input) is not bool:
         raise HubConfigError("claude_stream_input must be a boolean")
-    if claude_stream_input and (
-        claude_image_input
-        or not any(
-            agent.runtime == "claude" and agent.agent_id in topology.external_worker_agent_ids
-            for agent in agents
-        )
+    if claude_stream_input and not any(
+        agent.runtime == "claude" and agent.agent_id in topology.external_worker_agent_ids
+        for agent in agents
     ):
-        raise HubConfigError(
-            "claude_stream_input requires an external Claude worker without image input"
-        )
+        raise HubConfigError("claude_stream_input requires an external Claude worker")
     if type(claude_image_input) is not bool:
         raise HubConfigError("claude_image_input must be a boolean")
     if claude_image_input and not any(
@@ -1147,8 +1144,18 @@ def load_hub_config(
         for agent in agents
     ):
         raise HubConfigError("claude_file_permissions requires an external Claude worker")
-    if claude_image_input and claude_file_permissions is not None:
-        raise HubConfigError("claude_image_input cannot be combined with claude_file_permissions")
+    # Images and streamed corrections share one input channel only under the
+    # unconfined host profile; confined profiles keep their separate image path.
+    host = claude_file_permissions is not None and claude_file_permissions.profile == "host"
+    if (
+        claude_image_input
+        and (claude_file_permissions is not None or claude_stream_input)
+        and not (host and claude_stream_input)
+    ):
+        raise HubConfigError(
+            "claude_image_input combines with claude_file_permissions or claude_stream_input "
+            "only as the host profile with claude_stream_input"
+        )
     if (
         claude_file_permissions is not None
         and claude_file_permissions.profile == "developer"
@@ -1215,7 +1222,7 @@ def load_hub_config(
         validate_adoption_mode(config)
     except ValueError as exc:
         raise HubConfigError(str(exc)) from None
-    return config
+    return replace(config, source_path=path.resolve())
 
 
 def load_project_provisioner_config(path: Path, *, require_identity: bool = True) -> HubConfig:

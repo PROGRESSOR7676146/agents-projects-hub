@@ -164,6 +164,12 @@ class ClaudeStreamReader:
         if image_receipt is not None and correction_input is not None:
             raise ClaudeStreamError("claude corrections cannot use image input")
         self.correction_input = correction_input
+        # The replay of an initial frame with images is one large native event.
+        self._file_event_limit = (
+            MAX_IMAGE_EVENT_BYTES
+            if correction_input is not None and correction_input.has_images
+            else MAX_CLAUDE_FILE_EVENT_BYTES
+        )
         self._output = bytearray()
         self._pending = bytearray()
         self._events = 0
@@ -232,7 +238,7 @@ class ClaudeStreamReader:
             line = bytes(self._pending[:end])
             del self._pending[: end + 1]
             self._line(line)
-        if self.event_policy and len(self._pending) > MAX_CLAUDE_FILE_EVENT_BYTES:
+        if self.event_policy and len(self._pending) > self._file_event_limit:
             raise ClaudeStreamError("claude structured event exceeded its limit")
         if self.image_receipt and len(self._pending) > MAX_IMAGE_EVENT_BYTES:
             raise ClaudeStreamError("claude structured event exceeded its limit")
@@ -288,7 +294,7 @@ class ClaudeStreamReader:
     def _line(self, raw: bytes) -> None:
         if self.image_receipt and len(raw) > MAX_IMAGE_EVENT_BYTES:
             raise ClaudeStreamError("claude structured event exceeded its limit")
-        if self.event_policy and len(raw) > MAX_CLAUDE_FILE_EVENT_BYTES:
+        if self.event_policy and len(raw) > self._file_event_limit:
             raise ClaudeStreamError("claude structured event exceeded its limit")
         try:
             line = raw.decode("utf-8")

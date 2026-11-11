@@ -110,6 +110,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-secur
   terminal proof MAY resolve Codex uncertainty while queued work stays held. The resume command MUST
   preserve validated root, provider and model/effort; unsupported managed-profile transfer MUST
   refuse before preparation, launch or lease change.
+  - Claude transfer is supported only for the `host` profile with a configured private route
+    environment (ADR 0101): the displayed command MUST contain no credential, MUST recheck local
+    ownership and take the session writer lock that every Hub turn also takes, and MUST open the
+    same session directory without copying transcripts. Other Claude profiles keep refusing.
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):** Codex return MUST
   preserve the session without inference or transcript copying after terminal work and the owner's
   assertion that the CLI is closed. Exact local reconciliation additionally permits an idle remote

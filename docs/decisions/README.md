@@ -124,4 +124,6 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0097: Reply choices as Telegram buttons](0097-reply-choice-buttons.md) — a provider's last `[[choices: …]]` line becomes session-bound Hub-bot buttons; a press is the owner's ordinary reply.
 - [0098: Claude context cost visibility](0098-claude-context-cost-visibility.md) — one-hour prompt cache by default, per-request usage in the reply footer and `/status`, honest 429 notices and cost-aware working practice.
 - [0099: Early understanding and Claude progress](0099-early-understanding-and-claude-progress.md) — contract v3 for Codex and Claude asks for an early understanding message and regular updates; Claude interim texts are delivered as progress.
+- [0101: Claude local CLI hand-off](0101-claude-local-cli-handoff.md) — `/local` for the Claude host profile opens the same session in the terminal through a Hub command under a shared writer lock; no credential in Telegram.
+- [0102: Images for the Claude host profile](0102-claude-host-images.md) — with streamed input enabled, images ride in the initial frame of that channel under the existing bounds and replay check.
 - [0100: Background work with automatic resume](0100-deferred-background-resume.md) — deferred by the owner; agents keep bounded waits; reopening criteria recorded.

@@ -23,6 +23,7 @@ REQUEST_REFUSAL_CODES = frozenset(
         "claude_resume_invalid",
         "claude_session_mode_changed",
         "claude_stream_input_unverified",
+        "claude_session_local_busy",
         "external_session_identity_unsupported",
     }
 )

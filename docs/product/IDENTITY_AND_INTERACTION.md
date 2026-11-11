@@ -123,7 +123,9 @@ input; selected/pasted quotations are context, not Reply addressing.
   - Unsupported, excessive or unavailable content MUST fail visibly; metadata alone is not reading,
     and the Bot API's 20 MiB file limit remains.
   - Claude images require explicit default-off opt-in, verified original bytes and disabled tools;
-    protected file tools MUST NOT be combined with images.
+    protected file tools MUST NOT be combined with images. The unconfined `host` profile MAY carry
+    images in the initial frame of its streamed input channel, with `claude_stream_input` enabled
+    and the same bounds and replay check (ADR 0102).
   - Success MUST require an exact caller/session receipt retaining supported image bytes, prompt,
     markers and image count/order; processing may transform bytes, so receipts prove neither pixel
     equivalence nor understanding.
