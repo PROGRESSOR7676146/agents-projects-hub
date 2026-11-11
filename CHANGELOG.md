@@ -9,6 +9,11 @@ and releases use semantic versioning while the public API is still evolving.
   `claude_stream_input` enabled, `claude_image_input` may be enabled too, and
   photos/screenshots reach Claude in the first frame of the streamed channel
   with the existing bounds and replay check.
+- `/local` and `/return` for Claude under the host profile (ADR 0101): Telegram
+  shows a Hub command that opens the same Claude session in the terminal with
+  the configured route, without showing credentials; a shared session writer
+  lock keeps Hub turns out while the local CLI runs. Requires the new optional
+  `route_environment` in the host `claude_file_permissions`.
 
 ## [0.11.14] - 2026-11-11
 

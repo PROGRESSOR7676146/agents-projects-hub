@@ -24,6 +24,8 @@ class ClaudeFilePermissionsConfig:
     profile: str = "editor"
     toolchain: NamespaceToolchain | None = None
     user_releases: tuple[UserRuntimeRelease, ...] = ()
+    # Host only: private route environment that the local CLI hand-off loads.
+    route_environment: Path | None = None
 
 
 def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | None:
@@ -42,19 +44,33 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
     if (
         isinstance(raw, dict)
         and raw.get("profile") == "host"
-        and set(raw) == {"profile", "provider_home"}
+        and {"profile", "provider_home"}
+        <= set(raw)
+        <= {"profile", "provider_home", "route_environment"}
     ):
-        home = raw["provider_home"]
-        if (
-            not isinstance(home, str)
-            or not home.startswith("/")
-            or ".." in Path(home).parts
-            or "\x00" in home
+        host_paths = [raw["provider_home"], raw.get("route_environment", "/")]
+        if any(
+            not isinstance(value, str)
+            or not value.startswith("/")
+            or ".." in Path(value).parts
+            or "\x00" in value
+            for value in host_paths
         ):
             raise ValueError("claude_file_permissions paths must be absolute")
         unused = Path("/")
         return ClaudeFilePermissionsConfig(
-            unused, unused, Path(home), (), unused, unused, unused, (), "host"
+            unused,
+            unused,
+            Path(raw["provider_home"]),
+            (),
+            unused,
+            unused,
+            unused,
+            (),
+            "host",
+            route_environment=(
+                Path(raw["route_environment"]) if "route_environment" in raw else None
+            ),
         )
     if (
         not isinstance(raw, dict)

@@ -75,7 +75,7 @@ class ClaudeTransferRefusalTests(unittest.TestCase):
                                 )
                             stack.enter_context(
                                 patch(
-                                    "hermes_codex_router.service.local_resume_command",
+                                    "hermes_codex_router.service.session_resume_command",
                                     side_effect=AssertionError("resume prepared"),
                                 )
                             )
@@ -152,3 +152,40 @@ class ClaudeTransferRefusalTests(unittest.TestCase):
         jobs = hub.service.state.provider_jobs_for_topic(hub.topic().topic_id)
         self.assertEqual(len(jobs), 1)
         self.assertIn("Summarize only", jobs[0].payload_text)
+
+
+class ClaudeHostLocalTransferTests(unittest.TestCase):
+    def test_host_profile_hands_off_to_the_local_cli_and_returns_through_a_queued_turn(
+        self,
+    ) -> None:
+        from hermes_codex_router.claude_permissions_config import parse_claude_file_permissions
+
+        temporary = tempfile.TemporaryDirectory(prefix="example-claude-local-")
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        hub = HubHarness(base, agents=(CODEX, CLAUDE))
+        self.addCleanup(hub.close)
+        route = base / "route.environment"
+        route.write_text("ANTHROPIC_AUTH_TOKEN=example-secret\n")
+        hub.service.config = replace(
+            hub.service.config,
+            source_path=base / "hub.json",
+            claude_file_permissions=parse_claude_file_permissions(
+                {
+                    "profile": "host",
+                    "provider_home": str(base / "sessions"),
+                    "route_environment": str(route),
+                }
+            ),
+        )
+        saved = hub.activate(CLAUDE, provider_session_id=NATIVE_UUID)
+        self.assertTrue(hub.send("/local"))
+        self.assertIn("hermes_codex_router.claude_local", hub.last_reply)
+        self.assertIn(saved.session_id, hub.last_reply)
+        self.assertNotIn("example-secret", hub.last_reply)
+        self.assertEqual(hub.session().writer_mode, "local")
+        self.assertTrue(hub.send("/return"))
+        jobs = hub.service.state.provider_jobs_for_topic(hub.topic().topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("local CLI", jobs[0].payload_text)
+        self.assertEqual(hub.session().writer_mode, "telegram")

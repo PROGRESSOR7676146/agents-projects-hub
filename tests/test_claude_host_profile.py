@@ -192,6 +192,25 @@ class ClaudeHostBindingTests(unittest.TestCase):
                 self.fail("read-only session storage accepted")
         self.assertEqual(unsafe.exception.code, "claude_host_unverified")
         (fixture.home / native).chmod(0o700)
+        from hermes_codex_router.claude_local import acquire_writer_lock
+
+        local_cli = acquire_writer_lock(fixture.home / native)
+        try:
+            with self.assertRaises(ProviderUnavailableError) as busy:
+                with module.hosted_claude_launch(
+                    config,
+                    state,
+                    config.agents[0],
+                    job,
+                    token,
+                    native,
+                    fixture.fixture.root,
+                    is_new=True,
+                ):
+                    self.fail("a Hub turn started while the local CLI held the session")
+            self.assertEqual(busy.exception.code, "claude_session_local_busy")
+        finally:
+            os.close(local_cli)
         with (
             patch.object(module, "load_tlive_permission_config") as transport,
             patch.object(module, "PermissionServer") as socket_server,
@@ -213,6 +232,7 @@ class ClaudeHostBindingTests(unittest.TestCase):
             transport.assert_not_called()
             socket_server.assert_not_called()
             confined.assert_not_called()
+
         self.assertEqual(fixture.check_modes(profile="host"), (1, 0))
         self.assertEqual(
             state._connection.execute(

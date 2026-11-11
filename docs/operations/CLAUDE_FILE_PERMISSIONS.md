@@ -350,6 +350,17 @@ is involved. It requires CPA and refuses conflicting route settings. Other
 profiles retain their boundaries and never fall back to `host`. Changing profile
 or storage requires `/new`; doctor reports incompatible saved sessions.
 
+An optional `"route_environment": "/home/example/private/claude-route.environment"`
+names the private owner file (mode 0600) with `ANTHROPIC_BASE_URL` (loopback)
+and `ANTHROPIC_AUTH_TOKEN` that the workers already use. With it, `/local`
+hands the session to the owner's terminal (ADR 0101): Telegram shows a
+`python -I -m hermes_codex_router.claude_local --config … <hub session>` command
+that rechecks local ownership, takes the session writer lock that every Hub
+turn also takes, loads only those two keys and starts the interactive CLI on
+the same session directory. `/return` queues a summary turn; while the local
+CLI still runs, that turn is refused before invocation. Keep the file equal in
+the Hub and Claude worker configurations.
+
 With `claude_stream_input` enabled, `claude_image_input` may also be enabled for
 `host`: images reach Claude in the first frame of the streamed channel (ADR 0102).
 

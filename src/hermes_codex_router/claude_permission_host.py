@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shutil
 import socket
-import stat
 import tempfile
 import threading
 import time
@@ -18,6 +17,7 @@ from .claude_bash_grants import BASH_GRANTS
 from .claude_file_policy import validate_file_tool_input
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from .claude_host_profile import ClaudeHostConfig
+from .claude_local import ClaudeSessionBusy, acquire_writer_lock, host_session_home
 from .claude_permission_protocol import (
     canonical_json,
     canonical_uuid,
@@ -25,6 +25,7 @@ from .claude_permission_protocol import (
     parse_json_strict,
 )
 from .claude_permission_wait import PermissionWaitClock
+from .claude_permissions_config import ClaudeFilePermissionsConfig
 from .claude_permissions_journal import (
     ClaudePermissionJournal,
     ClaudeSessionModeError,
@@ -320,6 +321,52 @@ def _text_session_store(root: Path) -> Path:
 
 
 @contextmanager
+def _hosted_host_launch(
+    settings: ClaudeFilePermissionsConfig,
+    agent: AgentDefinition,
+    journal: ClaudePermissionJournal,
+    job: ProviderJobRecord,
+    token: str,
+    session_id: str,
+    root: Path,
+) -> Iterator[HostedClaudeLaunch]:
+    """Prepare the unconfined host session directory under its writer lock."""
+    try:
+        executable = shutil.which(agent.executable or "claude")
+        if executable is None:
+            raise ValueError("Claude executable is missing")
+        home = host_session_home(settings.provider_home, session_id, create=True)
+        # The same lock is held by a local CLI hand-off (claude_local); a Hub
+        # turn never starts while the owner works on the session locally.
+        writer_lock = acquire_writer_lock(home)
+    except ClaudeSessionBusy:
+        raise ProviderUnavailableError(
+            "claude_session_local_busy",
+            "The Claude session is open in a local CLI. Close it, then send /return. "
+            "The turn was not started.",
+        ) from None
+    except (OSError, ValueError):
+        raise ProviderUnavailableError(
+            "claude_host_unverified",
+            "Claude host session could not be prepared. The turn was not started.",
+        ) from None
+    try:
+        try:
+            launch = journal.open_launch(job.job_id, token, session_id, root, profile="host")
+        except StateError:
+            raise ProviderUnavailableError(
+                "claude_host_unverified",
+                "Claude host session could not be prepared. The turn was not started.",
+            ) from None
+        try:
+            yield HostedClaudeLaunch(ClaudeHostConfig(root, home, Path(executable).resolve()))
+        finally:
+            journal.close_launch(launch)
+    finally:
+        os.close(writer_lock)
+
+
+@contextmanager
 def hosted_claude_launch(
     config: HubConfig,
     state: HubState,
@@ -370,39 +417,8 @@ def hosted_claude_launch(
         yield None
         return
     if settings.profile == "host":
-        try:
-            executable = shutil.which(agent.executable or "claude")
-            home_base = settings.provider_home
-            if (
-                executable is None
-                or home_base.is_symlink()
-                or not home_base.is_dir()
-                or home_base.resolve() != home_base
-                or home_base.stat().st_uid != os.geteuid()
-                or home_base.stat().st_mode & 0o077
-            ):
-                raise ValueError("unsafe host session storage")
-            home = home_base / session_id
-            home.mkdir(mode=0o700, exist_ok=True)
-            if (
-                home.is_symlink()
-                or not home.is_dir()
-                or home.stat().st_uid != os.geteuid()
-                or stat.S_IMODE(home.stat().st_mode) != 0o700
-            ):
-                raise ValueError("unsafe host session storage")
-            if (home / ".credentials.json").exists() or (home / ".credentials.json").is_symlink():
-                raise ValueError("host session contains native credentials")
-            launch = journal.open_launch(job.job_id, token, session_id, root, profile="host")
-        except (OSError, ValueError, StateError):
-            raise ProviderUnavailableError(
-                "claude_host_unverified",
-                "Claude host session could not be prepared. The turn was not started.",
-            ) from None
-        try:
-            yield HostedClaudeLaunch(ClaudeHostConfig(root, home, Path(executable).resolve()))
-        finally:
-            journal.close_launch(launch)
+        with _hosted_host_launch(settings, agent, journal, job, token, session_id, root) as hosted:
+            yield hosted
         return
     refusal: str | None = None
     with tempfile.TemporaryDirectory(prefix="hub-claude-permission-") as directory:
