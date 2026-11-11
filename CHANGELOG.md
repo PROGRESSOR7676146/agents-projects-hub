@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.12] - 2026-11-11
+
 - Claude turns default to a one-hour prompt cache (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`
   unless the service sets another value), so resuming after a pause no longer
   rewrites the whole conversation (ADR 0098).
