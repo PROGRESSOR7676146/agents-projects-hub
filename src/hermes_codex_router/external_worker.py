@@ -1136,7 +1136,9 @@ class ExternalQueueWorker:
         on_quota_observation: QuotaObservationCallback | None = None
         if self.agent.runtime == "claude":
             try:
-                claude_journal = ExecutionJournal(self.state)
+                claude_journal = ExecutionJournal(
+                    self.state, progress_enabled=self.config.outbox_runtime == "external"
+                )
                 claude_session_binding = claude_journal.prepare_claude_session(
                     job.job_id, token, Path(project.root)
                 )

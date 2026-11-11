@@ -56,6 +56,9 @@ class ClaudeVisibleAssistant:
     session_id: str
     message_id: str
     text: str
+    # A second call for an already recorded text that a later tool call or
+    # native request proved to be an interim message, not the final answer.
+    interim: bool = False
 
 
 VisibleAssistantCallback = Callable[[ClaudeVisibleAssistant], None]
@@ -166,6 +169,10 @@ class ClaudeStreamReader:
         self._events = 0
         self._terminal_seen = False
         self._visible: dict[str, str] = {}
+        # Recorded main-thread texts per native request id, not yet known to be
+        # interim. Streamed corrections keep their own input boundaries.
+        self._unclassified: dict[str, list[str]] = {}
+        self._promote_interim = correction_input is None
         self._visible_characters = 0
         self._received_bytes = 0
 
@@ -324,6 +331,8 @@ class ClaudeStreamReader:
             self._output.extend(raw + b"\n")
         if self.on_visible_assistant is not None:
             self._visible_assistant(event)
+            if self._promote_interim:
+                self._classify_interim(event)
         if self.event_policy is not None or self.correction_input is not None:
             retained = _file_result_evidence(event)
             if retained is not None:
@@ -377,6 +386,46 @@ class ClaudeStreamReader:
             raise ClaudeStreamError("claude visible message persistence failed") from exc
         self._visible[message_id] = text
         self._visible_characters += len(text)
+        request = message.get("id") if isinstance(message, dict) else None
+        if isinstance(request, str) and request:
+            self._unclassified.setdefault(request, []).append(message_id)
+
+    def _classify_interim(self, event: dict[str, object]) -> None:
+        """Promote texts followed by a tool call or a newer native request.
+
+        The last text before the terminal result is never promoted here: the
+        result path alone delivers the final answer.
+        """
+        if (
+            self._terminal_seen
+            or event.get("type") != "assistant"
+            or event.get("parent_tool_use_id") is not None
+        ):
+            return
+        message = event.get("message")
+        request = message.get("id") if isinstance(message, dict) else None
+        if not isinstance(request, str) or not request:
+            return
+        blocks = message.get("content") if isinstance(message, dict) else None
+        uses_tool = isinstance(blocks, list) and any(
+            isinstance(block, dict) and block.get("type") == "tool_use" for block in blocks
+        )
+        ready = [key for key in self._unclassified if key != request or uses_tool]
+        for key in ready:
+            for message_id in self._unclassified.pop(key):
+                self._publish_interim(message_id)
+
+    def _publish_interim(self, message_id: str) -> None:
+        # Progress is optional: a failed promotion must not change the turn.
+        assert self.on_visible_assistant is not None and self.session_id is not None
+        try:
+            self.on_visible_assistant(
+                ClaudeVisibleAssistant(
+                    self.session_id, message_id, self._visible[message_id], interim=True
+                )
+            )
+        except Exception as error:
+            survived("claude_stream.interim_progress", error)
 
 
 def _file_result_evidence(event: dict[str, object]) -> dict[str, object] | None:

@@ -5,6 +5,18 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Claude interim text written before a tool call (or before a newer request)
+  now reaches Telegram as a progress message during the turn, through the same
+  durable progress outbox as Codex commentary; the final answer is not
+  duplicated (ADR 0099).
+- Telegram contract v3 for Codex and Claude: an early message stating how the
+  request was understood (goal, reasons, context, scope, approach), then
+  progress at milestones and at least every ten minutes. Existing sessions get
+  the full contract on their next turn; other runtimes keep v1.
+- The Codex transport note carries the same cost-aware practice as Claude's.
+- ADR 0100 records the owner's decision to defer Hub-owned background work
+  with automatic resume.
+
 ## [0.11.12] - 2026-11-11
 
 - Claude turns default to a one-hour prompt cache (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`

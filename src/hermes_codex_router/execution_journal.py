@@ -369,6 +369,36 @@ class ExecutionJournal:
                 raise StateError("Claude invocation is already complete")
             self._insert_visible_item(job_id, message_id, text, "unknown")
 
+    def promote_claude_progress(
+        self, job_id: str, token: str, session_id: str, message_id: str, *, cwd: Path
+    ) -> None:
+        """Mark one recorded Claude text as interim and queue it for progress delivery.
+
+        The phase moves only from unknown to commentary, once; the text stays.
+        """
+        message_id = self._claude_uuid(message_id)
+        with self.state._immediate_transaction():
+            checkpoint = self._claude_checkpoint(job_id, token, session_id, cwd)
+            if checkpoint["completed_text"] is not None:
+                raise StateError("Claude invocation is already complete")
+            item = self.connection.execute(
+                "SELECT sequence, phase, visible_text FROM provider_visible_items "
+                "WHERE job_id = ? AND item_id = ?",
+                (job_id, message_id),
+            ).fetchone()
+            if item is None or item["phase"] not in {"unknown", "commentary"}:
+                raise StateError("Claude interim text was not recorded")
+            if item["phase"] == "unknown":
+                self.connection.execute(
+                    "UPDATE provider_visible_items SET phase = 'commentary' "
+                    "WHERE sequence = ? AND phase = 'unknown'",
+                    (item["sequence"],),
+                )
+            if self.progress is not None:
+                self.progress.enqueue_in_transaction(
+                    job_id, token, int(item["sequence"]), str(item["visible_text"])
+                )
+
     def record_claude_completion(
         self,
         job_id: str,
