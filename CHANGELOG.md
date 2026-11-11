@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.14] - 2026-11-11
+
 - Claude interim progress (ADR 0099) now also works when streamed corrections
   (ADR 0083) are enabled: each result, including a corrected turn's first
   segment, ends the pending texts, so no result text is sent as progress.
