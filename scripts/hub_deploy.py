@@ -127,10 +127,15 @@ def discover_dropin_root(dropins: list[str]) -> str:
 
 
 def _host_permissions(permissions: dict[str, Any]) -> bool:
-    """The explicit host profile (ADR 0095) has exactly a profile and session storage."""
+    """The explicit host profile (ADR 0095): profile, session storage and an optional route file."""
     if permissions.get("profile") != "host":
         return False
-    need(set(permissions) == {"profile", "provider_home"}, "invalid Claude host permissions")
+    need(
+        {"profile", "provider_home"}
+        <= set(permissions)
+        <= {"profile", "provider_home", "route_environment"},
+        "invalid Claude host permissions",
+    )
     return True
 
 

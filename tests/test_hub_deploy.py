@@ -1223,10 +1223,25 @@ class WindowTests(StageFixture):
         self.hub.write_text(json.dumps(overlay))
         hub_deploy.create_plan(self.install, old, new, self.runner)
 
-    def test_host_profile_deploys_and_keeps_its_permissions(self):
+    def test_host_profile_with_route_environment_deploys_and_keeps_it(self):
+        self.test_host_profile_deploys_and_keeps_its_permissions(
+            {
+                "profile": "host",
+                "provider_home": "/home/example/claude-host-sessions",
+                "route_environment": "/home/example/private/claude-route.environment",
+            }
+        )
+
+    def test_host_profile_refuses_unknown_permission_keys(self):
+        with self.assertRaisesRegex(hub_deploy.Refused, "invalid Claude host permissions"):
+            hub_deploy._host_permissions(
+                {"profile": "host", "provider_home": "/home/example/x", "other": "x"}
+            )
+
+    def test_host_profile_deploys_and_keeps_its_permissions(self, host=None):
         config = self.configs / f"claude-{self.old_sha[:7]}.json"
         data = json.loads(config.read_text())
-        host = {"profile": "host", "provider_home": "/home/example/claude-host-sessions"}
+        host = host or {"profile": "host", "provider_home": "/home/example/claude-host-sessions"}
         data["claude_file_permissions"] = host
         config.write_text(json.dumps(data))
         self.hub.write_text(json.dumps(data))
