@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.16] - 2026-11-12
+
 - Claude model menu: without an explicit `model_catalog`, Hub offers the newest
   Anthropic model of each family (Fable, Opus, Sonnet, Haiku) from the CPA
   route's model list instead of only the default (ADR 0103). Proxy aliases for
