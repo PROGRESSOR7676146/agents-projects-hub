@@ -8,6 +8,7 @@ from typing import Callable
 
 from .claude_catalog import (
     ROUTE_SOURCE,
+    claude_route_environment,
     configured_claude_snapshot,
     fetch_route_model_rows,
     route_claude_snapshot,
@@ -88,13 +89,7 @@ def refresh_provider_catalogs(
             continue
         if agent.runtime == "claude":
             before = cache.load(agent.agent_id)
-            route = (
-                config.claude_file_permissions.route_environment
-                if config.claude_file_permissions is not None
-                and agent.auth_route == "cpa"
-                and not agent.model_catalog
-                else None
-            )
+            route = claude_route_environment(config.claude_file_permissions, agent)
             try:
                 if route is None:
                     snapshot = configured_claude_snapshot(

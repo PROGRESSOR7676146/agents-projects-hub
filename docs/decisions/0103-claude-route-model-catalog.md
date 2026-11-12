@@ -19,9 +19,16 @@ aliases under `claude-…` names that route a Claude client to other providers.
    `claude-<fable|opus|sonnet|haiku>-<version>` and offers the newest of each
    family, plus the configured default. Fable, Opus and Sonnet offer every
    supported effort; Haiku offers the configured default effort only.
-3. The Controller stays cache-only: it shows the saved route catalog when it
-   still contains the default model and effort, else the configured fallback.
-   A failed refresh keeps the last good catalog.
+3. The Controller stays cache-only: it shows the saved route catalog when the
+   agent still qualifies for route discovery and the catalog contains the
+   default model and effort, else the configured fallback. A file lock makes the
+   monitor's route store and the Controller's fallback store exclusive, and the
+   fallback rechecks under it, so it never replaces a route catalog. A failed
+   refresh keeps the last good catalog.
+4. A configured default that the route lists under another provider fails the
+   refresh visibly. Versions compare by major, minor (one or two digits) and
+   date, with undated identifiers ranking as current. The request has a 15 s
+   overall deadline, and HTTP protocol errors count as refresh failures.
 
 ## Consequences
 
