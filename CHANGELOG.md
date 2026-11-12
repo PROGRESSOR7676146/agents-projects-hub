@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Fix: `hub_deploy` refused installations whose host `claude_file_permissions`
+  carried the optional `route_environment` (ADR 0101) as invalid; it now accepts
+  that key and still refuses any other.
+
 ## [0.11.16] - 2026-11-12
 
 - Claude model menu: without an explicit `model_catalog`, Hub offers the newest
