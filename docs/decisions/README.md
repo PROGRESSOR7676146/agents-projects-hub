@@ -126,4 +126,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0099: Early understanding and Claude progress](0099-early-understanding-and-claude-progress.md) — contract v3 for Codex and Claude asks for an early understanding message and regular updates; Claude interim texts are delivered as progress.
 - [0101: Claude local CLI hand-off](0101-claude-local-cli-handoff.md) — `/local` for the Claude host profile opens the same session in the terminal through a Hub command under a shared writer lock; no credential in Telegram.
 - [0102: Images for the Claude host profile](0102-claude-host-images.md) — with streamed input enabled, images ride in the initial frame of that channel under the existing bounds and replay check.
+- [0103: Claude model catalog from the route](0103-claude-route-model-catalog.md) — without an explicit catalog, the newest Anthropic model per family from the loopback route's model list, read by the monitor without inference.
 - [0100: Background work with automatic resume](0100-deferred-background-resume.md) — deferred by the owner; agents keep bounded waits; reopening criteria recorded.

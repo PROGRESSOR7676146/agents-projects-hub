@@ -55,11 +55,15 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-secur
     retain the saved footer and recovery cannot borrow later state.
 - **REQ-CMD-002 (Implemented):** One cascaded model selector MUST show current choices and validate
   the displayed catalog snapshot; final selection MUST be local and model-free. Claude choices MUST
-  come from bounded valid local configuration including the default, be labelled
-  availability-unverified, and confer no entitlement, effort or billing proof.
+  come from bounded valid local configuration including the default or, without an explicit
+  catalog, from the newest Anthropic-owned model per family in the configured loopback route's
+  model metadata plus the default (ADR 0103); they MUST be labelled availability-unverified and
+  confer no entitlement, effort or billing proof. Route aliases owned by other providers MUST NOT
+  become Claude choices.
 - **REQ-CMD-002A (Implemented):** Discovery MUST preserve a private last-good catalog, bounded
   opaque paginated choices and cache-only Controller operation; failed refresh MUST retain choices
-  and warn only after 24 hours without success. Claude refresh MUST be local-only, invalidate
+  and warn only after 24 hours without success. Claude refresh MUST read only local configuration
+  or loopback route model metadata, never inference, invalidate
   removed choices and retain a visibly selected obsolete choice without automatic reset; Codex
   discovery MUST use native metadata without threads, inference or account helpers.
 - **REQ-CMD-003 (Implemented):** Accounts MUST use only private configuration and saved/passive

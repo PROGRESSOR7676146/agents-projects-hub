@@ -6,7 +6,13 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Callable
 
-from .claude_catalog import configured_claude_snapshot
+from .claude_catalog import (
+    ROUTE_SOURCE,
+    claude_route_environment,
+    configured_claude_snapshot,
+    fetch_route_model_rows,
+    route_claude_snapshot,
+)
 from .codex_appserver import CodexAppServerClient, UnixWebSocketTransport
 from .hub_config import HubConfig
 from .model_selection import available_openai_models
@@ -83,11 +89,24 @@ def refresh_provider_catalogs(
             continue
         if agent.runtime == "claude":
             before = cache.load(agent.agent_id)
+            route = claude_route_environment(config.claude_file_permissions, agent)
             try:
-                snapshot = configured_claude_snapshot(
-                    cache, agent, now=observed_at, max_age=max_age
-                )
-            except ProviderCatalogError:
+                if route is None:
+                    snapshot = configured_claude_snapshot(
+                        cache, agent, now=observed_at, max_age=max_age
+                    )
+                elif (
+                    before is not None
+                    and before.source_version == ROUTE_SOURCE
+                    and not cache.is_stale(agent.agent_id, max_age=max_age, now=observed_at)
+                ):
+                    continue
+                else:
+                    # Model metadata from the loopback route; no inference.
+                    snapshot = route_claude_snapshot(
+                        cache, agent, fetch_route_model_rows(route), now=observed_at
+                    )
+            except (ProviderCatalogError, OSError, ValueError):
                 failed.append(agent.agent_id)
                 continue
             if snapshot != before:
