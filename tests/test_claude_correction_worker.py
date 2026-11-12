@@ -165,6 +165,22 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
             worker.run_cycle()
         self.assertEqual(observed, ["executing"])
 
+    def test_correction_waiting_in_the_batch_window_is_admitted_after_it(self) -> None:
+        parent, child = [self.fixture.enqueue(i) for i in (1, 2)]
+        worker = self.worker(self.adapter())
+        # Hub keeps a fresh message queued until its batching deadline; a poll
+        # during that window must wait instead of closing correction admission.
+        deadline = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
+        with worker.state._connection:
+            worker.state._connection.execute(
+                "UPDATE provider_jobs SET next_attempt_at=? WHERE job_id=?", (deadline, child)
+            )
+        worker.run_cycle()
+        row = ClaudeCorrectionState(worker.state._connection).child(parent)
+        assert row is not None
+        self.assertEqual(row["child_job_id"], child)
+        self.assertEqual(worker.state.get_provider_job(parent).status, "result_ready")
+
     def test_default_keeps_correction_queued(self) -> None:
         self.fixture.fixture.config = replace(
             self.fixture.fixture.config, claude_stream_input=False

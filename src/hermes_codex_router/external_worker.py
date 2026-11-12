@@ -40,7 +40,7 @@ from .external_runtime import (
     ProviderUnavailableError,
     take_claude_subscription_tokens,
 )
-from .hub_config import HubConfig
+from .hub_config import HubConfig, claude_image_input_supported
 from .preacceptance_approvals import PreacceptanceApprovalState
 from .project_resolution import (
     ProjectResolutionError,
@@ -1116,7 +1116,9 @@ class ExternalQueueWorker:
         assert isinstance(topic, TopicRecord)
         assert self.adapter is not None
         adapter = self.adapter
-        if self.config.claude_image_input and self.config.claude_file_permissions is not None:
+        if self.config.claude_image_input and not claude_image_input_supported(
+            self.config.claude_file_permissions, self.config.claude_stream_input
+        ):
             raise ProviderUnavailableError(
                 "claude_image_configuration_conflict",
                 "Claude image input cannot be combined with file tools.",

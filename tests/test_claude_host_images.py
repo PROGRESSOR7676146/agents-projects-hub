@@ -176,6 +176,51 @@ assert sys.stdin.read()==''
             self.assertEqual(receipts, [(channel.initial.uuid, 1), (child.uuid, 1)])
 
 
+class ClaudeImageSupportRuleTests(unittest.TestCase):
+    def test_config_and_worker_share_one_rule(self) -> None:
+        from hermes_codex_router.claude_permissions_config import parse_claude_file_permissions
+        from hermes_codex_router.hub_config import claude_image_input_supported
+
+        host = parse_claude_file_permissions(
+            {"profile": "host", "provider_home": "/home/example/claude-sessions"}
+        )
+        self.assertTrue(claude_image_input_supported(None, False))
+        self.assertTrue(claude_image_input_supported(host, True))
+        self.assertFalse(claude_image_input_supported(host, False))
+        self.assertFalse(claude_image_input_supported(None, True))
+
+    def test_worker_does_not_refuse_a_supported_host_image_configuration(self) -> None:
+        from dataclasses import replace
+        from typing import Any, cast
+        from unittest.mock import patch
+
+        from hermes_codex_router.claude_permissions_config import parse_claude_file_permissions
+        from tests import test_claude_native_worker as fixtures
+
+        native = fixtures.ClaudeNativeWorkerTests()
+        native.setUp()
+        self.addCleanup(native.doCleanups)
+        host = parse_claude_file_permissions(
+            {"profile": "host", "provider_home": "/home/example/claude-sessions"}
+        )
+        native.fixture.config = replace(
+            native.fixture.config,
+            claude_image_input=True,
+            claude_stream_input=True,
+            claude_file_permissions=host,
+        )
+        job_id = native.enqueue(1)
+        worker = native.worker(cast(Any, fixtures.ObservingClaudeAdapter(native.path)))
+        job = worker.state.get_provider_job(job_id)
+        topic = worker.state.get_topic(job.topic_id)
+        with patch(
+            "hermes_codex_router.external_worker.prepare_worker_materials",
+            side_effect=RuntimeError("past the configuration guard"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "past the configuration guard"):
+                worker._execute_external(job, "token", native.fixture.registry.projects[0], topic)
+
+
 class ClaudeHostImageConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         from tests import test_claude_image_controls as fixtures
