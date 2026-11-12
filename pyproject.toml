@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agents-projects-hub"
-version = "0.11.15"
+version = "0.11.16"
 description = "Privacy-first orchestration hub for persistent agent sessions in Telegram project topics"
 readme = "README.md"
 license = "MIT"
