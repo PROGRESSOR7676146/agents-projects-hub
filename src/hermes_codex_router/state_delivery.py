@@ -341,6 +341,18 @@ class DeliveryStateFacade:
         current = now or datetime.now(timezone.utc)
         timestamp = self._timestamp(current)
         expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
+        # An empty poll does not need the single SQLite writer. This is only a
+        # hint: any candidate is selected and claimed again under the lock.
+        if (
+            not self._connection.in_transaction
+            and self._connection.execute(
+                "SELECT 1 FROM telegram_outbox WHERE sender_agent_id = ? AND status = 'pending' "
+                "AND available_at <= ? AND attempt_count < 20 LIMIT 1",
+                (sender, timestamp),
+            ).fetchone()
+            is None
+        ):
+            return None
         with self._transaction():
             row = self._connection.execute(
                 f"""SELECT outbox.* FROM telegram_outbox outbox
@@ -556,6 +568,18 @@ class DeliveryStateFacade:
             placeholders = ", ".join("?" for _ in sender_agent_ids)
             agent_filter = f" AND sender_agent_id IN ({placeholders})"
             parameters = (timestamp, *sender_agent_ids)
+        if (
+            not self._connection.in_transaction
+            and self._connection.execute(
+                "SELECT 1 FROM telegram_outbox WHERE status = 'sending' "
+                f"AND lease_expires_at <= ?{agent_filter} LIMIT 1",
+                parameters,
+            ).fetchone()
+            is None
+        ):
+            # Receipts may need settlement even when no sender lease expired.
+            self.recover_receipts("final", sender_agent_ids)
+            return ()
         with self._transaction():
             rows = self._connection.execute(
                 f"""SELECT outbox_id FROM telegram_outbox
@@ -763,6 +787,18 @@ class DeliveryStateFacade:
             return 0
         current = self._utc_now(now).isoformat()
         placeholders = ",".join("?" for _ in sender_agent_ids)
+        if (
+            not self._connection.in_transaction
+            and self._connection.execute(
+                "SELECT 1 FROM provider_progress_deliveries "
+                f"WHERE sender_agent_id IN ({placeholders}) AND status = 'sending' "
+                "AND lease_expires_at <= ? LIMIT 1",
+                (*sender_agent_ids, current),
+            ).fetchone()
+            is None
+        ):
+            self.recover_receipts("progress", tuple(sender_agent_ids))
+            return 0
         with self._transaction():
             changed = self._connection.execute(
                 f"UPDATE provider_progress_deliveries SET "
@@ -787,6 +823,18 @@ class DeliveryStateFacade:
             return 0
         current = self._utc_now(now).isoformat()
         placeholders = ",".join("?" for _ in sender_agent_ids)
+        if (
+            not self._connection.in_transaction
+            and self._connection.execute(
+                "SELECT 1 FROM provider_progress_deliveries progress "
+                "JOIN provider_jobs jobs ON jobs.job_id = progress.job_id "
+                f"WHERE progress.sender_agent_id IN ({placeholders}) "
+                "AND progress.status = 'pending' AND jobs.status != 'executing' LIMIT 1",
+                tuple(sender_agent_ids),
+            ).fetchone()
+            is None
+        ):
+            return 0
         with self._transaction():
             changed = self._connection.execute(
                 "UPDATE provider_progress_deliveries SET status = 'superseded', updated_at = ?, "
@@ -812,6 +860,17 @@ class DeliveryStateFacade:
             raise self._state_error("progress lease must be positive")
         current_dt = self._utc_now(now)
         current = current_dt.isoformat()
+        if (
+            not self._connection.in_transaction
+            and self._connection.execute(
+                "SELECT 1 FROM provider_progress_deliveries "
+                "WHERE sender_agent_id = ? AND status = 'pending' "
+                "AND available_at <= ? AND attempt_count < ? LIMIT 1",
+                (sender_agent_id, current, MAX_PROGRESS_ATTEMPTS),
+            ).fetchone()
+            is None
+        ):
+            return None
         with self._transaction():
             row = self._connection.execute(
                 "SELECT progress.progress_id FROM provider_progress_deliveries progress "

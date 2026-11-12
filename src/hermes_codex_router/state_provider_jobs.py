@@ -27,6 +27,10 @@ from .queue_visibility import QueueVisibilityState
 from .stop_coverage import STOP_COVERS_JOB_SQL, pending_stop_for_job, stop_covers
 from .telegram_turn_provenance import TelegramTurnProvenance
 
+# Refresh well before the two-minute scheduler freshness window, including
+# while the worker has no queued jobs. A changed capacity is never deferred.
+IDLE_SCHEDULER_REFRESH = timedelta(seconds=10)
+
 # A stop is complete once none of its covered work can still start or run: a
 # follow-up that is leased, or that a rejected steering call returned to the
 # queue, keeps the stop pending even after the parent turn was cancelled. The
@@ -755,6 +759,25 @@ class ProviderJobsStateFacade:
         current = now or datetime.now(timezone.utc)
         timestamp = self._timestamp(current)
         expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
+        if not self._connection.in_transaction:
+            pending = self._connection.execute(
+                "SELECT 1 FROM provider_jobs WHERE agent_id = ? "
+                "AND status IN ('queued', 'retry_wait') LIMIT 1",
+                (target_agent,),
+            ).fetchone()
+            if pending is None:
+                if not scheduled_agents:
+                    return None
+                slot_declarations = _parallel_worker_declarations(target_agent)
+                declaration_key = worker if worker in slot_declarations else target_agent
+                fresh_after = self._timestamp(current - IDLE_SCHEDULER_REFRESH)
+                declaration = self._connection.execute(
+                    "SELECT 1 FROM execution_scheduler_workers WHERE agent_id = ? "
+                    "AND declared_capacity = ? AND observed_at >= ?",
+                    (declaration_key, max_parallel_roots, fresh_after),
+                ).fetchone()
+                if declaration is not None:
+                    return None
         with self._transaction():
             freshness = self._timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
             placeholders = ", ".join("?" for _ in scheduled_agents)
@@ -1332,6 +1355,16 @@ class ProviderJobsStateFacade:
         params: tuple[object, ...] = (timestamp,)
         if target_agent is not None:
             params += (target_agent,)
+        if (
+            not self._connection.in_transaction
+            and self._connection.execute(
+                "SELECT 1 FROM provider_jobs WHERE status IN ('leased', 'executing') "
+                "AND lease_expires_at <= ? " + scope + " LIMIT 1",
+                params,
+            ).fetchone()
+            is None
+        ):
+            return ProviderJobRecovery((), ())
         with self._transaction():
             leased = self._connection.execute(
                 "SELECT job_id FROM provider_jobs "
