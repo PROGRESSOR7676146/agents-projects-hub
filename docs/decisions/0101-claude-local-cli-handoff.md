@@ -35,6 +35,16 @@ shell would neither find the session nor use the route.
    resumes the same native session, which already contains the local work. No
    transcript is copied.
 
+Amendment 2026-11-12 (installed check): the interactive CLI opened its
+first-run screens on a Hub session directory (theme wizard, then a folder-trust
+prompt whose default exits, then an external-imports prompt). Before exec the
+command now records, in that session directory only, the owner's theme,
+onboarding done, trust for the registered root, the host profile's own bypass
+prompt choice, and the external-imports dialog's default (imports off), keeping
+all other keys. It also drops markers of a calling Claude Code session, which
+otherwise turned transcript saving off. The `/return` summary is requested in
+the conversation's language.
+
 ## Consequences
 
 - The owner continues a Telegram conversation in the terminal and back, with

@@ -12,6 +12,11 @@ and releases use semantic versioning while the public API is still evolving.
   made every Claude turn fail before invocation because the worker kept an
   older "no images with file tools" guard. Configuration and worker now share
   one rule (ADR 0102).
+- Fix: the Claude `/local` command opened the CLI's first-run screens (theme,
+  folder trust with a default that exits, external imports) instead of the
+  conversation, and a calling Claude Code session's marker could turn off
+  transcript saving; the `/return` summary now uses the conversation's
+  language (ADR 0101).
 - Fix: the reply footer flagged a new session's first cache write as a large
   cache write; the threshold is now 50k written tokens (ADR 0098).
 

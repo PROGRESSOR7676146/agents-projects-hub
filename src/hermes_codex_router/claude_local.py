@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import stat
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -136,13 +137,68 @@ def local_environment(base: dict[str, str], route: dict[str, str], home: Path) -
     environment = {
         key: value
         for key, value in base.items()
-        if not key.startswith(("ANTHROPIC_", "CLAUDE_CODE_USE_", "AWS_", "GOOGLE_CLOUD_"))
-        and key not in {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"}
+        # Also drop markers of a calling Claude Code session (for example
+        # CLAUDE_CODE_CHILD_SESSION), which would turn off transcript saving.
+        if not key.startswith(("ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "GOOGLE_CLOUD_"))
+        and key not in {"CLAUDE_CONFIG_DIR", "CLAUDECODE"}
     }
     environment.update(route)
     environment["CLAUDE_CONFIG_DIR"] = str(home)
     environment.setdefault("CLAUDE_CODE_PROMPT_CACHE_TTL", "1h")
     return environment
+
+
+def _merge_private_json(path: Path, update: Callable[[dict[str, object]], None]) -> None:
+    """Atomically merge keys into a private JSON file, keeping everything else."""
+    try:
+        current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        current = {}
+    if not isinstance(current, dict):
+        current = {}
+    update(current)
+    temporary = path.with_name(path.name + ".hub-tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(current, stream, indent=2)
+    os.replace(temporary, path)
+
+
+def prepare_interactive_session(home: Path, root: Path, owner_home: Path) -> None:
+    """Skip the CLI's first-run screens for a session Hub already runs headless.
+
+    Without this the hand-off opens a theme wizard and a folder-trust prompt
+    whose default answer exits. The owner's theme is reused; trust covers only
+    the registered root; the bypass prompt is the host profile's own choice.
+    """
+    theme = "dark"
+    try:
+        owner = json.loads((owner_home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        if isinstance(owner, dict) and isinstance(owner.get("theme"), str):
+            theme = owner["theme"]
+    except (OSError, ValueError):
+        pass
+
+    def settings(values: dict[str, object]) -> None:
+        values.setdefault("theme", theme)
+        values["skipDangerousModePermissionPrompt"] = True
+
+    def state(values: dict[str, object]) -> None:
+        values["hasCompletedOnboarding"] = True
+        projects = values.get("projects")
+        if not isinstance(projects, dict):
+            projects = values["projects"] = {}
+        project = projects.get(str(root))
+        if not isinstance(project, dict):
+            project = projects[str(root)] = {}
+        project["hasTrustDialogAccepted"] = True
+        # Keep the dialog's own default (external CLAUDE.md imports off), as for
+        # Hub turns, without stopping the hand-off on that question.
+        project.setdefault("hasClaudeMdExternalIncludesApproved", False)
+        project["hasClaudeMdExternalIncludesWarningShown"] = True
+
+    _merge_private_json(home / "settings.json", settings)
+    _merge_private_json(home / ".claude.json", state)
 
 
 def _fail(message: str) -> int:
@@ -216,6 +272,12 @@ def main(argv: list[str] | None = None) -> int:
             os.close(lock)
         detail = str(error) if type(error) is ValueError else type(error).__name__
         return _fail(f"the session could not be opened locally ({detail})")
+    try:
+        prepare_interactive_session(home, root, Path.home())
+        validate_host_route_settings(root, home)
+    except (OSError, ValueError) as error:
+        os.close(lock)
+        return _fail(f"the session could not be opened locally ({type(error).__name__})")
     # The lock descriptor stays open through exec and in every CLI child, so a
     # Hub turn cannot start until the whole local session has exited.
     os.set_inheritable(lock, True)

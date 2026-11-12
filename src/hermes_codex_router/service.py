@@ -3290,10 +3290,10 @@ class ProjectHubService:
                 )
                 return True
             summary_prompt = (
-                "Summarize only the work completed through the local CLI since Telegram "
-                "handed this session over. Do not use tools. Do not include hidden reasoning, "
-                "credentials, raw terminal output, or unrelated history. Return at most 1200 "
-                "characters with three headings: Completed, Verified, Next."
+                "Summarize only the work done in the local CLI since Telegram handed this session "
+                "over, in the conversation's language. Do not use tools. Exclude hidden reasoning, "
+                "credentials, raw terminal output and unrelated history. Return at most 1200 chars "
+                "with three headings: Completed, Verified, Next."
             )
             if self._queue_enabled(session.agent_id):
                 return self._enqueue_provider_turn(
