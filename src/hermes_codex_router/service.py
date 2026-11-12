@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from .catalog_refresh import native_codex_catalog_source
-from .claude_catalog import configured_claude_snapshot
+from .claude_catalog import cached_claude_snapshot, configured_claude_snapshot
 from .codex_appserver import (
     CodexAppServerClient,
     RpcError,
@@ -1473,7 +1473,9 @@ class ProjectHubService:
         cache = self._catalog_cache()
         agent = self.config.require_agent(agent_id)
         if agent.runtime == "claude":
-            return configured_claude_snapshot(cache, agent, refresh=refresh, max_age=max_age)
+            return cached_claude_snapshot(cache, agent) or configured_claude_snapshot(
+                cache, agent, refresh=refresh, max_age=max_age
+            )
         if agent.managed_externally:
             # The native gateway owns this provider process. Even an explicit
             # refresh callback must remain local-data-only in the Controller.
@@ -1562,7 +1564,7 @@ class ProjectHubService:
         if cached is None:
             raise ProviderCatalogError("model selection expired; run /model again")
         if agent.runtime == "claude":
-            return configured_claude_snapshot(cache, agent)
+            return cached_claude_snapshot(cache, agent) or configured_claude_snapshot(cache, agent)
         if agent.runtime == "codex":
             cached = self._safe_cached_codex_catalog(cache, agent_id, cached)
         return cached
