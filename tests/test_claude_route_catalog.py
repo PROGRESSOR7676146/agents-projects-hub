@@ -142,6 +142,13 @@ class ClaudeRouteCatalogTests(unittest.TestCase):
         assert saved is not None
         self.assertEqual(saved.source_version, ROUTE_SOURCE)
 
+    def test_first_store_works_before_the_cache_directory_exists(self) -> None:
+        cache = ProviderCatalogCache(self.base / "fresh" / "provider-model-catalogs.json")
+        shown = controller_claude_snapshot(cache, agent(), self.permissions)
+        self.assertEqual(shown.source_version, CONFIGURED_SOURCE)
+        cache = ProviderCatalogCache(self.base / "fresh2" / "provider-model-catalogs.json")
+        self.assertEqual(route_claude_snapshot(cache, agent(), ROWS).source_version, ROUTE_SOURCE)
+
     def test_fetch_errors_and_slow_responses_become_catalog_failures(self) -> None:
         import http.client
 

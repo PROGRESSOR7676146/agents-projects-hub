@@ -38,6 +38,7 @@ _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
 @contextmanager
 def catalog_write_lock(cache: ProviderCatalogCache) -> Iterator[None]:
     """Serialize the monitor's route store with the Controller's fallback store."""
+    cache.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(
         cache.path.with_name(cache.path.name + ".lock"),
         os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
