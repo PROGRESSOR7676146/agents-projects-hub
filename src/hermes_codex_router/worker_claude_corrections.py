@@ -61,9 +61,10 @@ def correction_callbacks(
                 (parent,),
             ).fetchone()
             if waiting is not None and waiting[0] is not None:
-                # Hub keeps a fresh message queued until its batching deadline;
-                # wait for it instead of treating it as an incompatible head.
-                if str(waiting[0]) > datetime.now(timezone.utc).isoformat():
+                # A queued head that is not yet eligible (Hub keeps a fresh
+                # message until its batching deadline) is waited for, not
+                # treated as an incompatible head that closes admission.
+                if datetime.fromisoformat(str(waiting[0])) > datetime.now(timezone.utc):
                     return None
             if waiting is not None:
                 revalidate_root()

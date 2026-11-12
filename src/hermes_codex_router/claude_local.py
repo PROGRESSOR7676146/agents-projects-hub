@@ -14,6 +14,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -24,6 +25,18 @@ WRITER_LOCK_NAME = ".hub-writer.lock"
 _ROUTE_KEYS = frozenset({"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"})
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _CLAUDE_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+# Other credentials, and markers of a calling Claude Code session: an inherited
+# CLAUDE_CODE_CHILD_SESSION turns the local CLI's transcript saving off.
+_DROPPED_KEYS = frozenset(
+    {
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    }
+)
 
 
 class ClaudeSessionBusy(RuntimeError):
@@ -137,10 +150,8 @@ def local_environment(base: dict[str, str], route: dict[str, str], home: Path) -
     environment = {
         key: value
         for key, value in base.items()
-        # Also drop markers of a calling Claude Code session (for example
-        # CLAUDE_CODE_CHILD_SESSION), which would turn off transcript saving.
-        if not key.startswith(("ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "GOOGLE_CLOUD_"))
-        and key not in {"CLAUDE_CONFIG_DIR", "CLAUDECODE"}
+        if not key.startswith(("ANTHROPIC_", "CLAUDE_CODE_USE_", "AWS_", "GOOGLE_CLOUD_"))
+        and key not in _DROPPED_KEYS
     }
     environment.update(route)
     environment["CLAUDE_CONFIG_DIR"] = str(home)
@@ -149,19 +160,27 @@ def local_environment(base: dict[str, str], route: dict[str, str], home: Path) -
 
 
 def _merge_private_json(path: Path, update: Callable[[dict[str, object]], None]) -> None:
-    """Atomically merge keys into a private JSON file, keeping everything else."""
-    try:
-        current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except (OSError, ValueError):
-        current = {}
-    if not isinstance(current, dict):
+    """Atomically merge keys into a private JSON object file, keeping everything else.
+
+    A missing file starts empty; an unreadable or non-object file refuses, so
+    existing state is never replaced by a partial copy.
+    """
+    if path.exists() or path.is_symlink():
+        current = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(current, dict):
+            raise ValueError(f"{path.name} is not a JSON object")
+    else:
         current = {}
     update(current)
-    temporary = path.with_name(path.name + ".hub-tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(current, stream, indent=2)
-    os.replace(temporary, path)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(current, stream, indent=2)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def prepare_interactive_session(home: Path, root: Path, owner_home: Path) -> None:
@@ -172,12 +191,14 @@ def prepare_interactive_session(home: Path, root: Path, owner_home: Path) -> Non
     the registered root; the bypass prompt is the host profile's own choice.
     """
     theme = "dark"
-    try:
-        owner = json.loads((owner_home / ".claude" / "settings.json").read_text(encoding="utf-8"))
-        if isinstance(owner, dict) and isinstance(owner.get("theme"), str):
-            theme = owner["theme"]
-    except (OSError, ValueError):
-        pass
+    for source in (owner_home / ".claude.json", owner_home / ".claude" / "settings.json"):
+        try:
+            values = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(values, dict) and isinstance(values.get("theme"), str):
+            theme = values["theme"]
+            break
 
     def settings(values: dict[str, object]) -> None:
         values.setdefault("theme", theme)
@@ -185,6 +206,7 @@ def prepare_interactive_session(home: Path, root: Path, owner_home: Path) -> Non
 
     def state(values: dict[str, object]) -> None:
         values["hasCompletedOnboarding"] = True
+        values.setdefault("theme", theme)
         projects = values.get("projects")
         if not isinstance(projects, dict):
             projects = values["projects"] = {}
