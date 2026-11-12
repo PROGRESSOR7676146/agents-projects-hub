@@ -1052,6 +1052,18 @@ def _parse_project_provisioning(
     )
 
 
+def claude_image_input_supported(
+    permissions: ClaudeFilePermissionsConfig | None, stream_input: bool
+) -> bool:
+    """Images use the tools-disabled runner, or the host profile's streamed channel.
+
+    Configuration and the worker share this rule so they cannot disagree.
+    """
+    if permissions is None and not stream_input:
+        return True
+    return permissions is not None and permissions.profile == "host" and stream_input
+
+
 def load_hub_config(
     path: Path,
     *,
@@ -1144,13 +1156,8 @@ def load_hub_config(
         for agent in agents
     ):
         raise HubConfigError("claude_file_permissions requires an external Claude worker")
-    # Images and streamed corrections share one input channel only under the
-    # unconfined host profile; confined profiles keep their separate image path.
-    host = claude_file_permissions is not None and claude_file_permissions.profile == "host"
-    if (
-        claude_image_input
-        and (claude_file_permissions is not None or claude_stream_input)
-        and not (host and claude_stream_input)
+    if claude_image_input and not claude_image_input_supported(
+        claude_file_permissions, claude_stream_input
     ):
         raise HubConfigError(
             "claude_image_input combines with claude_file_permissions or claude_stream_input "

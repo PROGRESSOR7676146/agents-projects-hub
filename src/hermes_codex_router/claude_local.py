@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import stat
 import sys
+import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -23,6 +25,18 @@ WRITER_LOCK_NAME = ".hub-writer.lock"
 _ROUTE_KEYS = frozenset({"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"})
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _CLAUDE_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+# Other credentials, and markers of a calling Claude Code session: an inherited
+# CLAUDE_CODE_CHILD_SESSION turns the local CLI's transcript saving off.
+_DROPPED_KEYS = frozenset(
+    {
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    }
+)
 
 
 class ClaudeSessionBusy(RuntimeError):
@@ -137,12 +151,76 @@ def local_environment(base: dict[str, str], route: dict[str, str], home: Path) -
         key: value
         for key, value in base.items()
         if not key.startswith(("ANTHROPIC_", "CLAUDE_CODE_USE_", "AWS_", "GOOGLE_CLOUD_"))
-        and key not in {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"}
+        and key not in _DROPPED_KEYS
     }
     environment.update(route)
     environment["CLAUDE_CONFIG_DIR"] = str(home)
     environment.setdefault("CLAUDE_CODE_PROMPT_CACHE_TTL", "1h")
     return environment
+
+
+def _merge_private_json(path: Path, update: Callable[[dict[str, object]], None]) -> None:
+    """Atomically merge keys into a private JSON object file, keeping everything else.
+
+    A missing file starts empty; an unreadable or non-object file refuses, so
+    existing state is never replaced by a partial copy.
+    """
+    if path.exists() or path.is_symlink():
+        current = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(current, dict):
+            raise ValueError(f"{path.name} is not a JSON object")
+    else:
+        current = {}
+    update(current)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(current, stream, indent=2)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def prepare_interactive_session(home: Path, root: Path, owner_home: Path) -> None:
+    """Skip the CLI's first-run screens for a session Hub already runs headless.
+
+    Without this the hand-off opens a theme wizard and a folder-trust prompt
+    whose default answer exits. The owner's theme is reused; trust covers only
+    the registered root; the bypass prompt is the host profile's own choice.
+    """
+    theme = "dark"
+    for source in (owner_home / ".claude.json", owner_home / ".claude" / "settings.json"):
+        try:
+            values = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(values, dict) and isinstance(values.get("theme"), str):
+            theme = values["theme"]
+            break
+
+    def settings(values: dict[str, object]) -> None:
+        values.setdefault("theme", theme)
+        values["skipDangerousModePermissionPrompt"] = True
+
+    def state(values: dict[str, object]) -> None:
+        values["hasCompletedOnboarding"] = True
+        values.setdefault("theme", theme)
+        projects = values.get("projects")
+        if not isinstance(projects, dict):
+            projects = values["projects"] = {}
+        project = projects.get(str(root))
+        if not isinstance(project, dict):
+            project = projects[str(root)] = {}
+        project["hasTrustDialogAccepted"] = True
+        # Keep the dialog's own default (external CLAUDE.md imports off), as for
+        # Hub turns, without stopping the hand-off on that question.
+        project.setdefault("hasClaudeMdExternalIncludesApproved", False)
+        project["hasClaudeMdExternalIncludesWarningShown"] = True
+
+    _merge_private_json(home / "settings.json", settings)
+    _merge_private_json(home / ".claude.json", state)
 
 
 def _fail(message: str) -> int:
@@ -216,6 +294,12 @@ def main(argv: list[str] | None = None) -> int:
             os.close(lock)
         detail = str(error) if type(error) is ValueError else type(error).__name__
         return _fail(f"the session could not be opened locally ({detail})")
+    try:
+        prepare_interactive_session(home, root, Path.home())
+        validate_host_route_settings(root, home)
+    except (OSError, ValueError) as error:
+        os.close(lock)
+        return _fail(f"the session could not be opened locally ({type(error).__name__})")
     # The lock descriptor stays open through exec and in every CLI child, so a
     # Hub turn cannot start until the whole local session has exited.
     os.set_inheritable(lock, True)

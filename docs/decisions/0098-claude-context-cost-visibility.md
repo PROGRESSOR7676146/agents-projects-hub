@@ -25,7 +25,7 @@ not say which limit applied.
    A turn summary keeps request count, subagent request count, last and maximum
    request context (input + cache read + cache write), cache writes with their
    5m/1h split, cache reads, output, and the number of suspected large cache
-   writes (a write above half of that request's context, at least 20k tokens).
+   writes (a write above half of that request's context, at least 50k tokens, so a new session's first write is not flagged).
    Missing fields stay unknown; a request without usage, a compaction after the
    last request, or requests beyond the tracking bound make the current context
    unknown. Only these numbers are kept.

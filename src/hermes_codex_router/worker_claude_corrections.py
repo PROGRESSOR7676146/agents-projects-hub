@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -53,10 +54,18 @@ def correction_callbacks(
         # an input. A change cannot retarget the existing process or its hook.
         try:
             waiting = state._connection.execute(
-                "SELECT 1 FROM provider_jobs child JOIN provider_jobs parent ON parent.topic_id=child.topic_id "
-                "WHERE parent.job_id=? AND child.topic_sequence>parent.topic_sequence AND child.status='queued' LIMIT 1",
+                "SELECT child.next_attempt_at FROM provider_jobs child JOIN provider_jobs parent "
+                "ON parent.topic_id=child.topic_id WHERE parent.job_id=? "
+                "AND child.topic_sequence>parent.topic_sequence AND child.status='queued' "
+                "ORDER BY child.topic_sequence LIMIT 1",
                 (parent,),
             ).fetchone()
+            if waiting is not None and waiting[0] is not None:
+                # A queued head that is not yet eligible (Hub keeps a fresh
+                # message until its batching deadline) is waited for, not
+                # treated as an incompatible head that closes admission.
+                if datetime.fromisoformat(str(waiting[0])) > datetime.now(timezone.utc):
+                    return None
             if waiting is not None:
                 revalidate_root()
         except Exception as exc:

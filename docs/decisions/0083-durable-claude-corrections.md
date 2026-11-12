@@ -4,6 +4,11 @@ Status: implemented offline; activation and native/Telegram acceptance pending.
 Amendment 2026-11-11: the owned `host` profile (ADR 0095) passes corrections
 through the same branch; an offline real-subprocess test covers a correction
 and interim progress (ADR 0099) on that branch.
+Amendment 2026-11-12 (installed check): Hub keeps a fresh message queued until
+its batching deadline; the worker treated such a not-yet-due successor as an
+incompatible head and closed admission on its first 0.25 s poll, so no
+correction was ever admitted. A successor inside its batching window now makes
+the worker wait and poll again.
 Date: 2026-10-30
 Owner: Hub maintainer; sole implementation writer: primary development agent.
 Contract: [REQ-ROUTE-010](../product/IDENTITY_AND_INTERACTION.md).

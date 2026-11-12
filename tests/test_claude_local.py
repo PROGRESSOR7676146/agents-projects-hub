@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 import unittest
 from dataclasses import replace
@@ -94,15 +95,69 @@ class ClaudeLocalTests(unittest.TestCase):
                 "CLAUDE_CODE_OAUTH_TOKEN": "other",
                 "CLAUDE_CONFIG_DIR": "/elsewhere",
                 "CLAUDE_CODE_USE_BEDROCK": "1",
+                "CLAUDE_CODE_CHILD_SESSION": "1",
+                "CLAUDECODE": "1",
+                "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m",
             },
             {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": TOKEN},
             self.home,
         )
         self.assertEqual(environment["PATH"], "/usr/bin")
         self.assertEqual(environment["CLAUDE_CONFIG_DIR"], str(self.home))
-        self.assertEqual(environment["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h")
-        for key in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK"):
+        self.assertEqual(environment["CLAUDE_CODE_PROMPT_CACHE_TTL"], "5m")
+        for key in (
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDECODE",
+        ):
             self.assertNotIn(key, environment)
+
+    def test_interactive_session_skips_first_run_screens_and_keeps_other_state(self) -> None:
+        import json
+
+        owner = self.base / "owner"
+        (owner / ".claude").mkdir(parents=True)
+        (owner / ".claude" / "settings.json").write_text('{"theme": "light"}')
+        (self.home / ".claude.json").write_text('{"userID": "example", "projects": {}}')
+        root = self.base / "project"
+        claude_local.prepare_interactive_session(self.home, root, owner)
+        state = json.loads((self.home / ".claude.json").read_text())
+        self.assertEqual(state["userID"], "example")
+        self.assertTrue(state["hasCompletedOnboarding"])
+        project = state["projects"][str(root)]
+        self.assertTrue(project["hasTrustDialogAccepted"])
+        self.assertFalse(project["hasClaudeMdExternalIncludesApproved"])
+        self.assertTrue(project["hasClaudeMdExternalIncludesWarningShown"])
+        self.assertEqual(state["theme"], "light")
+        settings = json.loads((self.home / "settings.json").read_text())
+        self.assertEqual(settings, {"theme": "light", "skipDangerousModePermissionPrompt": True})
+        self.assertEqual(stat.S_IMODE((self.home / "settings.json").stat().st_mode), 0o600)
+        self.assertEqual(
+            sorted(
+                path.name
+                for path in self.home.iterdir()
+                if ".hub" in path.name or path.name.startswith(".settings")
+            ),
+            [],
+        )
+
+    def test_owner_theme_from_global_state_and_malformed_session_state_is_kept(self) -> None:
+        import json
+
+        owner = self.base / "owner"
+        owner.mkdir()
+        (owner / ".claude.json").write_text('{"theme": "light-daltonized"}')
+        root = self.base / "project"
+        claude_local.prepare_interactive_session(self.home, root, owner)
+        self.assertEqual(
+            json.loads((self.home / ".claude.json").read_text())["theme"], "light-daltonized"
+        )
+        (self.home / ".claude.json").write_text("{not json")
+        with self.assertRaises(ValueError):
+            claude_local.prepare_interactive_session(self.home, root, owner)
+        self.assertEqual((self.home / ".claude.json").read_text(), "{not json")
 
     def test_writer_lock_admits_one_holder(self) -> None:
         first = acquire_writer_lock(self.home)

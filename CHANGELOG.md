@@ -5,6 +5,21 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Fix: Claude corrections were never admitted while Hub's message batching
+  window was open (always, at the first poll); the worker now waits for the
+  successor's batching deadline instead of closing admission (ADR 0083).
+- Fix: with the host profile and streamed input, enabling `claude_image_input`
+  made every Claude turn fail before invocation because the worker kept an
+  older "no images with file tools" guard. Configuration and worker now share
+  one rule (ADR 0102).
+- Fix: the Claude `/local` command opened the CLI's first-run screens (theme,
+  folder trust with a default that exits, external imports) instead of the
+  conversation, and a calling Claude Code session's marker could turn off
+  transcript saving; the `/return` summary now uses the conversation's
+  language (ADR 0101).
+- Fix: the reply footer flagged a new session's first cache write as a large
+  cache write; the threshold is now 50k written tokens (ADR 0098).
+
 ## [0.11.15] - 2026-11-12
 
 - Images for Claude under the host profile (ADR 0102): with

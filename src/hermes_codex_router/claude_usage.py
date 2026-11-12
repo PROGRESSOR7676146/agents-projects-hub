@@ -13,11 +13,11 @@ from collections.abc import Callable
 
 USAGE_METADATA_KEY = "claude_usage_v1"
 LARGE_CONTEXT_TOKENS = 150_000
-# A cache write of at least 20k tokens covering most of a request's context means
+# A cache write of at least 50k tokens covering most of a request's context means
 # the cached prefix was rebuilt (expiry, prefix change or compaction); the cause
 # is not known.
 _LARGE_WRITE_SHARE = 0.5
-_LARGE_WRITE_MIN_TOKENS = 20_000
+_LARGE_WRITE_MIN_TOKENS = 50_000
 _MAX_TRACKED_REQUESTS = 10_000
 _MAX_TOKENS = 100_000_000
 

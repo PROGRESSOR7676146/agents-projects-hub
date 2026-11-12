@@ -130,9 +130,10 @@ class ClaudeUsageObserverTests(unittest.TestCase):
         self.assertEqual(summary["requests"], 1)
         self.assertIsNone(summary["last_context"])
 
-    def test_large_write_needs_at_least_twenty_thousand_written_tokens(self) -> None:
-        small = summarize(assistant("msg-1", request_usage(input=15_000, write=16_000)))
-        large = summarize(assistant("msg-1", request_usage(input=15_000, write=20_000)))
+    def test_large_write_needs_at_least_fifty_thousand_written_tokens(self) -> None:
+        # A fresh session's first write (~23k: system prompt and tools) is expected.
+        small = summarize(assistant("msg-1", request_usage(input=15_000, write=23_000)))
+        large = summarize(assistant("msg-1", request_usage(input=15_000, write=50_000)))
         assert small is not None and large is not None
         self.assertEqual((small["large_cache_writes"], large["large_cache_writes"]), (0, 1))
 
