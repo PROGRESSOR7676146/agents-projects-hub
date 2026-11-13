@@ -7,6 +7,12 @@ closed with `ROLLED_BACK`, and the next same-schema window was `ACCEPTED` with
 every component converged on the release. The fixture tests remain the
 regression evidence for each path.
 
+Do not use standalone `apply` or `deploy` to execute a live restart: their
+service stops bypass `MaintenanceWindow`, and their idle checks do not close
+admission. Their journaled rollback does not replace the runbook's restoration.
+Live restarts need a separately reviewed executor and an independent outcome
+observer as required by the [Hub restart procedure](HUB_RESTART.ru.md).
+
 The source now validates the following version 1 input. All values below are
 fictional; paths must be absolute, canonical and already exist. The ops
 directory must be private, and both ops and releases directories must be owned
