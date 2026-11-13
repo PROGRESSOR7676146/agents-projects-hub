@@ -392,7 +392,7 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(len(environments), 1)
         self.assertEqual(
             environments[0]["PYTHONPATH"].split(os.pathsep),
-            [str(validator.ROOT / "src"), str(validator.ROOT / "tests"), "/home/example/src"],
+            [str(validator.ROOT / "tests"), str(validator.ROOT / "src"), "/home/example/src"],
         )
 
     def test_validation_children_import_the_current_checkout_before_another_one(self) -> None:
@@ -425,6 +425,24 @@ class ValidationTests(unittest.TestCase):
                                 check=True,
                             )
                         self.assertEqual(result.read_text(encoding="utf-8"), "current")
+
+                (current / "tests").mkdir()
+                (current / "src" / "fictional_fixture.py").write_text("VALUE = 'source'\n")
+                (current / "tests" / "fictional_fixture.py").write_text("VALUE = 'fixture'\n")
+                sibling_result = root / "sibling-result"
+                subprocess.run(
+                    (
+                        sys.executable,
+                        "-c",
+                        "import pathlib, sys, fictional_fixture; "
+                        "pathlib.Path(sys.argv[1]).write_text(fictional_fixture.VALUE)",
+                        str(sibling_result),
+                    ),
+                    cwd=current,
+                    env=validator.sibling_import_environment(current),
+                    check=True,
+                )
+                self.assertEqual(sibling_result.read_text(encoding="utf-8"), "fixture")
 
     def test_focused_without_selection_is_static_only(self) -> None:
         code, calls, _ = self.invoke(["--profile", "focused"])

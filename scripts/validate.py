@@ -30,9 +30,8 @@ def tool(name: str) -> str:
 def checkout_import_environment(root: Path, *, include_tests: bool = False) -> dict[str, str]:
     """Bind validation to this checkout even when Python is installed from another one."""
     environment = os.environ.copy()
-    paths = [str(root / "src")]
-    if include_tests:
-        paths.append(str(root / "tests"))
+    paths = [str(root / "tests")] if include_tests else []
+    paths.append(str(root / "src"))
     inherited = environment.get("PYTHONPATH")
     if inherited:
         paths.append(inherited)

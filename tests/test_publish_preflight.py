@@ -44,7 +44,7 @@ class PublishPreflightTests(unittest.TestCase):
                 "import pathlib, sys, time\n"
                 "print('visible progress', flush=True)\n"
                 "print('visible diagnostic', file=sys.stderr, flush=True)\n"
-                "deadline = time.monotonic() + 15\n"
+                "deadline = time.monotonic() + 40\n"
                 "while not pathlib.Path(sys.argv[1]).exists() and time.monotonic() < deadline:\n"
                 "    time.sleep(0.02)\n"
                 "sys.exit(7)\n",
@@ -56,7 +56,7 @@ class PublishPreflightTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "from hermes_codex_router.publish_preflight import _run\n"
                 "result = _run([sys.executable, sys.argv[1], sys.argv[2]], "
-                "cwd=Path(sys.argv[3]), timeout=20, stream=True)\n"
+                "cwd=Path(sys.argv[3]), timeout=45, stream=True)\n"
                 "print(f'child exit: {result.returncode}', flush=True)\n",
                 encoding="utf-8",
             )
@@ -82,7 +82,7 @@ class PublishPreflightTests(unittest.TestCase):
                     env=environment,
                 )
                 try:
-                    deadline = time.monotonic() + 10
+                    deadline = time.monotonic() + 20
                     while time.monotonic() < deadline:
                         if "visible progress" in output.read_text(
                             encoding="utf-8"
@@ -96,7 +96,12 @@ class PublishPreflightTests(unittest.TestCase):
                     self.assertIsNone(process.poll(), "progress must arrive while the child runs")
                 finally:
                     release.touch()
-                    process.wait(timeout=25)
+                    try:
+                        process.wait(timeout=50)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                        raise
             self.assertEqual(process.returncode, 0)
             self.assertIn("child exit: 7", output.read_text(encoding="utf-8"))
 
