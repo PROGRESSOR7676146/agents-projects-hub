@@ -57,6 +57,7 @@ def _run(
     cwd: Path,
     env: dict[str, str] | None = None,
     timeout: int | None = None,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -64,7 +65,8 @@ def _run(
             cwd=cwd,
             env=env,
             text=True,
-            capture_output=True,
+            capture_output=not stream,
+            stdin=subprocess.DEVNULL if stream else None,
             timeout=_command_timeout(argv, timeout),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -542,12 +544,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             [sys.executable, str(ROOT / "scripts" / "validate.py")],
             cwd=ROOT,
             env=environment,
+            stream=True,
             # Full history, typing and tests must finish even on a busy host;
             # retain a finite budget without omitting any canonical stage.
             timeout=1800,
         )
-        sys.stdout.write(validator.stdout)
-        sys.stderr.write(validator.stderr)
         if validator.returncode != 0:
             raise PreflightError("canonical repository validation failed")
         final_status = _run(

@@ -27,8 +27,26 @@ def tool(name: str) -> str:
     return str(sibling) if sibling.is_file() else name
 
 
+def checkout_import_environment(root: Path, *, include_tests: bool = False) -> dict[str, str]:
+    """Bind validation to this checkout even when Python is installed from another one."""
+    environment = os.environ.copy()
+    paths = [str(root / "src")]
+    if include_tests:
+        paths.append(str(root / "tests"))
+    inherited = environment.get("PYTHONPATH")
+    if inherited:
+        paths.append(inherited)
+    environment["PYTHONPATH"] = os.pathsep.join(paths)
+    return environment
+
+
 def run(*argv: str, env: dict[str, str] | None = None) -> None:
-    subprocess.run(argv, cwd=ROOT, check=True, env=env)
+    subprocess.run(
+        argv,
+        cwd=ROOT,
+        check=True,
+        env=env if env is not None else checkout_import_environment(ROOT),
+    )
 
 
 def default_test_jobs() -> int:
@@ -78,12 +96,7 @@ def parse_test_jobs(value: str) -> int:
 
 def sibling_import_environment(root: Path = ROOT) -> dict[str, str]:
     """Let modules import sibling fixtures from ``tests`` exactly as discovery does."""
-    environment = os.environ.copy()
-    inherited = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = os.pathsep.join(
-        path for path in (str(root / "tests"), inherited) if path
-    )
-    return environment
+    return checkout_import_environment(root, include_tests=True)
 
 
 def check_test_environment() -> None:
