@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -32,6 +33,78 @@ def _isolated_git_environment() -> dict[str, str]:
 
 
 class PublishPreflightTests(unittest.TestCase):
+    def test_streamed_command_reports_progress_before_it_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            output = root / "stdout"
+            errors = root / "stderr"
+            child = root / "child.py"
+            child.write_text(
+                "import pathlib, sys, time\n"
+                "print('visible progress', flush=True)\n"
+                "print('visible diagnostic', file=sys.stderr, flush=True)\n"
+                "deadline = time.monotonic() + 40\n"
+                "while not pathlib.Path(sys.argv[1]).exists() and time.monotonic() < deadline:\n"
+                "    time.sleep(0.02)\n"
+                "sys.exit(7)\n",
+                encoding="utf-8",
+            )
+            parent = root / "parent.py"
+            parent.write_text(
+                "import sys\n"
+                "from pathlib import Path\n"
+                "from hermes_codex_router.publish_preflight import _run\n"
+                "result = _run([sys.executable, sys.argv[1], sys.argv[2]], "
+                "cwd=Path(sys.argv[3]), timeout=45, stream=True)\n"
+                "print(f'child exit: {result.returncode}', flush=True)\n",
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = os.pathsep.join(
+                filter(
+                    None,
+                    (
+                        str(Path(publish_preflight.__file__).resolve().parents[1]),
+                        environment.get("PYTHONPATH", ""),
+                    ),
+                )
+            )
+            with (
+                output.open("w", encoding="utf-8") as stdout,
+                errors.open("w", encoding="utf-8") as stderr,
+            ):
+                process = subprocess.Popen(
+                    [sys.executable, str(parent), str(child), str(release), str(root)],
+                    stdout=stdout,
+                    stderr=stderr,
+                    stdin=subprocess.DEVNULL,
+                    env=environment,
+                )
+                try:
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        if "visible progress" in output.read_text(
+                            encoding="utf-8"
+                        ) and "visible diagnostic" in errors.read_text(encoding="utf-8"):
+                            break
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.02)
+                    self.assertIn("visible progress", output.read_text(encoding="utf-8"))
+                    self.assertIn("visible diagnostic", errors.read_text(encoding="utf-8"))
+                    self.assertIsNone(process.poll(), "progress must arrive while the child runs")
+                finally:
+                    release.touch()
+                    try:
+                        process.wait(timeout=50)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                        raise
+            self.assertEqual(process.returncode, 0)
+            self.assertIn("child exit: 7", output.read_text(encoding="utf-8"))
+
     def test_command_timeouts_allow_local_git_extra_time(self) -> None:
         commands = (
             (["git", "status", "--porcelain"], None, 300),
@@ -68,6 +141,17 @@ class PublishPreflightTests(unittest.TestCase):
                 self.assertRaises(publish_preflight.PreflightError),
             ):
                 run(["git", "status"], cwd=Path("/home/example"))
+
+        with (
+            patch(
+                "hermes_codex_router.publish_preflight.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["validator"], 10),
+            ),
+            self.assertRaises(publish_preflight.PreflightError),
+        ):
+            publish_preflight._run(
+                ["validator"], cwd=Path("/home/example"), timeout=10, stream=True
+            )
 
     def test_nested_fixture_drops_outer_identity_and_policy(self) -> None:
         names = ["HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"] + [
@@ -319,11 +403,17 @@ class PublishPreflightTests(unittest.TestCase):
             (root / "src" / "hermes_codex_router").mkdir(parents=True)
             (root / "scripts").mkdir()
             (root / "scripts" / "validate.py").write_text("", encoding="utf-8")
-            calls: list[tuple[list[str], dict[str, str] | None]] = []
+            calls: list[tuple[list[str], dict[str, str] | None, bool]] = []
 
             def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
                 environment = kwargs.get("env")
-                calls.append((argv, environment if isinstance(environment, dict) else None))
+                calls.append(
+                    (
+                        argv,
+                        environment if isinstance(environment, dict) else None,
+                        not bool(kwargs.get("capture_output")),
+                    )
+                )
                 if argv[:3] == ["git", "status", "--porcelain"]:
                     return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
                 if argv[:2] == ["git", "rev-parse"]:
@@ -348,13 +438,15 @@ class PublishPreflightTests(unittest.TestCase):
                 self.assertEqual(publish_preflight.main([]), 0)
 
             validator = next(call for call in calls if Path(call[0][-1]).name == "validate.py")
+            self.assertTrue(
+                validator[2], "canonical validation must forward progress during a push"
+            )
             self.assertEqual(validator[0][0], os.fsdecode(os.fsencode(sys.executable)))
             environment = validator[1]
             self.assertIsNotNone(environment)
             assert environment is not None
             self.assertEqual(environment["PYTHONPATH"].split(os.pathsep)[0], str(root / "src"))
             self.assertIn("passed", stdout.getvalue())
-            self.assertIn("PASS documentation (0.10s)", stdout.getvalue())
             status_calls = [
                 call for call in calls if call[0][:3] == ["git", "status", "--porcelain"]
             ]
@@ -382,6 +474,26 @@ class PublishPreflightTests(unittest.TestCase):
         ):
             self.assertEqual(publish_preflight.main([]), 1)
         self.assertIn("changed during validation", stderr.getvalue())
+
+    def test_main_rejects_a_failing_streamed_validator(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            calls.append(argv)
+            status = 7 if Path(argv[-1]).name == "validate.py" else 0
+            return subprocess.CompletedProcess(argv, status, stdout="", stderr="")
+
+        stderr = io.StringIO()
+        with (
+            patch.object(publish_preflight, "_require_checkout_import"),
+            patch.object(publish_preflight, "_git_stdout", return_value="a" * 40),
+            patch.object(publish_preflight, "_run", side_effect=fake_run),
+            patch("sys.stdin", io.StringIO("")),
+            redirect_stderr(stderr),
+        ):
+            self.assertEqual(publish_preflight.main([]), 1)
+        self.assertIn("canonical repository validation failed", stderr.getvalue())
+        self.assertEqual(sum(argv[:2] == ["git", "status"] for argv in calls), 1)
 
     def test_dangling_annotated_tag_cannot_be_published_as_a_raw_oid(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

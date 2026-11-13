@@ -392,8 +392,57 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(len(environments), 1)
         self.assertEqual(
             environments[0]["PYTHONPATH"].split(os.pathsep),
-            [str(validator.ROOT / "tests"), "/home/example/src"],
+            [str(validator.ROOT / "tests"), str(validator.ROOT / "src"), "/home/example/src"],
         )
+
+    def test_validation_children_import_the_current_checkout_before_another_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = root / "current"
+            other = root / "other"
+            for checkout, value in ((current, "current"), (other, "other")):
+                (checkout / "src").mkdir(parents=True)
+                (checkout / "src" / "fictional_validation_binding.py").write_text(
+                    f"VALUE = {value!r}\n", encoding="utf-8"
+                )
+            script = (
+                "import pathlib, sys, fictional_validation_binding as binding; "
+                "pathlib.Path(sys.argv[1]).write_text(binding.VALUE, encoding='utf-8')"
+            )
+            with patch.dict(os.environ, {"PYTHONPATH": str(other / "src")}):
+                for kind in ("normal stage", "test stage"):
+                    with self.subTest(kind=kind):
+                        result = root / ("result-" + kind.replace(" ", "-"))
+                        argv = (sys.executable, "-c", script, str(result))
+                        if kind == "normal stage":
+                            with patch.object(validator, "ROOT", current):
+                                validator.run(*argv)
+                        else:
+                            subprocess.run(
+                                argv,
+                                cwd=current,
+                                env=validator.sibling_import_environment(current),
+                                check=True,
+                            )
+                        self.assertEqual(result.read_text(encoding="utf-8"), "current")
+
+                (current / "tests").mkdir()
+                (current / "src" / "fictional_fixture.py").write_text("VALUE = 'source'\n")
+                (current / "tests" / "fictional_fixture.py").write_text("VALUE = 'fixture'\n")
+                sibling_result = root / "sibling-result"
+                subprocess.run(
+                    (
+                        sys.executable,
+                        "-c",
+                        "import pathlib, sys, fictional_fixture; "
+                        "pathlib.Path(sys.argv[1]).write_text(fictional_fixture.VALUE)",
+                        str(sibling_result),
+                    ),
+                    cwd=current,
+                    env=validator.sibling_import_environment(current),
+                    check=True,
+                )
+                self.assertEqual(sibling_result.read_text(encoding="utf-8"), "fixture")
 
     def test_focused_without_selection_is_static_only(self) -> None:
         code, calls, _ = self.invoke(["--profile", "focused"])

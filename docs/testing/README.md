@@ -28,9 +28,12 @@ fixture tests for UNIX-socket path length, namespace mount destinations and a
 deployment fixture outside Git. This catches known temporary-directory problems
 early; it does not prove that every test environment or timing issue is safe.
 A skipped fixture is not evidence of readiness. Those tests still run in the full
-suite. Commit and focused profiles are unchanged.
+suite. The test-environment preflight is not run in the commit or focused profile.
 Focused selectors import sibling fixtures as discovery does. Stages stop on failure:
 exit 0 means the selected profile passed, 1 failed/unavailable, 2 invalid arguments.
+All profiles put the current checkout's `src` ahead of inherited `PYTHONPATH`
+entries, including editable installs from another worktree. Test runs put their
+own `tests` directory first, preserving sibling fixture precedence.
 The full test stage runs every discovered module in its own process;
 [scheduling and completeness checks](VALIDATION_SCHEDULING.md) also apply
 through the installed Git hooks.
@@ -703,9 +706,11 @@ checkout and requires every published ref to resolve to the checked-out `HEAD`,
 and then prepends the current checkout's
 `src` directory to `PYTHONPATH` and runs `python scripts/validate.py`. This
 prevents an editable environment from another worktree from silently supplying
-the validator implementation. The hook prints the validator's stage timings
-and rechecks tree, HEAD and published refs before permitting the push. It never
-reuses a result from a different Python environment. It needs no network.
+the validator implementation. The hook forwards the validator's progress and
+stage timings while it runs, then rechecks tree, HEAD and published refs before
+permitting the push. A timeout or failed validation still refuses the push. On
+timeout, validator descendants may remain running and continue to emit output.
+The hook never reuses a result from a different Python environment. It needs no network.
 
 The hook reduces avoidable hosted-CI retries; it cannot promise that a remote
 runner, dependency service, or network will remain available, and Git's
