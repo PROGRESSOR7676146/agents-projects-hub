@@ -17,6 +17,7 @@ from typing import Any, Callable, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 MAX_TEST_JOBS = 32
 TEST_MODULE_TIMEOUT_SECONDS = 600
+TEST_ENVIRONMENT_TIMEOUT_SECONDS = TEST_MODULE_TIMEOUT_SECONDS
 # The pattern whole-suite discovery passes to every module's ``load_tests``.
 DISCOVERY_PATTERN = "test*.py"
 
@@ -83,6 +84,28 @@ def sibling_import_environment(root: Path = ROOT) -> dict[str, str]:
         path for path in (str(root / "tests"), inherited) if path
     )
     return environment
+
+
+def check_test_environment() -> None:
+    """Run small, real fixture checks before the expensive canonical gate."""
+    probes = (
+        "test_unix_socket_diag.UnixSocketDiagTests."
+        "test_real_listener_matches_filesystem_and_ignores_abstract_newline_name",
+        "test_process_namespace.ProcessNamespaceTests."
+        "test_default_launch_reads_project_without_shared_network_or_socket",
+        "test_hub_deploy.StageTests.test_old_release_schema_mismatch_blocks_build",
+    )
+    try:
+        subprocess.run(
+            (sys.executable, "-m", "unittest", *probes, "-q"),
+            cwd=ROOT,
+            env=sibling_import_environment(),
+            stdin=subprocess.DEVNULL,
+            check=True,
+            timeout=TEST_ENVIRONMENT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("test environment preflight timed out") from error
 
 
 # Runs in a child process: run whole-suite discovery and record, for every
@@ -515,6 +538,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("format", lambda: run(tool("ruff"), "format", "--check", ".")),
         ("lint", lambda: run(tool("ruff"), "check", ".")),
     ]
+    if args.profile == "canonical":
+        stages.insert(0, ("test environment", check_test_environment))
     if args.profile in {"canonical", "commit"}:
         stages.append(
             (

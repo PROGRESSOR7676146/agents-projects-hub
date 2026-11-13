@@ -23,6 +23,12 @@ python scripts/validate.py
 Both profiles check docs, release metadata/lock, configuration, format, lint and
 privacy. Canonical adds history, whole-project Pyright and full tests. The full privacy/history
 scan remains mandatory before every commit, even after focused checks pass.
+Before its other stages, canonical validation runs three existing, provider-free
+fixture tests for UNIX-socket path length, namespace mount destinations and a
+deployment fixture outside Git. This catches known temporary-directory problems
+early; it does not prove that every test environment or timing issue is safe.
+A skipped fixture is not evidence of readiness. Those tests still run in the full
+suite. Commit and focused profiles are unchanged.
 Focused selectors import sibling fixtures as discovery does. Stages stop on failure:
 exit 0 means the selected profile passed, 1 failed/unavailable, 2 invalid arguments.
 The full test stage runs every discovered module in its own process;

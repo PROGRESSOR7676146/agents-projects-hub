@@ -50,10 +50,16 @@ class ValidationTests(unittest.TestCase):
             if failure and failure in "all test modules":
                 raise RuntimeError("1 of 2 test modules failed: test_example.py")
 
+        def check_test_environment() -> None:
+            calls.append("test environment preflight")
+            if failure == "test environment preflight":
+                raise RuntimeError("fixture environment refused")
+
         output = io.StringIO()
         with (
             patch.object(validator, "lower_local_priority", return_value=False),
             patch.object(validator, "run", side_effect=run),
+            patch.object(validator, "check_test_environment", side_effect=check_test_environment),
             # A distinctive marker: a checkout path may itself contain "lock".
             patch.object(
                 validator,
@@ -67,6 +73,25 @@ class ValidationTests(unittest.TestCase):
         ):
             code = validator.main()
         return code, calls, output.getvalue()
+
+    def test_canonical_refuses_bad_test_environment_before_expensive_checks(self) -> None:
+        code, calls, output = self.invoke([], "test environment preflight")
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, ["test environment preflight"])
+        self.assertIn("FAIL test environment", output)
+        self.assertIn("fixture environment refused", output)
+
+        code, calls, _ = self.invoke([])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls[0], "test environment preflight")
+        self.assertIn(f"all test modules jobs={validator.default_test_jobs()}", calls)
+
+    def test_short_profiles_do_not_add_unrelated_environment_tests(self) -> None:
+        for profile in ("commit", "focused"):
+            with self.subTest(profile=profile):
+                code, calls, _ = self.invoke(["--profile", profile])
+                self.assertEqual(code, 0)
+                self.assertNotIn("test environment preflight", calls)
 
     def test_canonical_keeps_all_guarantees_and_preflights_before_expensive_work(self) -> None:
         code, calls, _ = self.invoke([])
@@ -392,6 +417,57 @@ class ValidationTests(unittest.TestCase):
         ):
             self.assertEqual(validator.main([]), 1)
         self.assertIn("FAIL", output.getvalue())
+
+
+class TestEnvironmentPreflightTests(unittest.TestCase):
+    def run_preflight(self, temporary_root: Path) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(temporary_root)
+        return subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from scripts.validate import check_test_environment; check_test_environment()",
+            ],
+            cwd=validator.ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=validator.TEST_MODULE_TIMEOUT_SECONDS,
+        )
+
+    def test_short_private_temporary_root_passes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="preflight-ok-") as directory:
+            result = self.run_preflight(Path(directory))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_long_temporary_root_fails_on_a_real_unix_socket(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="x" * 80) as directory:
+            result = self.run_preflight(Path(directory))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("AF_UNIX path too long", result.stderr)
+
+    def test_temporary_root_inside_git_fails_on_real_deployment_fixture(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="git-preflight-") as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / ".git" / "HEAD").write_text("ref: refs/heads/example\n")
+            temporary = root / "tmp"
+            temporary.mkdir()
+            result = self.run_preflight(temporary)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("installation must be outside Git", result.stderr)
+
+    def test_hung_environment_probe_fails_closed(self) -> None:
+        with patch.object(
+            validator.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(
+                "preflight", validator.TEST_ENVIRONMENT_TIMEOUT_SECONDS
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "test environment preflight timed out"):
+                validator.check_test_environment()
 
 
 class TestModuleRunnerTests(unittest.TestCase):
