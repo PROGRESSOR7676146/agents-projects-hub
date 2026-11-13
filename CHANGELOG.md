@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.17] - 2026-11-13
+
+- Reduce unnecessary SQLite writer locks during idle polling, while preserving
+  transactional claims, delivery recovery, FIFO and worker-health freshness.
+
 - Fix: `hub_deploy` refused installations whose host `claude_file_permissions`
   carried the optional `route_environment` (ADR 0101) as invalid; it now accepts
   that key and still refuses any other.
