@@ -17,7 +17,7 @@ from typing import Any, Callable, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 MAX_TEST_JOBS = 32
 TEST_MODULE_TIMEOUT_SECONDS = 600
-TEST_ENVIRONMENT_TIMEOUT_SECONDS = 30
+TEST_ENVIRONMENT_TIMEOUT_SECONDS = TEST_MODULE_TIMEOUT_SECONDS
 # The pattern whole-suite discovery passes to every module's ``load_tests``.
 DISCOVERY_PATTERN = "test*.py"
 
@@ -100,6 +100,7 @@ def check_test_environment() -> None:
             (sys.executable, "-m", "unittest", *probes, "-q"),
             cwd=ROOT,
             env=sibling_import_environment(),
+            stdin=subprocess.DEVNULL,
             check=True,
             timeout=TEST_ENVIRONMENT_TIMEOUT_SECONDS,
         )

@@ -59,9 +59,7 @@ class ValidationTests(unittest.TestCase):
         with (
             patch.object(validator, "lower_local_priority", return_value=False),
             patch.object(validator, "run", side_effect=run),
-            patch.object(
-                validator, "check_test_environment", side_effect=check_test_environment, create=True
-            ),
+            patch.object(validator, "check_test_environment", side_effect=check_test_environment),
             # A distinctive marker: a checkout path may itself contain "lock".
             patch.object(
                 validator,
@@ -435,7 +433,7 @@ class TestEnvironmentPreflightTests(unittest.TestCase):
             env=environment,
             text=True,
             capture_output=True,
-            timeout=60,
+            timeout=validator.TEST_MODULE_TIMEOUT_SECONDS,
         )
 
     def test_short_private_temporary_root_passes(self) -> None:
