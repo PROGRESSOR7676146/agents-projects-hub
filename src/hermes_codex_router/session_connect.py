@@ -620,6 +620,22 @@ class SessionConnectStore:
     def lease_worker(self, worker_id: str) -> ConnectWorkflow | None:
         now = datetime.now(timezone.utc)
         token = _token()
+        timestamp = now.isoformat()
+        # Expirations and claims are both rechecked inside the transaction.
+        # A request arriving just after this read is served by the next poll.
+        if (
+            not self.connection.in_transaction
+            and self.connection.execute(
+                """SELECT 1 FROM session_connect_workflows
+               WHERE (expires_at<=? AND stage NOT IN
+                       ('completed','cancelled','expired','failed','marker_unknown'))
+                  OR (stage IN ('discovering','activation_requested')
+                      AND (lease_token IS NULL OR lease_expires_at<=?)) LIMIT 1""",
+                (timestamp, timestamp),
+            ).fetchone()
+            is None
+        ):
+            return None
         with self.state._immediate_transaction():
             self._expire_worker_requests_locked(now.isoformat())
             self.connection.execute(
@@ -1039,6 +1055,16 @@ class SessionConnectStore:
 
     def recover_stale_outbox(self) -> None:
         now = _now()
+        if (
+            not self.connection.in_transaction
+            and self.connection.execute(
+                "SELECT 1 FROM session_connect_outbox "
+                "WHERE status='leased' AND lease_expires_at<=? LIMIT 1",
+                (now,),
+            ).fetchone()
+            is None
+        ):
+            return
         with self.state._immediate_transaction():
             rows = self.connection.execute(
                 """SELECT outbox_id,workflow_id,kind FROM session_connect_outbox
@@ -1069,6 +1095,16 @@ class SessionConnectStore:
     def lease_outbox(self, sender_id: str) -> ConnectOutbox | None:
         now = datetime.now(timezone.utc)
         token = _token()
+        if (
+            not self.connection.in_transaction
+            and self.connection.execute(
+                "SELECT 1 FROM session_connect_outbox "
+                "WHERE status='prepared' AND available_at<=? LIMIT 1",
+                (now.isoformat(),),
+            ).fetchone()
+            is None
+        ):
+            return None
         with self.state._immediate_transaction():
             row = self.connection.execute(
                 """SELECT outbox_id FROM session_connect_outbox

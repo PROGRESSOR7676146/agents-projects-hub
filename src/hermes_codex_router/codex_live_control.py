@@ -415,6 +415,10 @@ class CodexLiveControl:
             return
         if self._steering_rejected:
             return
+        # The state lease rejects every named permission profile. Avoid taking
+        # the sole SQLite writer just to rediscover that on every idle poll.
+        if self.config.codex_permission_profile is not None:
+            return
         child = state.lease_steer_followup(
             self.job.job_id, f"{self.worker_id}-steer", lease_seconds=120
         )

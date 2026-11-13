@@ -172,6 +172,10 @@ class ExternalQueueWorker:
                 raise
         self._last_success_at: datetime | None = None
         self._last_error_code: str | None = None
+        self._health_cache_lock = threading.Lock()
+        self._health_publication = 0
+        self._last_idle_health_signature: tuple[object, ...] | None = None
+        self._last_idle_health_publish = 0.0
         # ADR 0084: repeated request refusals without a success are component evidence.
         self._consecutive_refusals = 0
         self._provider_state = "unknown"
@@ -212,6 +216,8 @@ class ExternalQueueWorker:
             )
         self._stop = threading.Event()
         self.activity = WorkerActivityBarrier()
+        self._connect_thread: threading.Thread | None = None
+        self._last_connect_poll: float | None = None
         self._closed = False
         self._publish_health()
 
@@ -353,7 +359,38 @@ class ExternalQueueWorker:
     ) -> None:
         """Best-effort cached liveness; health reporting never stops useful work."""
         target = state or self.state
+        publication: int | None = None
+        published = False
+        idle = False
+        signature: tuple[object, ...] = ()
+        observed_at = 0.0
         try:
+            error_code = self._last_error_code or (
+                "codex_approvals_unavailable"
+                if self.supervisor is not None
+                and self.config.codex_permission_profile != "full"
+                and not self.supervisor.human_approvals_available()
+                else None
+            )
+            idle = activity_state == "idle" and active_job is None
+            signature = (
+                error_code,
+                self._provider_state,
+                self._quota_remaining_percent,
+                self._quota_reset_at,
+                self._last_success_at,
+            )
+            observed_at = time.monotonic()
+            with self._health_cache_lock:
+                if (
+                    idle
+                    and signature == self._last_idle_health_signature
+                    and observed_at - self._last_idle_health_publish < 10.0
+                ):
+                    return
+                self._health_publication += 1
+                publication = self._health_publication
+                self._last_idle_health_signature = None
             target.upsert_runtime_health(
                 component="provider_worker",
                 instance_id=self.worker_id,
@@ -364,16 +401,7 @@ class ExternalQueueWorker:
                 started_at=self._started_at,
                 heartbeat_at=datetime.now(timezone.utc),
                 success_at=self._last_success_at,
-                error_code=(
-                    self._last_error_code
-                    or (
-                        "codex_approvals_unavailable"
-                        if self.supervisor is not None
-                        and self.config.codex_permission_profile != "full"
-                        and not self.supervisor.human_approvals_available()
-                        else None
-                    )
-                ),
+                error_code=error_code,
                 activity_state=activity_state,
                 active_job_id=None if active_job is None else active_job.job_id,
                 active_lease_expires_at=(
@@ -385,8 +413,21 @@ class ExternalQueueWorker:
                 quota_remaining_percent=self._quota_remaining_percent,
                 quota_reset_at=self._quota_reset_at,
             )
+            published = True
         except Exception as survived_error:
             survived("external_worker.health_publish", survived_error)
+        finally:
+            if publication is not None:
+                with self._health_cache_lock:
+                    if published and idle and publication == self._health_publication:
+                        self._last_idle_health_signature = signature
+                        self._last_idle_health_publish = observed_at
+                    else:
+                        # Concurrent or failed writes make the last persisted
+                        # activity uncertain. Invalidate an overlapping idle
+                        # publication too, so the next poll can repair it.
+                        self._health_publication += 1
+                        self._last_idle_health_signature = None
 
     def run_forever(self, *, poll_seconds: float = 0.2) -> None:
         if poll_seconds <= 0:
@@ -426,6 +467,7 @@ class ExternalQueueWorker:
                         daemon=True,
                     )
                     connect_thread.start()
+                    self._connect_thread = connect_thread
             while not self._stop.is_set():
                 try:
                     worked = self.run_cycle()
@@ -446,6 +488,7 @@ class ExternalQueueWorker:
                 for thread in (control_thread, connect_thread):
                     if thread is not None and thread.ident is not None:
                         thread.join()
+                self._connect_thread = None
 
     def _run_connect_forever(self) -> None:
         """Serve metadata requests while the productive worker waits on a turn."""
@@ -458,6 +501,7 @@ class ExternalQueueWorker:
                 try:
                     while not self._stop.is_set() and not self.activity.draining:
                         worked = self._run_connect_cycle(state=state)
+                        self._last_connect_poll = time.monotonic()
                         self._stop.wait(0.01 if worked else 0.2)
                 finally:
                     state.close()
@@ -507,7 +551,18 @@ class ExternalQueueWorker:
             },
         )
         if job is None:
-            return self._run_connect_cycle() if self.agent.runtime == "codex" else False
+            if self.agent.runtime != "codex":
+                return False
+            if (
+                self._connect_thread is not None
+                and self._connect_thread.is_alive()
+                and self._last_connect_poll is not None
+                and time.monotonic() - self._last_connect_poll < 1.0
+            ):
+                return False
+            # Retain the foreground fallback when the background poller has
+            # stopped or has not completed a poll recently.
+            return self._run_connect_cycle()
         if self._stop.is_set():
             assert job.lease_token is not None
             self.state.release_provider_job_lease(job.job_id, job.lease_token)
