@@ -283,6 +283,64 @@ class IdlePollingTests(unittest.TestCase):
         worker._publish_health(state=verify_state)
         verify_state.upsert_runtime_health.assert_called_once()
 
+    def test_late_busy_health_cannot_make_an_overlapping_idle_cache_fresh(self) -> None:
+        fixture = worker_fixtures.ExternalQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        worker = ExternalQueueWorker(
+            fixture.config,
+            "opencode",
+            registry=fixture.registry,
+            adapter=cast(Any, worker_fixtures.Adapter("opencode")),
+        )
+        self.addCleanup(worker.close)
+        worker._last_idle_health_signature = None
+        busy_started = threading.Event()
+        release_busy = threading.Event()
+        idle_written = threading.Event()
+        release_idle = threading.Event()
+        busy_state = Mock(spec=HubState)
+        idle_state = Mock(spec=HubState)
+        verify_state = Mock(spec=HubState)
+
+        def delayed_busy_write(**_kwargs: Any) -> None:
+            busy_started.set()
+            release_busy.wait(timeout=10)
+
+        def paused_idle_write(**_kwargs: Any) -> None:
+            # The idle write commits before the old busy write, but its
+            # publication does not finish until after the busy publication.
+            idle_written.set()
+            release_idle.wait(timeout=10)
+
+        busy_state.upsert_runtime_health.side_effect = delayed_busy_write
+        idle_state.upsert_runtime_health.side_effect = paused_idle_write
+        busy_thread = threading.Thread(
+            target=lambda: worker._publish_health(
+                state=busy_state,
+                activity_state="executing",
+                active_job=cast(Any, SimpleNamespace(job_id="fictional", lease_expires_at=None)),
+            )
+        )
+        idle_thread = threading.Thread(target=lambda: worker._publish_health(state=idle_state))
+        busy_thread.start()
+        try:
+            self.assertTrue(busy_started.wait(timeout=5))
+            idle_thread.start()
+            self.assertTrue(idle_written.wait(timeout=5))
+            release_busy.set()
+            busy_thread.join(timeout=5)
+            self.assertFalse(busy_thread.is_alive())
+        finally:
+            release_busy.set()
+            release_idle.set()
+            busy_thread.join(timeout=5)
+            if idle_thread.ident is not None:
+                idle_thread.join(timeout=5)
+        self.assertFalse(idle_thread.is_alive())
+        worker._publish_health(state=verify_state)
+        verify_state.upsert_runtime_health.assert_called_once()
+
     def test_full_profile_still_observes_owner_stop(self) -> None:
         state = Mock(spec=HubState)
         state.pending_emergency_stop_for_job.return_value = "fictional-stop"

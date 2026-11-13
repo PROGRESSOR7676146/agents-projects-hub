@@ -424,7 +424,9 @@ class ExternalQueueWorker:
                         self._last_idle_health_publish = observed_at
                     else:
                         # Concurrent or failed writes make the last persisted
-                        # activity uncertain; let the next idle poll repair it.
+                        # activity uncertain. Invalidate an overlapping idle
+                        # publication too, so the next poll can repair it.
+                        self._health_publication += 1
                         self._last_idle_health_signature = None
 
     def run_forever(self, *, poll_seconds: float = 0.2) -> None:
