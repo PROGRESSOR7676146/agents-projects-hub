@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -226,7 +226,70 @@ class ClaudeRouteCatalogTests(unittest.TestCase):
             result, fetch = self.refresh(claude, side_effect=OSError("route down"))
         fetch.assert_called_once()
         self.assertIn("claude", result.failed)
-        self.assertEqual(self.cache.load("claude"), saved)
+        after_failure = self.cache.load("claude")
+        assert after_failure is not None
+        self.assertEqual(after_failure.models, saved.models)
+        self.assertEqual(after_failure.updated_at, saved.updated_at)
+        self.assertIsNotNone(after_failure.last_failure_at)
+
+    def test_failed_refresh_warns_on_stale_catalog_and_success_clears_warning(self) -> None:
+        now = datetime.now(timezone.utc)
+        claude = agent()
+        saved = self.cache.store(
+            "claude",
+            route_claude_models(ROWS, default_model=claude.default_model, default_effort="high"),
+            source_version=ROUTE_SOURCE,
+            observed_at=now - timedelta(hours=25),
+        )
+
+        result, _ = self.refresh(claude, side_effect=OSError("route down"))
+        self.assertEqual(result.failed, ("claude",))
+        after_failure = self.cache.load("claude")
+        assert after_failure is not None
+        self.assertEqual(after_failure.models, saved.models)
+        self.assertEqual(after_failure.updated_at, saved.updated_at)
+        self.assertIsNotNone(after_failure.last_failure_at)
+        self.assertEqual(self.cache.stale_agents(now=now), ("claude",))
+
+        result, _ = self.refresh(claude, return_value=ROWS)
+        self.assertEqual(result.refreshed, ("claude",))
+        recovered = self.cache.load("claude")
+        assert recovered is not None
+        self.assertIsNone(recovered.last_failure_at)
+        self.assertEqual(self.cache.stale_agents(), ())
+
+    def test_failed_refresh_does_not_mark_a_concurrent_success_as_failed(self) -> None:
+        claude = agent()
+        self.cache.store(
+            "claude",
+            route_claude_models(
+                ROWS[:1], default_model=claude.default_model, default_effort="high"
+            ),
+            source_version=ROUTE_SOURCE,
+            observed_at=datetime.now(timezone.utc) - timedelta(hours=25),
+        )
+
+        def concurrent_success_then_failure(_route: Path) -> None:
+            route_claude_snapshot(self.cache, claude, ROWS)
+            raise OSError("another refresh failed")
+
+        result, _ = self.refresh(claude, side_effect=concurrent_success_then_failure)
+        self.assertEqual(result.failed, ("claude",))
+        saved = self.cache.load("claude")
+        assert saved is not None
+        self.assertEqual(len(saved.models), 4)
+        self.assertIsNone(saved.last_failure_at)
+
+    def test_failure_recording_error_does_not_abort_monitoring(self) -> None:
+        claude = agent()
+        route_claude_snapshot(self.cache, claude, ROWS)
+        with (
+            patch.object(ProviderCatalogCache, "is_stale", return_value=True),
+            patch.object(ProviderCatalogCache, "mark_failure", side_effect=OSError("read-only")),
+        ):
+            result, _ = self.refresh(claude, side_effect=OSError("route down"))
+        self.assertEqual(result.failed, ("claude",))
+        self.assertIsNotNone(self.cache.load("claude"))
 
     def test_explicit_catalog_still_wins_without_any_route_request(self) -> None:
         models = (ProviderModel("claude-opus-5-5", "Opus", ("high",)),)
