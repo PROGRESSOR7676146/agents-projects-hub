@@ -8,6 +8,7 @@ from typing import Callable
 
 from .claude_catalog import (
     ROUTE_SOURCE,
+    catalog_write_lock,
     claude_route_environment,
     configured_claude_snapshot,
     fetch_route_model_rows,
@@ -107,6 +108,14 @@ def refresh_provider_catalogs(
                         cache, agent, fetch_route_model_rows(route), now=observed_at
                     )
             except (ProviderCatalogError, OSError, ValueError):
+                if route is not None:
+                    try:
+                        with catalog_write_lock(cache):
+                            # Do not mark a catalog refreshed by another writer as failed.
+                            if cache.load(agent.agent_id) == before:
+                                cache.mark_failure(agent.agent_id, observed_at=observed_at)
+                    except OSError:
+                        pass  # Reporting a cache failure must not stop monitoring.
                 failed.append(agent.agent_id)
                 continue
             if snapshot != before:
