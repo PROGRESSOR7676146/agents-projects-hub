@@ -42,6 +42,39 @@ actual configured send grace (bounded to one day). Neither grace claims delivery
 A missing snapshot cannot establish recovery. An unchanged actionable condition
 uses the existing operational-alert episode; it re-arms after confirmed recovery.
 
+## Check whether maintenance controls itself
+
+Before planning a Codex server restart, identify the actual listener, its owning
+process and executable, and the manifest's pinned executable separately. A failed
+owning service does not mean the socket is unused, and an empty Hub queue does not
+mean native clients or the current agent turn are absent. Record any mismatch in
+the private handoff; never copy deployment identities into this repository.
+
+For an already identified same-UID listener, the passive diagnostic below checks
+the kernel listener and its exact process incarnation, then inspects the current
+process's ancestry. It neither connects nor invokes a provider:
+
+```sh
+python -m hermes_codex_router.codex_restart_context /home/example/.codex/app-server-control/app-server-control.sock 12345
+```
+
+`dependent` means the diagnostic runs inside the listener owner's process tree:
+stopping that server would interrupt the agent performing maintenance. Prepare
+the independent executor and observer from the [restart procedure](HUB_RESTART.ru.md)
+before ending the initiating turn. Bind them to a fresh operation and evidence;
+do not replay an old consumed executor. `not_observed` is only an ancestry
+observation: a client can depend on the server over a socket without being its
+descendant, and PID namespaces can hide ancestry. It is not proof of independence,
+an idle turn, delivery, closed clients or permission to restart. `unknown`
+means the process, namespace, listener or socket evidence was unavailable or
+changed; obtain the required host-level evidence rather than treating it as idle.
+
+The existing `codex_rollout_completion` reader is a bounded, private native-turn
+observation. It is not a delivery receipt, a client-drain proof, or an authorization
+to start a server. Model-free maintenance and observation never invoke inference.
+The owner's authorization to restart persists across the handoff; do not ask for it
+again merely because a new independent executor is necessary.
+
 ## Explicit independent-server migration
 
 This procedure is local operator work. Source publication does not authorize
