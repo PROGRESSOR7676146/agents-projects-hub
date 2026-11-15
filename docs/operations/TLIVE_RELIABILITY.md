@@ -64,9 +64,11 @@ python -m hermes_codex_router.codex_restart_context /home/example/.codex/app-ser
 stopping that server would interrupt the agent performing maintenance. A reusable
 independent native-server restart operation is not yet available; the
 [owner-step defect](OWNER_STEP_DEFECTS.md) tracks the missing executor and observer.
-Do not improvise or arm one without its client-drain, delivery, backup and rollback
-evidence. Continue preparing the bounded operation and do not replay an old
-consumed executor. `not_observed` is only an ancestry
+Until its reviewed, reusable removal change lands, stop the automated restart:
+do not arm or start an improvised executor or observer, or reuse a consumed one.
+Report the dependency and retain effect-free preparation and rollback evidence;
+development and offline verification of the missing operation may continue.
+`not_observed` is only an ancestry
 observation: a client can depend on the server over a socket without being its
 descendant, and PID namespaces can hide ancestry. It is not proof of independence,
 an idle turn, delivery, closed clients or permission to restart. `unknown`
@@ -76,10 +78,12 @@ changed; obtain the required host-level evidence rather than treating it as idle
 The existing `codex_rollout_completion` reader is a bounded, private native-turn
 observation. It is not a delivery receipt, a client-drain proof, or an authorization
 to start a server. Model-free maintenance and observation never invoke inference.
-An existing owner authorization persists for the same approved target, artifacts,
-maintenance scope and rollback across the handoff; it does not replace any gate
-or authorize expanded scope. Do not ask again merely because that same operation
-needs an independent executor.
+An existing owner authorization persists only for the same approved target,
+artifacts, maintenance scope, window and rollback across the handoff; it does not
+replace any gate or authorize expanded scope. For this dependent case, it applies
+only to the reviewed executor delivered by the removal change, within the approved
+window. Do not ask again merely because the same authorized operation needs an
+independent executor.
 
 ## Explicit independent-server migration
 

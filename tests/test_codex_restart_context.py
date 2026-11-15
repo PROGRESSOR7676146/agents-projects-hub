@@ -78,6 +78,14 @@ class CodexRestartContextTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "PID numbering"):
                     context._require_matching_pid_namespace(proc, 456)
 
+    def test_inspect_fails_closed_when_pid_namespace_guard_fails(self):
+        with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX) as listener:
+            path = Path(directory) / "server.sock"
+            listener.bind(str(path))
+            listener.listen(1)
+            with patch.object(context, "_require_matching_pid_namespace", side_effect=ValueError):
+                self.assertEqual(context.inspect(path, os.getpid()), "unknown")
+
     def test_listener_in_a_different_pid_namespace_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             proc = Path(directory)
