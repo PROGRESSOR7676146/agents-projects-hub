@@ -28,16 +28,15 @@ crash releases this lock, so it cannot by itself provide a durable closed fence.
 
 ## Native daemon alternative
 
-The pinned executable's reported version is 0.166.0; it offers an idempotent
-`app-server daemon start` command. The [upstream documentation for that exact
-version](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-daemon/README.md)
+The [upstream documentation for Codex 0.166.0](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-daemon/README.md)
+describes an idempotent `app-server daemon start` command and
 describes the daemon as experimental, using a separately selected managed
 package and optionally running an updater that restarts the server. A pinned
 package and disabled updater can avoid the documented automatic update path,
 but help text and the upstream description do not prove integration with the
 Hub's manifest socket, pin verification, writer guard, service ordering or
 rollback. It also does not by itself settle interrupted Hub jobs or establish
-the admission fence. No daemon lifecycle command was run against the deployment.
+the admission fence.
 
 ## Candidate boundary
 
@@ -72,7 +71,7 @@ must be possible to recover without restoring a database backup over newer
 state. Work already held for an owner decision stays held; no new receipt may
 fabricate that decision.
 
-This candidate changes the current unconditional refusal of queued and executing
+This candidate would change the current unconditional refusal of queued and executing
 jobs in REQ-OPS-005 and ADR 0088. It is a change to a recovery safety boundary,
 not an installed fix. Define precise proof of old-boot ownership and cover
 unmanaged writers before implementation. If the existing state cannot prove

@@ -30,11 +30,14 @@ def _parent_pid(proc_root: Path, pid: int) -> int:
 def _ancestry_contains(proc_root: Path, owner_pid: int) -> bool:
     pid = os.getpid()
     visited: set[int] = set()
+    expected_parent = None
     while pid > 0:
         if pid in visited or len(visited) >= 256:
             raise ValueError("invalid process ancestry")
         visited.add(pid)
         before = process_identity(pid, proc_root=proc_root)
+        if expected_parent is not None and before != expected_parent:
+            raise ValueError("parent incarnation changed during ancestry inspection")
         parent = _parent_pid(proc_root, pid)
         if before != process_identity(pid, proc_root=proc_root):
             raise ValueError("process changed during ancestry inspection")
@@ -44,8 +47,24 @@ def _ancestry_contains(proc_root: Path, owner_pid: int) -> bool:
             return True
         if pid == 1 or parent == 0 or (parent == 1 and owner_pid != 1):
             return False
+        parent_identity = process_identity(parent, proc_root=proc_root)
+        if parent_identity.start_ticks > before.start_ticks:
+            raise ValueError("parent is newer than child")
+        if process_identity(pid, proc_root=proc_root) != before:
+            raise ValueError("child incarnation changed during ancestry inspection")
+        if _parent_pid(proc_root, pid) != parent:
+            raise ValueError("process parent changed during ancestry inspection")
+        expected_parent = parent_identity
         pid = parent
     return False
+
+
+def _require_matching_pid_namespace(proc_root: Path, owner_pid: int) -> None:
+    """Refuse if procfs numbers do not identify this process and its peer."""
+    if int(os.readlink(proc_root / "self")) != os.getpid():
+        raise ValueError("procfs PID numbering differs from this process")
+    if os.readlink(proc_root / "self/ns/pid") != os.readlink(proc_root / str(owner_pid) / "ns/pid"):
+        raise ValueError("listener PID namespace differs")
 
 
 def inspect(socket_path: Path, owner_pid: int) -> RestartContext:
@@ -53,16 +72,18 @@ def inspect(socket_path: Path, owner_pid: int) -> RestartContext:
     try:
         if owner_pid <= 0 or not socket_path.is_absolute():
             return "unknown"
+        _require_matching_pid_namespace(Path("/proc"), owner_pid)
         resolved = socket_path.resolve(strict=True)
         owner = process_identity(owner_pid)
         if owner.uid != os.getuid():
             return "unknown"
         verify_listener(resolved, owner)
         found = _ancestry_contains(Path("/proc"), owner_pid)
+        verify_listener(resolved, owner)
         if process_identity(owner_pid) != owner:
             return "unknown"
         return "dependent" if found else "not_observed"
-    except (OSError, ValueError, RuntimeError, OverflowError):
+    except (OSError, ValueError, RuntimeError, OverflowError, IndexError):
         return "unknown"
 
 

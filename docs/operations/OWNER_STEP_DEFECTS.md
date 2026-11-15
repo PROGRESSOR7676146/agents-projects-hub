@@ -9,7 +9,7 @@ Opened 2026-11-07; remove an entry only with the change that removes the step.
 | Step | Why it still needs the owner | Removal |
 |---|---|---|
 | Reboot to restart the boot-time Codex app-server | The manual start needs every client quiesced within a 60-second receipt | Agent-run start window in the deployment kit |
-| Resume maintenance when the initiating agent uses the server being restarted | A reusable independently controlled server-restart operation with exact final-delivery, client drain and rollback evidence is not yet available | Prepare and verify a bounded executor and independent observer; retain any existing owner restart authorization |
+| Resume maintenance when the initiating agent uses the server being restarted | A reusable independently controlled server-restart operation with exact final-delivery, client drain and rollback evidence is not yet available | Implement and verify a bounded executor and independent observer with those proofs |
 
 Removed 2026-11-07: the `sudo` runtime install (releases now deploy as user-owned
 sealed runtimes, ADR 0089) and cleanup permission (a narrow standing permission

@@ -50,19 +50,23 @@ owning service does not mean the socket is unused, and an empty Hub queue does n
 mean native clients or the current agent turn are absent. Record any mismatch in
 the private handoff; never copy deployment identities into this repository.
 
-For an already identified same-UID listener, the passive diagnostic below checks
-the kernel listener and its exact process incarnation, then inspects the current
-process's ancestry. It neither connects nor invokes a provider:
+For an already identified same-UID listener descriptor holder, the passive
+diagnostic below resolves the supplied local alias, checks the kernel listener
+and exact process incarnation, then inspects the current process's ancestry. It
+does not prove that the holder is unique, and it neither connects nor invokes a
+provider:
 
 ```sh
 python -m hermes_codex_router.codex_restart_context /home/example/.codex/app-server-control/app-server-control.sock 12345
 ```
 
-`dependent` means the diagnostic runs inside the listener owner's process tree:
-stopping that server would interrupt the agent performing maintenance. Prepare
-the independent executor and observer from the [restart procedure](HUB_RESTART.ru.md)
-before ending the initiating turn. Bind them to a fresh operation and evidence;
-do not replay an old consumed executor. `not_observed` is only an ancestry
+`dependent` means the diagnostic observed itself inside that holder's process tree:
+stopping that server would interrupt the agent performing maintenance. A reusable
+independent native-server restart operation is not yet available; the
+[owner-step defect](OWNER_STEP_DEFECTS.md) tracks the missing executor and observer.
+Do not improvise or arm one without its client-drain, delivery, backup and rollback
+evidence. Continue preparing the bounded operation and do not replay an old
+consumed executor. `not_observed` is only an ancestry
 observation: a client can depend on the server over a socket without being its
 descendant, and PID namespaces can hide ancestry. It is not proof of independence,
 an idle turn, delivery, closed clients or permission to restart. `unknown`
@@ -72,8 +76,10 @@ changed; obtain the required host-level evidence rather than treating it as idle
 The existing `codex_rollout_completion` reader is a bounded, private native-turn
 observation. It is not a delivery receipt, a client-drain proof, or an authorization
 to start a server. Model-free maintenance and observation never invoke inference.
-The owner's authorization to restart persists across the handoff; do not ask for it
-again merely because a new independent executor is necessary.
+An existing owner authorization persists for the same approved target, artifacts,
+maintenance scope and rollback across the handoff; it does not replace any gate
+or authorize expanded scope. Do not ask again merely because that same operation
+needs an independent executor.
 
 ## Explicit independent-server migration
 
