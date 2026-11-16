@@ -60,8 +60,9 @@ any change to historical delivery uncertainty.
 ## Consequences
 
 - A crash during a Codex turn no longer leaves the server down after the
-  reboot. Queued work at crash time still blocks the start; a separate,
-  owner-approved change handles it.
+  reboot. Queued work at crash time still blocks the start;
+  [ADR 0105](0105-boot-start-leaves-queued-codex-work.md) lets it stay queued
+  when no Codex consumer is observed.
 - The process scans remain snapshots, not an admission fence. Workers are
   ordered `After=` the server unit and wait for its start job. A client started
   between the scans is the existing ADR 0088 limitation, not a new guarantee.

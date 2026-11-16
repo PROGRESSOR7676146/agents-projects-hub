@@ -511,7 +511,7 @@ class BootStartTests(unittest.TestCase):
             servers.assert_called_once_with()
             cleanup.assert_called_once_with(self.socket, 1.0)
             prepare.assert_called_once_with(
-                self.manifest, clients_closed=True, verified=self.socket
+                self.manifest, clients_closed=True, verified=self.socket, allow_queued_tail=False
             )
             with self.assertRaises(ValueError):
                 service.authorize_start(self.manifest, self.root / "absent-receipt", self.runtime)
@@ -542,6 +542,27 @@ class BootStartTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, r"custody unavailable: pid 10000000 \(EACCES\)"),
         ):
             service.refuse_native_clients(self.manifest, proc)
+
+    def test_codex_consumer_scan_names_a_consumer_and_fails_closed(self):
+        hub = b"/home/example/.local/share/agents-projects-hub/venv/bin/agents-projects-hub"
+        harmless = self.proc(
+            [b"/usr/bin/bash"],
+            [b"python", hub, b"sender", b"hub.json"],
+            [b"python", hub, b"worker", b"hub.json", b"--agent", b"claude"],
+        )
+        self.assertIsNone(service.codex_consumer_running(harmless))
+        with tempfile.TemporaryDirectory() as directory:
+            self.root = Path(directory)
+            consumer = self.proc([b"/usr/bin/bash"], [b"python", hub, b"worker", b"hub.json"])
+            self.assertEqual(service.codex_consumer_running(consumer), "10000001")
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(service, "CUSTODY_SETTLE_SECONDS", 0.1),
+            patch.object(service.os, "readlink", side_effect=PermissionError(13, "denied")),
+            self.assertRaisesRegex(ValueError, "custody unavailable"),
+        ):
+            self.root = Path(directory)
+            service.codex_consumer_running(self.proc([b"worker"]))
 
     def test_transient_denial_is_rechecked_before_classifying(self):
         # A mocked retry: one denied read, then a readable executable.

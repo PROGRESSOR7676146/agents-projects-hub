@@ -200,6 +200,20 @@ def refuse_native_clients(manifest: dict, proc: Path = Path("/proc")) -> None:
             raise ValueError(f"a native Codex or tlive client is running: pid {pid}")
 
 
+def codex_consumer_running(proc: Path = Path("/proc")) -> str | None:
+    """PID of a same-UID Hub process that could lease Codex jobs, if any (ADR 0105).
+
+    A snapshot like the client scans, not an admission fence: at boot the
+    consumers wait for this unit's start job. Unreadable custody refuses.
+    """
+    from .codex_boot_consumers import may_consume_codex_jobs
+
+    for pid, argvs, _ in _same_uid_processes(proc):
+        if any(may_consume_codex_jobs(argv) for argv in argvs):
+            return pid
+    return None
+
+
 def boot_identity(proc: Path = Path("/proc")) -> tuple[str, float]:
     """Return (boot ID, boot time in epoch seconds) from the kernel."""
     boot = (proc / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
@@ -315,15 +329,28 @@ def wait_ready(
     raise ValueError("Codex app-server did not become ready")
 
 
-def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
+def require_idle_state(
+    path: Path, *, codex_home: Path | None = None, allow_queued_tail: bool = False
+) -> None:
+    """Refuse active or unknown Codex work.
+
+    ``allow_queued_tail`` (ADR 0105) lets jobs that never started stay queued:
+    ``queued`` and ``retry_wait`` are entered only before execution or after a
+    proven unaccepted input, so no native turn of theirs can be in flight.
+    """
     db, _ = connect_existing(path, writable=False, state_error=StateError)
     db.row_factory = sqlite3.Row
+    statuses = (
+        "'leased','executing'"
+        if allow_queued_tail
+        else ("'queued','retry_wait','leased','executing'")
+    )
     try:
         db.execute("BEGIN")
         # Historical delivery and execution uncertainty cannot carry a server.
         busy = db.execute(
             "SELECT status FROM provider_jobs WHERE agent_id='codex' "
-            "AND status IN ('queued','retry_wait','leased','executing') LIMIT 1"
+            f"AND status IN ({statuses}) LIMIT 1"
         ).fetchone()
         # A late-read claim can authorize a send only while its job is indeterminate,
         # and a final job never returns there. Such a leftover claim cannot authorize a send.
@@ -351,13 +378,22 @@ def require_idle_state(path: Path, *, codex_home: Path | None = None) -> None:
 
 
 def prepare(
-    manifest: dict, *, clients_closed: bool, now: float | None = None, verified: Path | None = None
+    manifest: dict,
+    *,
+    clients_closed: bool,
+    now: float | None = None,
+    verified: Path | None = None,
+    allow_queued_tail: bool = False,
 ) -> dict:
     if not clients_closed:
         raise ValueError("explicit closed-native-clients assertion required")
     verify_pins(manifest, verified)
     refuse_existing_servers()
-    require_idle_state(Path(manifest["state_path"]), codex_home=Path(manifest["codex_home"]))
+    require_idle_state(
+        Path(manifest["state_path"]),
+        codex_home=Path(manifest["codex_home"]),
+        allow_queued_tail=allow_queued_tail,
+    )
     timestamp = time.time() if now is None else now
     return dict(
         version=1,
@@ -405,12 +441,15 @@ def authorize_start(
     Without a valid receipt, only the first attempt of a boot may start, and
     only after proving closed clients itself. With ``hub_config`` that attempt
     first settles executions interrupted by the previous boot (ADR 0104) and
-    then repeats its client and server refusal. Both modes then pass the same
-    pins, server refusal and exact idle state.
+    then repeats its client and server refusal. When it then observes no Hub
+    process that could lease Codex jobs, queued work that never started does
+    not block it (ADR 0105). Both modes then pass the same pins, server refusal
+    and otherwise exact idle state.
     """
     boot, booted_at = boot_identity()
     first = claim_first_start(runtime_dir, boot)
     verified = None
+    allow_queued_tail = False
     if not _receipt_valid(manifest, receipt):
         if not first:
             raise ValueError("a fresh start receipt is required after the first start of a boot")
@@ -427,7 +466,8 @@ def authorize_start(
             reconcile_interrupted_executions(
                 manifest, hub_config, Path(manifest["codex_binary"]["path"])
             )
-    prepare(manifest, clients_closed=True, verified=verified)
+            allow_queued_tail = queued_tail_admissible()
+    prepare(manifest, clients_closed=True, verified=verified, allow_queued_tail=allow_queued_tail)
 
 
 def hub_config_path(manifest: dict) -> Path | None:
@@ -460,6 +500,18 @@ def reconcile_interrupted_executions(manifest: dict, hub_config: Path, binary: P
             print(f"external Codex boot reconciliation settled {settled} job(s)", file=sys.stderr)
     refuse_native_clients(manifest)
     refuse_existing_servers()
+
+
+def queued_tail_admissible() -> bool:
+    """ADR 0105: queued work may stay only while no Codex consumer is observed."""
+    pid = codex_consumer_running()
+    if pid is not None:
+        print(
+            f"external Codex boot start keeps queued work blocking: Hub consumer pid {pid}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def refusal_reason(exc: BaseException) -> str:

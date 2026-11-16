@@ -88,7 +88,8 @@
   ([ADR 0088](../decisions/0088-boot-time-codex-server-start.md); прерванное
   сбоем выполнение этот старт сначала сверяет по
   [ADR 0104](../decisions/0104-boot-start-reconciles-interrupted-codex-executions.md),
-  очередь по-прежнему блокирует); не менять
+  а очередь не блокирует его, пока не запущен ни один Codex-потребитель Hub,
+  [ADR 0105](../decisions/0105-boot-start-leaves-queued-codex-work.md)); не менять
   `Restart=no`, не использовать старую квитанцию и не запускать второй server. Сначала подтвердить native endpoint, затем attach-only tlive и Hub.
   При автозапуске Hub-служб admission должен оставаться закрытым до проверки
   custody; если это не обеспечено, остановиться для инспекции состояния.

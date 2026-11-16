@@ -46,6 +46,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     database and through the verified pinned binary, within one bounded deadline. It MAY
     confirm a saved result or mark the job indeterminate; it MUST NOT replay, resume or touch
     queued work, and it MUST repeat its client and server refusal afterwards (ADR 0104).
+  - When that attempt's same-UID inventory then finds no Hub process able to lease Codex jobs,
+    failing closed on unknown forms, its idle gate MAY ignore `queued` and `retry_wait` Codex
+    jobs; it MUST NOT change them, and leased or executing work and every other gate still
+    refuse (ADR 0105).
   - Exact owner closure for an archived session's uncertain job and effective full-control delivery
     consent MAY remove only their own admission blockers; they MUST NOT prove execution/delivery or
     release other senders/writers.
