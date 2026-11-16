@@ -483,8 +483,8 @@ def hub_config_path(manifest: dict) -> Path | None:
 def reconcile_interrupted_executions(manifest: dict, hub_config: Path, binary: Path) -> None:
     """Run the bounded ADR 0104 reconciliation, then prove closed clients again.
 
-    A failure only leaves the interrupted work in place: the unchanged idle gate
-    that follows refuses the start as it did before.
+    A failure only leaves the interrupted work in place: the idle gate that
+    follows still refuses leased or executing work, as it did before.
     """
     from .codex_boot_reconcile import reconcile_previous_boot
 

@@ -40,9 +40,32 @@ class CodexBootConsumerTests(unittest.TestCase):
             script("serve", CONFIG, "--agent", "claude"),
             argv(f"{VENV}/hcr", "worker", CONFIG, "--agent", "codex"),
             argv(f"{VENV}/agents-projects-hub", "controller", CONFIG),
+            argv(f"{VENV}/python3.12", f"{VENV}/agents-projects-hub", "worker", CONFIG),
             argv(f"{VENV}/python", "-m", "hermes_codex_router", "worker", CONFIG),
             argv(f"{VENV}/python", "-m", "hermes_codex_router.cli", "controller", CONFIG),
             argv("/usr/bin/nice", f"{VENV}/agents-projects-hub", "worker", CONFIG),
+        )
+
+    def test_hub_names_outside_a_proven_program_position_do_not_count_as_harmless(self):
+        self.assert_consumer(
+            argv(
+                f"{VENV}/python",
+                "-X",
+                "agents-projects-hub-wait-socket",
+                f"{VENV}/agents-projects-hub",
+                "worker",
+                CONFIG,
+            ),
+            argv(f"{VENV}/python", "-X", "dev", "-m", "hermes_codex_router.codex_server_service"),
+            argv(f"{VENV}/python", "-I", f"{VENV}/agents-projects-hub", "sender", CONFIG),
+            argv("/usr/bin/nice", f"{VENV}/agents-projects-hub", "sender", CONFIG),
+            argv("/usr/bin/env", f"{VENV}/agents-projects-hub-wait-socket"),
+            argv(
+                f"{VENV}/python", "/home/example/tool.py", f"{VENV}/agents-projects-hub-wait-socket"
+            ),
+            argv(
+                f"{VENV}/python", "-m", "example", "-m", "hermes_codex_router.codex_server_service"
+            ),
         )
 
     def test_ambiguous_or_unknown_hub_processes_count_as_consumers(self):

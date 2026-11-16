@@ -12,6 +12,7 @@ unknown or ambiguous form keeps the queued work blocking, as before.
 from __future__ import annotations
 
 import os
+import re
 
 PACKAGE = b"hermes_codex_router"
 HUB_SCRIPTS = frozenset({b"agents-projects-hub", b"hcr"})
@@ -26,6 +27,7 @@ SERVER_MODULE = PACKAGE + b".codex_server_service"
 # Codex job. Each is a contract: a command that gains a consumer leaves here.
 SAFE_COMMANDS = frozenset({b"sender", b"monitor", b"project-provisioner"})
 CODEX_AGENT = b"codex"
+_PYTHON = re.compile(rb"python[0-9.]*")
 
 
 def _hub_related(argv: list[bytes]) -> bool:
@@ -69,26 +71,42 @@ def _safe_command(arguments: list[bytes]) -> bool:
     return False
 
 
+def _python(item: bytes) -> bool:
+    return _PYTHON.fullmatch(os.path.basename(item)) is not None
+
+
+def _entry(argv: list[bytes]) -> tuple[bytes, bytes, list[bytes]] | None:
+    """(kind, name, arguments) of a Hub entry at a proven program position.
+
+    Only three forms qualify: the program itself, an interpreter running the
+    program as its only option (the shebang form), or ``python -m module``.
+    An interpreter option or wrapper in front of it is not parsed.
+    """
+    if argv and not _python(argv[0]):
+        return b"program", os.path.basename(argv[0]), argv[1:]
+    if len(argv) >= 2 and not argv[1].startswith(b"-"):
+        return b"program", os.path.basename(argv[1]), argv[2:]
+    if len(argv) >= 3 and argv[1] == b"-m":
+        return b"module", argv[2], argv[3:]
+    return None
+
+
 def may_consume_codex_jobs(argv: list[bytes]) -> bool:
     """True unless the process is unrelated to the Hub or a known non-consumer.
 
-    The first Hub entry decides: a console script, a known helper, or
-    ``-m`` with a Hub module. A Hub mention without a recognised entry counts
-    as a consumer.
+    A Hub mention without a recognised entry at a proven program position
+    counts as a consumer.
     """
     if not _hub_related(argv):
         return False
-    for index, item in enumerate(argv):
-        name = os.path.basename(item)
-        if name in HUB_HELPERS:
+    entry = _entry(argv)
+    if entry is None:
+        return True
+    kind, name, arguments = entry
+    if kind == b"module":
+        if name == SERVER_MODULE:
             return False
-        if name in HUB_SCRIPTS:
-            return not _safe_command(argv[index + 1 :])
-        if item == b"-m" and index + 1 < len(argv):
-            module = argv[index + 1]
-            if module == SERVER_MODULE:
-                return False
-            if module in CLI_MODULES:
-                return not _safe_command(argv[index + 2 :])
-            return True
-    return True
+        return name not in CLI_MODULES or not _safe_command(arguments)
+    if name in HUB_HELPERS:
+        return False
+    return name not in HUB_SCRIPTS or not _safe_command(arguments)

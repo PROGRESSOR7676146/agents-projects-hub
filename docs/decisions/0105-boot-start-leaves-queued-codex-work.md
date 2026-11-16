@@ -34,8 +34,10 @@ start job.
 2. After the reconciliation and its repeated native-client and server
    refusal, the attempt takes one more same-UID process inventory. It looks
    for any Hub process that could lease a Codex job. The check fails closed:
-   - A process that mentions the Hub counts as a consumer unless it parses
-     as a known non-consumer:
+   - A process that mentions the Hub counts as a consumer unless its entry
+     sits at a proven program position (the program itself, an interpreter
+     running it with no option in front, or `python -m`) and parses as a
+     known non-consumer:
      - `sender`, `monitor` or `project-provisioner`;
      - `worker` with exactly one unabbreviated `--agent` value other than
        `codex` (the worker defaults to `codex`);
