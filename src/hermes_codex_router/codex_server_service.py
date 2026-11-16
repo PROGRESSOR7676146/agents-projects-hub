@@ -421,6 +421,8 @@ def authorize_start(
         verified = verify_manifest(manifest)
         remove_previous_boot_link(verified, booted_at)
         if hub_config is not None:
+            # Refuse an existing socket or path before any client or state change.
+            verify_pins(manifest, verified)
             # verify_manifest has just hashed this pinned binary.
             reconcile_interrupted_executions(
                 manifest, hub_config, Path(manifest["codex_binary"]["path"])

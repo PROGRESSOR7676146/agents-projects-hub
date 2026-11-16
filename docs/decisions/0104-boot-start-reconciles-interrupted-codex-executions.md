@@ -36,12 +36,18 @@ In both cases the blocker was an interrupted execution, not queued work.
    - The outcome is the worker's ordinary one: it publishes a confirmed saved
      result, or marks the job indeterminate with its failure notice.
    - It never replays, resumes or retries a turn and never touches queued work.
-3. The reconciliation is bounded by one monotonic deadline of 125 s. Within it,
-   the attempt waits for leases left by the crashed boot to expire. The
-   temporary client's handshake has a 20 s deadline, and each exact turn read
-   keeps its own deadline. A lease that stays valid, for example after a wall
-   clock jump, stays in place. A failure is logged and changes nothing else.
-4. Afterwards the attempt repeats the native-client and existing-server
+3. Before any temporary client or state change, the attempt refuses an existing
+   socket or path at the manifest socket path, as the later gate would.
+4. The reconciliation is bounded by one monotonic deadline of 150 s, cleanup
+   included. Within it, the attempt waits for leases left by the crashed boot
+   to expire. It claims a job only while a full handshake and exact read still
+   fit, so the deadline never turns a confirmable result into an indeterminate
+   one. Every client call of a claimed job ends 10 s before the deadline, which
+   leaves time to terminate and reap the temporary client; the handshake also
+   has its own 20 s bound. A lease that stays valid, for example after a wall
+   clock jump, or that expires too late, stays in place. A failure is logged
+   and changes nothing else.
+5. Afterwards the attempt repeats the native-client and existing-server
    refusal, then runs the unchanged idle gate. Anything still blocking refuses
    the start exactly as before, and the boot allowance stays spent.
 
@@ -62,9 +68,8 @@ any change to historical delivery uncertainty.
 - An expired lease and a claim token keep a resumed stale worker from writing
   a terminal job state. They do not prove the old owner is gone. At boot the
   kernel restart supplies that proof for every process of the previous boot.
-- The start attempt can take up to about three minutes before the server
-  listens. That is still inside the 270 s readiness budget and the 300 s start
-  timeout. If the main process is killed, the temporary stdio client loses
+- The start attempt can spend up to 150 s before the server starts, which
+  leaves 120 s of the 270 s readiness budget and the 300 s start timeout. If the main process is killed, the temporary stdio client loses
   its input pipe and exits.
 - The first deployment of a release with this change adds the field. An older
   runtime ignores it, and a deploy rollback restores the previous manifest

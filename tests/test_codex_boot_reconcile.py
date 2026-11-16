@@ -66,7 +66,7 @@ class CodexBootReconcileTests(unittest.TestCase):
         journal.record_turn(self.job_id, self.token, "example-turn")
         journal.record_completion(self.job_id, self.token, "Fictional saved result")
 
-    def reconcile(self, clock: FakeClock | None = None, factory=None) -> int:
+    def reconcile(self, clock: FakeClock | None = None, factory=None, **options) -> int:
         clock = clock or FakeClock()
         with patch.object(reconcile, "load_hub_config", return_value=self.worker.config):
             return reconcile.reconcile_previous_boot(
@@ -77,6 +77,7 @@ class CodexBootReconcileTests(unittest.TestCase):
                 or (lambda: self.fail("a saved completion needs no provider")),
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
+                **options,
             )
 
     def first_boot_start(self, *, receipt: Path | None = None, **reconcile_patch):
@@ -262,9 +263,18 @@ class CodexBootReconcileTests(unittest.TestCase):
             )
             with self.assertRaises(TimeoutError):
                 factory()
-        start.assert_called_once_with("/example/pinned/codex")
-        self.assertEqual(deadlines, [100.0 + reconcile.INITIALIZE_SECONDS])
-        self.assertEqual(closed, [True])
+            capped = reconcile.stdio_client_factory(
+                Path("/example/pinned/codex"),
+                model_provider=None,
+                permission_profile=None,
+                deadline=105.0,
+            )
+            with self.assertRaises(TimeoutError):
+                capped()
+        self.assertEqual(start.call_count, 2)
+        start.assert_called_with("/example/pinned/codex")
+        self.assertEqual(deadlines, [100.0 + reconcile.INITIALIZE_SECONDS, 105.0])
+        self.assertEqual(closed, [True, True])
 
     def test_manifest_names_the_hub_config_only_as_an_absolute_path(self):
         self.assertIsNone(service.hub_config_path({}))
@@ -275,6 +285,55 @@ class CodexBootReconcileTests(unittest.TestCase):
         for value in ("relative/hub.json", 7, ""):
             with self.assertRaisesRegex(ValueError, "invalid Hub config"):
                 service.hub_config_path({"hub_config": value})
+
+    def test_a_claimed_read_ends_before_the_deadline_minus_cleanup(self):
+        ExecutionJournal(self.state).record_turn(self.job_id, self.token, "example-turn")
+        self.expire_lease()
+        deadlines: list[float] = []
+
+        class Client:
+            def read_turn_outcome(self, *, deadline: float, **_: object):
+                deadlines.append(deadline)
+                raise TimeoutError("fictional slow read")
+
+            def close(self) -> None:
+                pass
+
+        clock = FakeClock()
+        clock.now = 1000.0
+        self.assertEqual(self.reconcile(clock, factory=Client), 1)
+        self.assertEqual(
+            deadlines,
+            [1000.0 + reconcile.DEFAULT_DEADLINE_SECONDS - reconcile.CLEANUP_SECONDS],
+        )
+        job = self.state.get_provider_job(self.job_id)
+        self.assertEqual((job.status, job.attempt_count), ("indeterminate", 1))
+
+    def test_a_job_too_late_for_a_full_read_stays_in_place(self):
+        self.complete_checkpoint()
+        self.expire_lease()
+        budget = reconcile.CLEANUP_SECONDS + reconcile.CLAIM_RESERVE_SECONDS
+        self.assertEqual(self.reconcile(deadline_seconds=budget), 0)
+        self.assertEqual(self.state.get_provider_job(self.job_id).status, "executing")
+
+    def test_an_existing_socket_path_refuses_before_any_reconciliation(self):
+        self.complete_checkpoint()
+        self.expire_lease()
+        occupied = self.runtime / "occupied.sock"
+        occupied.write_bytes(b"")
+        with (
+            patch.object(service, "reconcile_interrupted_executions") as reconciled,
+            patch.object(service, "boot_identity", return_value=("example-boot", 1.0)),
+            patch.object(service, "require_lingering"),
+            patch.object(service, "refuse_native_clients"),
+            patch.object(service, "refuse_existing_servers"),
+            patch.object(service, "verify_manifest", return_value=occupied),
+            patch.object(service, "remove_previous_boot_link"),
+            self.assertRaisesRegex(ValueError, "existing socket or path"),
+        ):
+            service.authorize_start(self.manifest, None, self.runtime, self.hub_config)
+        reconciled.assert_not_called()
+        self.assertEqual(self.state.get_provider_job(self.job_id).status, "executing")
 
 
 if __name__ == "__main__":
