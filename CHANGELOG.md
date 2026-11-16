@@ -5,9 +5,15 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.18] - 2026-11-16
+
 - Let the first boot start of the pinned Codex server settle executions that a
   host crash interrupted, through the worker's own model-free recovery, before
   its unchanged idle gate (ADR 0104). Queued work still blocks the start.
+- Show which clients depend on the Codex server before a restart, and refuse
+  dependent server restarts until a reviewed recovery path exists.
+- Report a stale Claude model catalog after a failed refresh instead of
+  presenting it as current.
 
 ## [0.11.17] - 2026-11-13
 
