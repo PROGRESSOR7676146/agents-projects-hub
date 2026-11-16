@@ -34,13 +34,18 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     Fresh server start MUST refuse queued or in-flight work, unsettled controls, read claims except
     those left on final jobs, and non-Telegram writers. Both paths MUST refuse unowned servers or
     sockets and mismatched artifacts without killing processes or deleting sockets. Fresh server
-    creation MUST be independent of historical delivery and execution uncertainty; it MUST NOT
-    resolve, resume, replay or confirm either.
+    creation MUST be independent of historical delivery and execution uncertainty; apart from
+    the boot reconciliation below, it MUST NOT resolve, resume, replay or confirm either.
   - An opt-in boot start MAY replace the operator receipt only for the first start attempt of
     a boot, after its own same-UID inventory finds no server or native client. It MAY remove
     only an owned link at the exact manifest socket path whose target is gone and which
     predates the current boot; it MUST NOT remove sockets, regular files or live links, and a
     refusal MUST NOT retry, repair or start anything else (ADR 0088).
+  - Before its idle gate, that first attempt MAY run the ordinary model-free worker
+    reconciliation of executions interrupted by the previous boot, against the same state
+    database and through the verified pinned binary, within one bounded deadline. It MAY
+    confirm a saved result or mark the job indeterminate; it MUST NOT replay, resume or touch
+    queued work, and it MUST repeat its client and server refusal afterwards (ADR 0104).
   - Exact owner closure for an archived session's uncertain job and effective full-control delivery
     consent MAY remove only their own admission blockers; they MUST NOT prove execution/delivery or
     release other senders/writers.

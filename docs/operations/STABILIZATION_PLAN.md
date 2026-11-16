@@ -262,6 +262,7 @@ acceptance.
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
 | Hub application recovery/handoff | REQ-OPS-012 | Bounded Hub-consistent restore; full-host/WSL drill externally owned, not claimed by handoff |
+| Boot reconciliation of interrupted Codex work | REQ-OPS-005, ADR 0104 | Reboot during a fictional Codex turn: server starts at the first attempt, the job is settled once without replay |
 | Unauthorized access and disclosure | REQ-SEC-006, AC-F-007, AC-NF-001 | Outsider-account negative checklist |
 
 ## Follow-ups found during execution

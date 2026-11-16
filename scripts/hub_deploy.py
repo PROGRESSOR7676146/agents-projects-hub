@@ -1068,6 +1068,8 @@ def create_plan(
     hub_bytes = _file_bytes(hub_path)
     if hub_bytes is None:
         raise Refused("missing Hub config")
+    # ADR 0104: the first boot start reconciles with this installation's Hub config.
+    manifest["hub_config"] = str(hub_path)
     need(
         claude_policy(json.loads(hub_bytes)) == claude_policy(candidate_config),
         "Claude settings differ between the Hub config and the Claude worker config",

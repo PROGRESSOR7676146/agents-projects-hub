@@ -1,6 +1,10 @@
 # Codex server cold-boot recovery: candidate design
 
-Status: investigation; not authorized for deployment or implemented.
+Status: investigation; not authorized for deployment or implemented. The
+interrupted-execution half is implemented separately by
+[ADR 0104](../decisions/0104-boot-start-reconciles-interrupted-codex-executions.md):
+the first boot start settles it through the worker's own recovery. The queued
+tail and the admission fence below remain open.
 
 An interrupted boot can leave executing and queued provider jobs in durable
 state. The independent server starts before workers, rejects these jobs, and

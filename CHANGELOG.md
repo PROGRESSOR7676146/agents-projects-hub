@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Let the first boot start of the pinned Codex server settle executions that a
+  host crash interrupted, through the worker's own model-free recovery, before
+  its unchanged idle gate (ADR 0104). Queued work still blocks the start.
+
 ## [0.11.17] - 2026-11-13
 
 - Reduce unnecessary SQLite writer locks during idle polling, while preserving

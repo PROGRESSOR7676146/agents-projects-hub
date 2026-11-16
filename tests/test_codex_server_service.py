@@ -276,7 +276,7 @@ class CodexServerServiceTests(unittest.TestCase):
                 0,
             )
             authorize.assert_called_once_with(
-                self.manifest, Path("/tmp/example-receipt"), Path("/tmp/example-runtime")
+                self.manifest, Path("/tmp/example-receipt"), Path("/tmp/example-runtime"), None
             )
             binary = self.manifest["codex_binary"]["path"]
             nice.assert_called_once_with(10)
