@@ -3,8 +3,10 @@
 Status: investigation; not authorized for deployment or implemented. The
 interrupted-execution half is implemented separately by
 [ADR 0104](../decisions/0104-boot-start-reconciles-interrupted-codex-executions.md):
-the first boot start settles it through the worker's own recovery. The queued
-tail and the admission fence below remain open.
+the first boot start settles it through the worker's own recovery.
+[ADR 0105](../decisions/0105-boot-start-leaves-queued-codex-work.md) lets the
+queued tail stay queued when no Codex consumer is observed, which relies on
+boot ordering rather than a fence. The admission fence below remains open.
 
 An interrupted boot can leave executing and queued provider jobs in durable
 state. The independent server starts before workers, rejects these jobs, and

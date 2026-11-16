@@ -189,4 +189,6 @@ class CodexServerRolloutTests(unittest.TestCase):
             patch.object(service, "require_idle_state") as check,
         ):
             service.prepare(manifest, clients_closed=True)
-        check.assert_called_once_with(self.f.fixture.config.state_path, codex_home=self.home)
+        check.assert_called_once_with(
+            self.f.fixture.config.state_path, codex_home=self.home, allow_queued_tail=False
+        )

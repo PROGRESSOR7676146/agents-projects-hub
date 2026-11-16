@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Let the first boot start of the pinned Codex server leave queued Codex work
+  in place when no Hub process that could lease it runs, so a message queued
+  behind a crash-interrupted turn no longer keeps the server down (ADR 0105).
+
 ## [0.11.18] - 2026-11-16
 
 - Let the first boot start of the pinned Codex server settle executions that a

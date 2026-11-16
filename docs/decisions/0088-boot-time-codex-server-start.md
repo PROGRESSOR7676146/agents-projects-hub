@@ -97,3 +97,7 @@ Amendment, 2026-11-16 ([ADR 0104](0104-boot-start-reconciles-interrupted-codex-e
 before its idle gate, the receipt-less first start may settle executions
 interrupted by the previous boot through the ordinary worker recovery, then
 repeats its client and server refusal. Queued work and every other gate stay.
+
+Amendment, 2026-11-16 ([ADR 0105](0105-boot-start-leaves-queued-codex-work.md)):
+that attempt then lets queued Codex work stay queued when its inventory finds no
+Hub process that could lease it; every other gate stays.

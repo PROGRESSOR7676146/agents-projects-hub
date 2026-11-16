@@ -80,8 +80,11 @@ class CodexBootReconcileTests(unittest.TestCase):
                 **options,
             )
 
-    def first_boot_start(self, *, receipt: Path | None = None, **reconcile_patch):
+    def first_boot_start(
+        self, *, receipt: Path | None = None, consumer: str | None = None, **reconcile_patch
+    ):
         with (
+            patch.object(service, "codex_consumer_running", return_value=consumer) as scan,
             patch.object(service, "boot_identity", return_value=("example-boot", 1.0)),
             patch.object(service, "require_lingering"),
             patch.object(service, "refuse_native_clients") as clients,
@@ -96,6 +99,7 @@ class CodexBootReconcileTests(unittest.TestCase):
                 service.authorize_start(self.manifest, receipt, self.runtime, self.hub_config)
             finally:
                 self.client_scans = clients.call_count
+                self.consumer_scans = scan.call_count
 
     def test_interrupted_execution_is_settled_and_the_first_start_passes_the_gate(self):
         self.complete_checkpoint()
@@ -150,23 +154,116 @@ class CodexBootReconcileTests(unittest.TestCase):
         self.assertEqual(self.reconcile(clock), 1)
         self.assertEqual(self.state.get_provider_job(self.job_id).status, "result_ready")
 
-    def test_queued_work_is_untouched_and_still_blocks_the_start(self):
+    def queued_tail(self) -> tuple[str, str]:
+        queued = self.worker.enqueue(message_id=2)
+        waiting = self.worker.enqueue(message_id=3)
+        # Fictional state shape: retry_wait is entered only from a pre-execution lease.
+        with self.state._immediate_transaction():
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET status='retry_wait', next_attempt_at=created_at "
+                "WHERE job_id=?",
+                (waiting,),
+            )
+        return queued, waiting
+
+    def test_queued_work_is_untouched_and_still_blocks_while_a_consumer_runs(self):
         queued = self.worker.enqueue(message_id=2)
         before = self.state.get_provider_job(queued)
         self.complete_checkpoint()
         self.expire_lease()
 
         with self.assertRaisesRegex(ValueError, "queued job"):
-            self.first_boot_start(return_value=lambda: self.fail("no provider access"))
+            self.first_boot_start(
+                consumer="4242", return_value=lambda: self.fail("no provider access")
+            )
 
         self.assertEqual(self.state.get_provider_job(self.job_id).status, "result_ready")
         self.assertEqual(self.state.get_provider_job(queued), before)
+        self.assertEqual(self.consumer_scans, 1)
+
+    def test_queued_tail_does_not_block_when_no_consumer_runs(self):
+        queued, waiting = self.queued_tail()
+        before = [self.state.get_provider_job(job) for job in (queued, waiting)]
+        self.complete_checkpoint()
+        self.expire_lease()
+
+        self.first_boot_start(return_value=lambda: self.fail("no provider access"))
+
+        self.assertEqual(self.state.get_provider_job(self.job_id).status, "result_ready")
+        self.assertEqual([self.state.get_provider_job(job) for job in (queued, waiting)], before)
+        self.assertEqual((self.client_scans, self.consumer_scans), (2, 1))
+
+    def test_started_or_unsettled_work_still_blocks_with_no_consumer(self):
+        self.queued_tail()
+        self.keep_lease()
+        with (
+            patch.object(reconcile, "DEFAULT_DEADLINE_SECONDS", 0.0),
+            self.assertRaisesRegex(ValueError, "executing job"),
+        ):
+            self.first_boot_start(return_value=lambda: self.fail("no provider access"))
+        path = self.worker.config.state_path
+        # A lease, even an expired one, belongs to ordinary stale recovery.
+        with self.state._immediate_transaction():
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET status='leased', lease_expires_at='2000-01-01T00:00:00Z' "
+                "WHERE job_id=?",
+                (self.job_id,),
+            )
+        with self.assertRaisesRegex(ValueError, "leased job"):
+            service.require_idle_state(path, allow_queued_tail=True)
+        job = self.state.get_provider_job(self.job_id)
+        with self.state._immediate_transaction():
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET status='cancelled', lease_owner=NULL, lease_token=NULL, "
+                "lease_expires_at=NULL WHERE job_id=?",
+                (self.job_id,),
+            )
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (job.session_id,),
+            )
+        with self.assertRaisesRegex(ValueError, "native writer"):
+            service.require_idle_state(path, allow_queued_tail=True)
+        with self.state._immediate_transaction():
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='telegram' WHERE session_id=?",
+                (job.session_id,),
+            )
+        service.require_idle_state(path, allow_queued_tail=True)
+        with self.assertRaisesRegex(ValueError, "queued job"):
+            service.require_idle_state(path)
+
+    def test_retry_wait_is_entered_only_before_execution(self):
+        with self.assertRaisesRegex(StateError, "pre-execution"):
+            self.state.schedule_provider_job_retry(
+                self.job_id, self.token, error_code="example", delay_seconds=1
+            )
+        self.assertEqual(self.state.get_provider_job(self.job_id).status, "executing")
+
+    def test_receipt_starts_keep_queued_work_blocking_without_a_consumer_scan(self):
+        self.queued_tail()
+        self.complete_checkpoint()
+        self.expire_lease()
+        self.first_boot_start(return_value=lambda: self.fail("no provider access"))
+        with (
+            patch.object(service, "codex_consumer_running") as scan,
+            patch.object(service, "_receipt_valid", return_value=True),
+            patch.object(service, "boot_identity", return_value=("example-boot", 1.0)),
+            patch.object(service, "verify_pins"),
+            patch.object(service, "refuse_existing_servers"),
+            self.assertRaisesRegex(ValueError, "queued job"),
+        ):
+            service.authorize_start(
+                self.manifest, self.runtime / "receipt", self.runtime, self.hub_config
+            )
+        scan.assert_not_called()
 
     def test_failed_reconciliation_falls_through_to_the_unchanged_refusal(self):
         self.complete_checkpoint()
         self.expire_lease()
         with (
             patch.object(reconcile, "reconcile_previous_boot", side_effect=StateError("x")),
+            patch.object(service, "codex_consumer_running", return_value=None),
             patch.object(service, "boot_identity", return_value=("example-boot", 1.0)),
             patch.object(service, "require_lingering"),
             patch.object(service, "refuse_native_clients") as clients,
