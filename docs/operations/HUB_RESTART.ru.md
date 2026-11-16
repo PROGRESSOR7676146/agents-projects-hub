@@ -85,7 +85,10 @@
   предусматривает ручной запуск app-server, выполнить новый проверенный план
   старта из [native runbook](TLIVE_RELIABILITY.md). Автозапуск допустим только
   через opt-in установку юнита app-server
-  ([ADR 0088](../decisions/0088-boot-time-codex-server-start.md)); не менять
+  ([ADR 0088](../decisions/0088-boot-time-codex-server-start.md); прерванное
+  сбоем выполнение этот старт сначала сверяет по
+  [ADR 0104](../decisions/0104-boot-start-reconciles-interrupted-codex-executions.md),
+  очередь по-прежнему блокирует); не менять
   `Restart=no`, не использовать старую квитанцию и не запускать второй server. Сначала подтвердить native endpoint, затем attach-only tlive и Hub.
   При автозапуске Hub-служб admission должен оставаться закрытым до проверки
   custody; если это не обеспечено, остановиться для инспекции состояния.

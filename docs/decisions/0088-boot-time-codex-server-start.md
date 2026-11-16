@@ -92,3 +92,8 @@ custody, pin and receipt gates remain in force.
 - **Lingering.** Without lingering, `$XDG_RUNTIME_DIR` is cleared at the last
   logout, so "first start of a boot" would mean "first start after login". The
   boot mode therefore refuses without lingering; the manual receipt still works.
+
+Amendment, 2026-11-16 ([ADR 0104](0104-boot-start-reconciles-interrupted-codex-executions.md)):
+before its idle gate, the receipt-less first start may settle executions
+interrupted by the previous boot through the ordinary worker recovery, then
+repeats its client and server refusal. Queued work and every other gate stay.

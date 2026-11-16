@@ -58,6 +58,7 @@ def reconcile_codex_completion(
     client_factory: Callable[[], CodexAppServerClient],
     execution_error: BaseException | None = None,
     interrupt_active_on_failure: bool = False,
+    deadline: float | None = None,
 ) -> Literal["completed", "failed", "interrupted", "active", "unknown"]:
     """Reconcile one accepted turn by exact identity without productive work."""
     journal = ExecutionJournal(state)
@@ -120,8 +121,9 @@ def reconcile_codex_completion(
                         on_interrupt_event=record_interrupt,
                     )
                 else:
+                    bound = {} if deadline is None else {"deadline": deadline}
                     outcome = client.read_turn_outcome(
-                        thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
+                        thread_id=thread_id, turn_id=turn_id, cwd=canonical_root, **bound
                     )
                 outcome_status = outcome.status
                 result = outcome.result
@@ -207,8 +209,13 @@ def recover_codex_job(
     agent_id: str,
     worker_id: str,
     client_factory: Callable[[], CodexAppServerClient],
+    *,
+    deadline: float | None = None,
 ) -> bool:
-    """Reconcile one stale invocation. No productive provider method is called."""
+    """Reconcile one stale invocation. No productive provider method is called.
+
+    ``deadline`` is an absolute monotonic bound for the exact turn read.
+    """
     journal = ExecutionJournal(state)
     job = journal.claim_stale(agent_id, worker_id)
     if job is None:
@@ -242,6 +249,7 @@ def recover_codex_job(
             lease_token=token,
             agent_id=agent_id,
             client_factory=client_factory,
+            deadline=deadline,
         )
         if observed_status != "completed":
             raise RpcError("worker stopped without a confirmed completed turn")

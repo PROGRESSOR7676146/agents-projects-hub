@@ -616,7 +616,10 @@ class StageTests(StageFixture):
         self.assertFalse(any(x["kind"] == "base_unit" and not x["changed"] for x in entries))
         manifest = next(x for x in entries if x["kind"] == "manifest")
         candidate = json.loads((plan_dir / manifest["after"]["copy"]).read_text())
-        self.assertEqual(candidate, {"hub_git_sha": self.new_sha, "other": "keep"})
+        self.assertEqual(
+            candidate,
+            {"hub_git_sha": self.new_sha, "other": "keep", "hub_config": str(self.hub)},
+        )
         validations = [c for c in self.calls if "validate-hub" in c]
         self.assertEqual(len(validations), 2)
         self.assertTrue(

@@ -397,11 +397,15 @@ def _receipt_valid(manifest: dict, receipt: Path | None) -> bool:
     return True
 
 
-def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> None:
+def authorize_start(
+    manifest: dict, receipt: Path | None, runtime_dir: Path, hub_config: Path | None = None
+) -> None:
     """Authorize by a fresh operator receipt, or as the first start of this boot.
 
     Without a valid receipt, only the first attempt of a boot may start, and
-    only after proving closed clients itself. Both modes then pass the same
+    only after proving closed clients itself. With ``hub_config`` that attempt
+    first settles executions interrupted by the previous boot (ADR 0104) and
+    then repeats its client and server refusal. Both modes then pass the same
     pins, server refusal and exact idle state.
     """
     boot, booted_at = boot_identity()
@@ -416,7 +420,46 @@ def authorize_start(manifest: dict, receipt: Path | None, runtime_dir: Path) -> 
         # Hash the pins once per start: the same verification gates the cleanup and prepare.
         verified = verify_manifest(manifest)
         remove_previous_boot_link(verified, booted_at)
+        if hub_config is not None:
+            # Refuse an existing socket or path before any client or state change.
+            verify_pins(manifest, verified)
+            # verify_manifest has just hashed this pinned binary.
+            reconcile_interrupted_executions(
+                manifest, hub_config, Path(manifest["codex_binary"]["path"])
+            )
     prepare(manifest, clients_closed=True, verified=verified)
+
+
+def hub_config_path(manifest: dict) -> Path | None:
+    """The deploy tool records the installation's Hub config (ADR 0104)."""
+    value = manifest.get("hub_config")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError("invalid Hub config in service manifest")
+    return Path(value)
+
+
+def reconcile_interrupted_executions(manifest: dict, hub_config: Path, binary: Path) -> None:
+    """Run the bounded ADR 0104 reconciliation, then prove closed clients again.
+
+    A failure only leaves the interrupted work in place: the unchanged idle gate
+    that follows refuses the start as it did before.
+    """
+    from .codex_boot_reconcile import reconcile_previous_boot
+
+    try:
+        settled = reconcile_previous_boot(manifest, hub_config, verified_binary=binary)
+    except Exception as exc:
+        print(
+            f"external Codex boot reconciliation incomplete: {refusal_reason(exc)}",
+            file=sys.stderr,
+        )
+    else:
+        if settled:
+            print(f"external Codex boot reconciliation settled {settled} job(s)", file=sys.stderr)
+    refuse_native_clients(manifest)
+    refuse_existing_servers()
 
 
 def refusal_reason(exc: BaseException) -> str:
@@ -454,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime = os.environ.get("XDG_RUNTIME_DIR")
         if not runtime:
             raise ValueError("per-user runtime directory unavailable")
-        authorize_start(manifest, args.receipt, Path(runtime))
+        authorize_start(manifest, args.receipt, Path(runtime), hub_config_path(manifest))
         os.environ["CODEX_HOME"] = manifest["codex_home"]
         binary = manifest["codex_binary"]["path"]
         try:
