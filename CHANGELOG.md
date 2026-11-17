@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Telegram decision for uncertain Claude work (ADR 0107): when a live Claude
+  turn ends without a confirmed outcome and its process is proven stopped, the
+  owner can choose «Проверить и продолжить» or «Закрыть без повтора» from a
+  Hub-bot prompt instead of a local command. Adds schema 57; the capability
+  ships switched off in this release.
+
 ## [0.11.21] - 2026-11-17
 
 - Quieter, shorter notices (ADR 0106): Hub no longer sends "accepted" and

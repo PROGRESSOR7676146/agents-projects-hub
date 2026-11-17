@@ -8,11 +8,15 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from .artifacts import artifact_spool_root, remove_spooled_artifact, verify_spooled_artifact
+from .codex_failure import owner_resolution_action
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .receipt_commit import commit_receipt
 from .reply_choices import CHOICE_PROMPT_HTML, keyboard, parse_choice_part
 from .state_delivery import DeliveryStateFacade, TelegramOutboxRecord
 from .telegram import TelegramError
+from .uncertain_decision import PROMPT_HTML as UNCERTAIN_PROMPT_HTML
+from .uncertain_decision import keyboard as uncertain_keyboard
+from .uncertain_decision import parse_prompt_part
 
 
 class FinalDeliveryTelegram(Protocol):
@@ -125,6 +129,21 @@ def deliver_final_part(
                 outbox.thread_id,
                 CHOICE_PROMPT_HTML,
                 reply_markup=keyboard(*choice),
+            )
+        elif (snapshot := parse_prompt_part(part.telegram_html)) is not None:
+            # Only the Hub bot receives the press (ADR 0107); without it the
+            # prompt degrades to the local owner command, never provider buttons.
+            message_id = (
+                choice_telegram.send_html(
+                    outbox.chat_id,
+                    outbox.thread_id,
+                    UNCERTAIN_PROMPT_HTML,
+                    reply_markup=uncertain_keyboard(snapshot),
+                )
+                if choice_telegram is not None
+                else telegram.send_html(
+                    outbox.chat_id, outbox.thread_id, owner_resolution_action(outbox.job_id)
+                )
             )
         else:
             message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, part.telegram_html)

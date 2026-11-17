@@ -310,6 +310,8 @@ class ExternalCliAdapter:
         self._process_lock = threading.Lock()
         self._active_process: subprocess.Popen[str] | None = None
         self._claude_stop_process: subprocess.Popen[str] | None = None
+        # A process whose group cleanup and reap have not completed (ADR 0107).
+        self._claude_unreaped: subprocess.Popen[str] | None = None
         self._interrupt_requested = threading.Event()
         self._turn_usage: dict[str, object] | None = None
         self._claude_capabilities = ClaudeCliCapabilities()
@@ -1234,7 +1236,10 @@ class ExternalCliAdapter:
     def _terminate_claude_process(self, process: subprocess.Popen[str], *, graceful: bool) -> None:
         with self._process_lock:
             if process.returncode is not None:
+                if self._claude_unreaped is process:
+                    self._claude_unreaped = None
                 return
+            self._claude_unreaped = process
             running = peek_exit_code(process) is None
             try:
                 os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
@@ -1258,6 +1263,26 @@ class ExternalCliAdapter:
                 except ProcessLookupError:
                     pass
             process.wait(timeout=5)
+            self._claude_unreaped = None
+
+    def confirm_owned_claude_exit(self) -> bool:
+        """Prove that the last owned Claude turn left no process (ADR 0107).
+
+        Its group was killed and the leader reaped, and the turn's host scope,
+        when one was used, is killed again and observed inactive. A false
+        result only withholds the owner's Telegram decision.
+
+        Invariant: only ``_terminate_claude_process`` reaps a Claude leader,
+        and it signals the whole group before waiting. The run loop observes
+        exit with ``WNOWAIT`` and never reaps, so an already reaped leader means
+        an earlier group kill and reap completed.
+        """
+        if self.runtime != "claude":
+            return False
+        with self._process_lock:
+            if self._active_process is not None or self._claude_unreaped is not None:
+                return False
+        return self._host_scopes.confirm_ended()
 
     def _usage_recorder(self) -> UsageSummaryCallback:
         """Start a new stream's usage; its reader publishes only after a complete drain."""

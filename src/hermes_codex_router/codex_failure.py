@@ -5,6 +5,8 @@ import re
 from contextlib import contextmanager
 from typing import Iterator
 
+from .uncertain_decision import buttons_action
+
 MAX_PARTIAL_TEXT = 10_000
 
 
@@ -153,11 +155,18 @@ def owner_resolution_action(job_id: str) -> str:
     )
 
 
-def uncertain_provider_notice(display_name: str, job_id: str) -> str:
-    """Explain an uncertain non-Codex outcome without exposing provider diagnostics."""
+def uncertain_provider_notice(
+    display_name: str, job_id: str, *, decision_buttons: bool = False
+) -> str:
+    """Explain an uncertain non-Codex outcome without exposing provider diagnostics.
+
+    With ``decision_buttons`` the Hub-bot prompt that follows is the one action
+    (ADR 0107); otherwise it is the local owner command.
+    """
     safe_name = html.escape(display_name)
     return (
         f"⚠️ {safe_name} прервался без итогового ответа.\n"
         "Итог неизвестен: файлы могли измениться. Автоповтора не будет; "
-        "новые запуски в проекте на паузе до вашего решения.\n" + owner_resolution_action(job_id)
+        "новые запуски в проекте на паузе до вашего решения.\n"
+        + (buttons_action() if decision_buttons else owner_resolution_action(job_id))
     )

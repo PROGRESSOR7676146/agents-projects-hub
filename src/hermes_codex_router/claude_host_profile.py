@@ -117,6 +117,7 @@ class ClaudeHostScopes:
         self._systemd_run: str | None = None
         self._systemctl: str | None = None
         self.pending: set[str] = set()
+        self.last_unit: str | None = None
 
     def _resolve(self) -> None:
         if self._systemd_run is None or self._systemctl is None:
@@ -182,6 +183,21 @@ class ClaudeHostScopes:
                 return False
             time.sleep(min(0.1, remaining))
 
+    def confirm_ended(self) -> bool:
+        """Kill and observe inactive the last turn's scope and any unverified one."""
+        units = self.pending | ({self.last_unit} if self.last_unit is not None else set())
+        if not units:
+            return True
+        try:
+            self._resolve()
+        except Exception:
+            return False
+        for unit in sorted(units):
+            if not self._cleanup(unit):
+                return False
+            self.pending.discard(unit)
+        return True
+
     @contextmanager
     def turn(
         self, environment: Mapping[str, str]
@@ -194,6 +210,7 @@ class ClaudeHostScopes:
                 "claude_host_cleanup_pending",
                 "A previous Claude host scope is still active or unverified.",
             )
+        self.last_unit = None
         if not environment.get("INVOCATION_ID"):
             yield lambda argv: argv
             return
@@ -204,6 +221,7 @@ class ClaudeHostScopes:
                 "claude_host_unverified", "Claude host scope cannot be bound to its worker."
             )
         assert self._systemd_run is not None
+        self.last_unit = unit
 
         def wrap(argv: tuple[str, ...]) -> tuple[str, ...]:
             assert self._systemd_run is not None

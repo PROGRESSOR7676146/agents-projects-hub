@@ -61,6 +61,7 @@ from .telegram_interaction import (
     telegram_developer_instructions,
 )
 from .turn_observation import TurnObservation
+from .uncertain_decision_state import UncertainDecisionState
 from .worker_activity import codex_activity_for_turn
 from .worker_activity_barrier import WorkerActivityBarrier
 from .worker_claude_observations import claude_stream_observers
@@ -859,6 +860,7 @@ class ExternalQueueWorker:
                     error_detail = " ".join(str(exc).split())[:1000] or None
                     # Invocation has been marked executing; no automatic replay
                     # is safe without runtime-specific proof that it never began.
+                    offer = failure.notice == "uncertain" and self._offers_decision(executing)
                     record = commit_worker_failure_notice(
                         self.state,
                         self.config,
@@ -873,10 +875,13 @@ class ExternalQueueWorker:
                             executing,
                             token,
                             project_root,
-                            uncertain_provider_notice(self.agent.display_name, executing.job_id),
+                            uncertain_provider_notice(
+                                self.agent.display_name, executing.job_id, decision_buttons=offer
+                            ),
                         )
                         if failure.notice == "uncertain"
                         else "",
+                        decision_prompt=offer,
                     )
                     if record.status == "cancelled":  # a covering stop won the commit
                         self._last_error_code = None
@@ -892,6 +897,19 @@ class ExternalQueueWorker:
             survived("external_worker.failure_notice_record", survived_error)
         if self.agent.runtime == "codex":
             self._discard_client()
+
+    def _offers_decision(self, job: ProviderJobRecord) -> bool:
+        """Offer the owner's Telegram decision only once the process provably ended."""
+        if self.agent.runtime != "claude" or not self.config.hub_uncertain_decision_enabled:
+            return False
+        try:
+            if UncertainDecisionState(self.state).correction_linked(job.job_id):
+                return False
+            confirm = getattr(self.adapter, "confirm_owned_claude_exit", None)
+            return callable(confirm) and confirm() is True
+        except Exception as error:
+            survived("external_worker.uncertain_decision_proof", error)
+            return False
 
     def _record_unavailable(self, error_code: str) -> None:
         """Keep the error visible; only a component failure, or the third request

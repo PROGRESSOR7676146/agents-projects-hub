@@ -8,7 +8,7 @@
   ],
   "runbook": "RUNBOOK.md",
   "maintained_release": "0.11.21",
-  "state_schema": 56,
+  "state_schema": 57,
   "max_age_days": 30,
   "required_units": [
     "agents-projects-hub.service",

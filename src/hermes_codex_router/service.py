@@ -81,6 +81,7 @@ from .model_selection import (
     is_openai_model,
 )
 from .notice_copy import limit_notice, not_started_notice
+from .owner_decision_callback import OWNER_DECISION_PREFIXES, handle_owner_decision_callback
 from .project_editing import ProjectEditStore
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import (
@@ -1855,33 +1856,8 @@ class ProjectHubService:
         if not self.config.is_authorized(callback.sender_id, callback.chat_id, callback.thread_id):
             self.telegram.answer_callback(callback.callback_id, "Not authorized")
             return False
-        if callback.data.startswith("bh:"):
-            if callback.sender_id not in self.config.owner_user_ids:
-                self.telegram.answer_callback(
-                    callback.callback_id, "Только владелец может решить судьбу запроса"
-                )
-                return True
-            try:
-                _, action, job_id = callback.data.split(":", 2)
-                if action not in {"c", "x"}:
-                    raise StateError("unknown held-job decision")
-                decision = self.state.decide_held_provider_job(
-                    job_id=job_id,
-                    action="confirm" if action == "c" else "cancel",
-                    chat_id=callback.chat_id,
-                    thread_id=callback.thread_id,
-                    notice_message_id=callback.message_id,
-                )
-            except (ValueError, StateError) as exc:
-                self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
-                return True
-            self.telegram.answer_callback(
-                callback.callback_id,
-                "Запуск подтверждён; запрос ожидает своей очереди"
-                if decision == "confirmed"
-                else "Запрос отменён",
-            )
-            return True
+        if callback.data.startswith(OWNER_DECISION_PREFIXES):
+            return handle_owner_decision_callback(self, callback)
         if not self.state.claim_callback(
             callback.callback_id,
             observer_agent_id=getattr(self, "ingress_identity", self.agent.agent_id),
