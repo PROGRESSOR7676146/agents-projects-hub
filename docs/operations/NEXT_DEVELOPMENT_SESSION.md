@@ -1,5 +1,43 @@
 # Next session: integrate stop fixes, then Claude developer workflow
 
+## Next: Telegram decision for uncertain Claude work (2026-11-17)
+
+Stabilization order agreed with the owner: (1) host-turn subagent fix —
+released; (2) quiet, short Russian notices — merged under
+[ADR 0106](../decisions/0106-quiet-short-russian-notices.md); (3) one-tap
+owner decision for an uncertain job — **next**; then a passive quota gate, an
+offline corpus of sanitized Claude streams, and an investigation of
+`claude_correction_unconfirmed`.
+
+Step 3 scope, after a GPT Astra consult (approve with amendments):
+
+- Buttons **«Проверить и продолжить»** and **«Закрыть без повтора»** on a Hub-bot
+  reply to the uncertainty notice, for non-Codex jobs that are `indeterminate`
+  without terminal evidence or resolution. Codex stays on its existing
+  terminal-evidence `retry` and read-only reconciliation; exhausted
+  reconciliation is not proof that the turn stopped.
+- One tap is acceptable with exact binding: the configured owner, a Hub-authored
+  message equal to the recorded prompt message, the job, and a server-side
+  snapshot of session and generation taken when the prompt was prepared.
+  Recheck everything in one immediate transaction. Removing the keyboard is
+  best effort only.
+- Record the exact choice immutably (actor, source, job, prompt message,
+  chat/thread, checked snapshot, continuation job) in the same transaction as
+  the `acknowledged` resolution. `runtime_events` is not such a ledger, so this
+  probably needs an additive schema migration with a compatible rollback.
+- Both buttons can lead to new work in the root, so the prompt is offered only
+  with proof that the previous executor ended: a confirmed process exit, or an
+  equivalent check of the owned process group, native writer and session lock.
+  A recovery after restart is not safe by default.
+- «Проверить и продолжить» atomically adds the resolution, one inspection-first
+  job in the same session, its continuation record and the held queue tail.
+  It must serialize with `/new`, local CLI return, stop and dispatch. A
+  repeated press returns the decision already taken, without new effects.
+- An artifact switch that is off by default is recommended for rollout and a
+  fast way to disable the buttons; enabling it is the owner's decision.
+- When the buttons ship, the uncertainty notice's action changes from the local
+  `indeterminate-resolve` command to the buttons.
+
 ## Current goal and order
 
 Active functional increment: bounded durable Claude corrections under
