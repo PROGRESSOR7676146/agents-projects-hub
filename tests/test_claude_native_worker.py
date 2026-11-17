@@ -664,7 +664,8 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertNotIn("private", repr(rows))
         self.assertEqual(worker.state.get_provider_job(job_id).error_code, "claude_quota_exhausted")
         self.assertIn(
-            "reset time is unknown", worker.state.get_telegram_outbox_for_job(job_id).telegram_html
+            "время сброса неизвестно",
+            worker.state.get_telegram_outbox_for_job(job_id).telegram_html,
         )
         health = worker.state.get_runtime_health("provider_worker", "example-claude-worker")
         assert health is not None
@@ -755,29 +756,29 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
                 "authentication_failed",
                 "error_during_execution",
                 "claude_authentication_failed",
-                "route locally",
+                "маршрута",
             ),
-            ("billing_error", "error_during_execution", "claude_billing_error", "route locally"),
+            ("billing_error", "error_during_execution", "claude_billing_error", "маршрута"),
             (
                 "model_not_found",
                 "error_during_execution",
                 "claude_model_not_found",
-                "model selection",
+                "другую модель",
             ),
-            ("overloaded", "error_during_execution", "claude_provider_overloaded", "overload"),
+            ("overloaded", "error_during_execution", "claude_provider_overloaded", "перегружен"),
             (
                 "rate_limit",
                 "error_during_execution",
                 "claude_rate_limited",
-                "did not identify the limit",
+                "какой лимит — неизвестно",
             ),
-            (None, "error_max_turns", "claude_turn_limit", "execution limits"),
-            (None, "error_max_budget_usd", "claude_budget_exhausted", "execution limits"),
+            (None, "error_max_turns", "claude_turn_limit", "настроенные лимиты"),
+            (None, "error_max_budget_usd", "claude_budget_exhausted", "настроенные лимиты"),
             (
                 None,
                 "error_max_structured_output_retries",
                 "claude_structured_output_failed",
-                "output format",
+                "формат вывода",
             ),
         )
         for index, (error, subtype, code, guidance) in enumerate(cases, start=1):
@@ -826,7 +827,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
                 )
                 notice = worker.state.get_telegram_outbox_for_job(job_id)
                 self.assertIn(guidance, notice.telegram_html)
-                self.assertIn("No completed result was returned", notice.telegram_html)
+                self.assertIn("Итогового ответа нет", notice.telegram_html)
                 self.assertNotIn("private", notice.telegram_html)
                 self.assertNotIn("private", job.error_detail or "")
                 self.assertEqual(len(calls), 1)

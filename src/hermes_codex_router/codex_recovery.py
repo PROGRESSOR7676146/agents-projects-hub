@@ -155,25 +155,24 @@ def reconcile_codex_completion(
         visible = text or "Codex completed the turn without visible text."
         if getattr(execution_error, "protective_interrupt_attempted", False) is True:
             visible += (
-                "\n\nHub attempted to interrupt this exact turn after its control path failed. "
-                "The independent read recovered completion; inspect the result and project changes."
+                "\n\nHub попытался прервать этот ход после потери управления, но ход завершился. "
+                "Проверьте итог и изменения в проекте."
             )
         if execution_error is not None and (
             getattr(execution_error, "failure_reason", codex_failure_reason(execution_error))
             == "permission_policy_changed"
         ):
             visible += (
-                "\n\nWarning: Codex permission selection changed during this turn; "
-                "The exact turn completed. "
-                "Review the recovered result and project changes before continuing."
+                "\n\n⚠️ Во время хода у Codex сменилась настройка прав; ход завершился. "
+                "Проверьте итог и изменения в проекте, прежде чем продолжать."
             )
         if rejections:
-            visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+            visible += "\n\nЧасть файлов-результатов восстановить не удалось."
         visible = append_ingress_precaution(
             state,
             job_id,
             visible,
-            render=lambda text: "Recovered completed Codex result:\n\n" + html.escape(text),
+            render=lambda text: "Восстановленный итог Codex:\n\n" + html.escape(text),
         )
         job = state.get_provider_job(job_id)
         committed = state.commit_provider_result(
@@ -181,7 +180,7 @@ def reconcile_codex_completion(
             lease_token,
             visible_response=visible,
             sender_agent_id=agent_id,
-            telegram_html="Recovered completed Codex result:\n\n" + html.escape(visible),
+            telegram_html="Восстановленный итог Codex:\n\n" + html.escape(visible),
             provider_session_id=thread_id,
             safe_metadata_json=RECOVERED_RESULT_METADATA_JSON,
             user_excerpt=job.payload_text,

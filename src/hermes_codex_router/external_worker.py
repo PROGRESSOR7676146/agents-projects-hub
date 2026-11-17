@@ -6,7 +6,6 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from html import escape
 from pathlib import Path
 
 from .claude_quota_observation import QuotaObservationCallback
@@ -16,7 +15,7 @@ from .codex_appserver import (
     CodexAppServerClient,
 )
 from .codex_execution_control import wait_for_controlled_codex_turn
-from .codex_failure import codex_preparation, uncertain_provider_notice
+from .codex_failure import codex_preparation, partial_response_block, uncertain_provider_notice
 from .codex_late_control import CodexControlMaintenance
 from .codex_recovery import (
     reconcile_codex_completion,
@@ -41,6 +40,7 @@ from .external_runtime import (
     take_claude_subscription_tokens,
 )
 from .hub_config import HubConfig, claude_image_input_supported
+from .notice_copy import limit_notice, not_started_notice
 from .preacceptance_approvals import PreacceptanceApprovalState
 from .project_resolution import (
     ProjectResolutionError,
@@ -766,7 +766,9 @@ class ExternalQueueWorker:
                     error_code=failure.error_code,
                     provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
-                    telegram_html=exc.public_message,
+                    telegram_html=not_started_notice(
+                        self.agent.display_name, failure.error_code, exc.public_message
+                    ),
                 )
             elif failure.notice == "emergency_stop":
                 assert isinstance(exc, ProviderTurnStopped)
@@ -793,10 +795,7 @@ class ExternalQueueWorker:
                     error_code=failure.error_code,
                     provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
-                    telegram_html=(
-                        f"{self.agent.display_name} limit reached. Reset telemetry was "
-                        "recorded; use /accounts for the current status."
-                    ),
+                    telegram_html=limit_notice(self.agent.display_name),
                 )
                 self._record_event("warning", "provider_limit", exc.limit.to_json())
             elif failure.notice == "provider_unavailable":
@@ -810,7 +809,9 @@ class ExternalQueueWorker:
                     error_code=failure.error_code,
                     provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
-                    telegram_html=exc.public_message,
+                    telegram_html=not_started_notice(
+                        self.agent.display_name, failure.error_code, exc.public_message
+                    ),
                 )
                 self._record_event("warning", "provider_unavailable", failure.error_code)
             else:
@@ -872,7 +873,7 @@ class ExternalQueueWorker:
                             executing,
                             token,
                             project_root,
-                            uncertain_provider_notice(self.agent.display_name),
+                            uncertain_provider_notice(self.agent.display_name, executing.job_id),
                         )
                         if failure.notice == "uncertain"
                         else "",
@@ -922,7 +923,9 @@ class ExternalQueueWorker:
             telegram_html=(
                 self._claude_partial_notice(job, token, project_root, error.public_message)
                 if isinstance(error, ClaudeTerminalFailure)
-                else error.public_message
+                else not_started_notice(
+                    self.agent.display_name, failure.error_code, error.public_message
+                )
             ),
         )
         self._quota_remaining_percent = None
@@ -958,7 +961,7 @@ class ExternalQueueWorker:
             return notice
         if not partial:
             return notice
-        return notice + "\n\nPartial response (incomplete):\n" + escape(partial)
+        return notice + partial_response_block(partial)
 
     def _cleanup_incoming_material_staging(self, project_root: Path, job_id: str) -> None:
         directory = project_root / ".hub" / "incoming" / job_id

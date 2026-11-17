@@ -162,7 +162,7 @@ def sender_actor(harness: FaultMatrixHarness, mode: str, arguments: list[str]) -
         if mode == "sender-idle":
             if bot.sent:
                 raise RuntimeError("fictional sender unexpectedly retried unknown delivery")
-            if not delivered or len(hub.sent) != 1 or "unconfirmed" not in hub.sent[0][2]:
+            if not delivered or len(hub.sent) != 1 or "не подтверждена" not in hub.sent[0][2]:
                 raise RuntimeError("fictional sender did not publish the independent Hub notice")
             marker.write_text("idle", encoding="utf-8")
         elif not delivered:

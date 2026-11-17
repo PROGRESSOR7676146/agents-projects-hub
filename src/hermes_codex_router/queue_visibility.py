@@ -5,19 +5,32 @@ never create another acceptance or opt an existing job in. Queue categories are
 reported at most once per job, not as re-arming episodes. Capacity and worker
 availability remain unknown without exact scheduler inputs; this facade does
 not infer them from missing health or assume a single provider slot.
+
+Quiet notices (ADR 0106): acceptance and execution handoff are recorded but never
+sent. A queue snapshot that needs an owner decision is sent at once; an ordinary
+wait becomes due only after ``QUEUE_NOTICE_DELAY`` and is superseded unsent if
+the job leaves the queue first. Same-topic FIFO and input collection stay silent.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from .delivery_hold_predicates import job_blocks_topic_fifo
 from .delivery_wait import DELIVERY_WAIT_EXPLANATION
 from .provider_queue_capacity import QueueCapacityConfig, read_queue_capacity
 from .task_lifecycle import TaskLifecycleState
+
+QUEUE_NOTICE_DELAY = timedelta(seconds=120)
+# These blockers need an owner decision or action, so the snapshot is sent at once.
+DECISION_QUEUE_REASONS = frozenset(
+    {"held", "delivery_unknown", "root_held_fifo", "root_uncertain", "root_writer"}
+)
+# The blocker is visible in the same topic or is deliberate input batching.
+SILENT_QUEUE_REASONS = frozenset({"topic_fifo", "collecting"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +99,17 @@ class QueueVisibilityState:
             is not None
         )
 
-    def _prepare(self, job: sqlite3.Row, *, key: str, kind: str, text: str, now: datetime) -> None:
+    def _prepare(
+        self,
+        job: sqlite3.Row,
+        *,
+        key: str,
+        kind: str,
+        text: str,
+        now: datetime,
+        delay: timedelta | None = None,
+        silent: bool = False,
+    ) -> None:
         # A category is a historical snapshot, including its first owner topic.
         # Later observations must not replace its immutable text or repeat it.
         if (
@@ -96,7 +119,7 @@ class QueueVisibilityState:
             is not None
         ):
             return
-        self.notices.prepare_notice_in_transaction(
+        notice, _created = self.notices.prepare_notice_in_transaction(
             event_key=key,
             kind=kind,
             job_id=str(job["job_id"]),
@@ -105,7 +128,16 @@ class QueueVisibilityState:
             reply_to_message_id=int(job["message_id"]),
             telegram_html=text,
             now=now,
+            available_at=now + delay if delay is not None else None,
         )
+        if silent:
+            # The row stays as history (and, for acceptance, as the opt-in
+            # marker); it is never attempted, so supersession is exact.
+            self.db.execute(
+                "UPDATE task_lifecycle_notices SET status='superseded',updated_at=? "
+                "WHERE notice_id=? AND status='pending' AND attempt_count=0",
+                (self._timestamp(now), notice.notice_id),
+            )
 
     def admitted_in_transaction(
         self, job_id: str, *, now: datetime, capacity: QueueCapacityConfig | None = None
@@ -118,8 +150,9 @@ class QueueVisibilityState:
             job,
             key=f"job:{job_id}:accepted",
             kind="accepted",
-            text="Accepted by Hub and saved in the queue. Provider work has not started.",
+            text="Запрос принят и сохранён в очереди.",
             now=now,
+            silent=True,
         )
         self.queued_in_transaction(job_id, now=now, capacity=capacity)
 
@@ -138,15 +171,18 @@ class QueueVisibilityState:
             chat = str(snapshot.owner_chat_id)
             if chat.startswith("-100") and chat[4:].isdigit() and snapshot.owner_thread_id > 0:
                 owner = (
-                    f' Owner: <a href="https://t.me/c/{chat[4:]}/{snapshot.owner_thread_id}">'
-                    "owning topic</a>."
+                    f' <a href="https://t.me/c/{chat[4:]}/{snapshot.owner_thread_id}">'
+                    "Открыть ту тему</a>."
                 )
+        decision = snapshot.reason in DECISION_QUEUE_REASONS
         self._prepare(
             job,
             key=f"job:{job_id}:queued:{snapshot.reason}",
             kind="queued",
-            text="Queued; provider work has not started. " + snapshot.explanation + owner,
+            text="⏳ Запрос в очереди, агент не запущен. " + snapshot.explanation + owner,
             now=now,
+            delay=None if decision else QUEUE_NOTICE_DELAY,
+            silent=snapshot.reason in SILENT_QUEUE_REASONS,
         )
 
     def wait_snapshot(
@@ -163,7 +199,7 @@ class QueueVisibilityState:
             ).fetchone()
             is not None
         ):
-            return QueueWaitSnapshot("held", "Owner review is required before this job can run.")
+            return QueueWaitSnapshot("held", "Он ждёт вашего решения и сам не запустится.")
         continuation = (
             self.db.execute(
                 "SELECT 1 FROM provider_job_continuations WHERE continuation_job_id=?", (job_id,)
@@ -187,8 +223,7 @@ class QueueVisibilityState:
                         return QueueWaitSnapshot("delivery_unknown", DELIVERY_WAIT_EXPLANATION)
                 return QueueWaitSnapshot(
                     "topic_fifo",
-                    "An earlier job in this topic must finish, including result delivery. "
-                    "Wait or use /stop in this topic to cancel waiting work.",
+                    "Сначала завершится предыдущий запрос в этой теме, включая доставку ответа.",
                 )
             held = self.db.execute(
                 "SELECT topic.chat_id, topic.thread_id FROM provider_jobs earlier "
@@ -203,7 +238,7 @@ class QueueVisibilityState:
             if held is not None:
                 return QueueWaitSnapshot(
                     "root_held_fifo",
-                    "An earlier request on this project awaits owner review.",
+                    "Более ранний запрос по этому проекту ждёт вашего решения.",
                     int(held["chat_id"]),
                     int(held["thread_id"]),
                 )
@@ -223,11 +258,9 @@ class QueueVisibilityState:
             uncertain = active["status"] == "indeterminate"
             return QueueWaitSnapshot(
                 "root_uncertain" if uncertain else "root_active",
-                "An earlier outcome on this project is unknown. Reconcile it in the owning topic; "
-                "a timeout does not release the project."
+                "Исход прежнего хода по этому проекту неизвестен; решите его в той теме."
                 if uncertain
-                else "Other active work owns this project. Wait or use /stop in the owning "
-                "topic; an interrupt request alone does not release the project.",
+                else "Проект занят работой в другой теме. Дождитесь её или остановите там /stop.",
                 int(active["chat_id"]),
                 int(active["thread_id"]),
             )
@@ -243,8 +276,7 @@ class QueueVisibilityState:
             command = "/return" if writer["writer_mode"] == "local" else "/release"
             return QueueWaitSnapshot(
                 "root_writer",
-                f"A local writer owns the project. Close that client and use {command} "
-                "in the owning topic, then review held work.",
+                f"Проект занят локальным клиентом. Закройте его и отправьте {command} в той теме.",
                 int(writer["chat_id"]),
                 int(writer["thread_id"]),
             )
@@ -258,7 +290,7 @@ class QueueVisibilityState:
         if dispatch is not None:
             return QueueWaitSnapshot(
                 "root_dispatch",
-                "A running dispatch owns this project. Wait for it to finish.",
+                "Проект занят другой задачей; дождитесь её завершения.",
                 int(dispatch["chat_id"]),
                 int(dispatch["thread_id"]),
             )
@@ -266,38 +298,34 @@ class QueueVisibilityState:
             if job["status"] == "retry_wait":
                 return QueueWaitSnapshot(
                     "retry_deadline",
-                    "The saved pre-execution retry deadline has not arrived. Wait; "
-                    "this does not repeat an accepted provider turn.",
+                    "Повтор запуска ждёт назначенного времени; принятый ход не повторяется.",
                 )
             return QueueWaitSnapshot(
                 "collecting",
-                "Hub is collecting compatible messages until the saved input deadline. "
-                "Wait; no provider capacity has been inferred.",
+                "Hub собирает следующие сообщения в один запрос.",
             )
         if capacity is not None:
             slots = read_queue_capacity(self.db, capacity, now=now)
             if slots.occupied_roots >= slots.effective_capacity:
                 return QueueWaitSnapshot(
                     "global_capacity",
-                    f"All {slots.effective_capacity} configured global project slots are occupied. "
-                    "Wait for active work to finish, or use /stop here to cancel waiting work.",
+                    f"Заняты все слоты проектов ({slots.effective_capacity}). "
+                    "Дождитесь или отмените запрос: /stop.",
                 )
             provider_limit = capacity.agent_capacities.get(str(job["agent_id"]), 1)
             if slots.busy_agents.get(str(job["agent_id"]), 0) >= provider_limit:
                 return QueueWaitSnapshot(
                     "provider_slots",
-                    f"All {provider_limit} configured slots for this provider are occupied. "
-                    "Wait for active work to finish, or use /stop here to cancel waiting work.",
+                    f"Заняты все слоты этого агента ({provider_limit}). "
+                    "Дождитесь или отмените запрос: /stop.",
                 )
             return QueueWaitSnapshot(
                 "worker_unknown",
-                "Awaiting a worker claim. Configured capacity is not blocking this snapshot; "
-                "worker availability remains unknown. Wait or use /stop here to cancel waiting work.",
+                "Обработчик Hub его ещё не взял. Дождитесь или отмените запрос: /stop.",
             )
         return QueueWaitSnapshot(
             "worker_unknown",
-            "Awaiting a worker claim. Provider slot availability and global "
-            "capacity are unknown here. Wait or use /stop in this topic to cancel waiting work.",
+            "Обработчик Hub его ещё не взял. Дождитесь или отмените запрос: /stop.",
         )
 
     def sync_job_in_transaction(self, job_id: str, *, now: datetime) -> None:
@@ -338,7 +366,7 @@ class QueueVisibilityState:
             job,
             key=f"job:{job_id}:executing:{job['attempt_count']}",
             kind="executing",
-            text="Worker started the provider handoff. Native turn acceptance is not yet confirmed. "
-            "Use /stop in this topic to request interruption; that request is not terminal proof.",
+            text="Запрос передан агенту; приём ещё не подтверждён.",
             now=now,
+            silent=True,
         )

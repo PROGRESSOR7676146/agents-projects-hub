@@ -17,9 +17,20 @@ if TYPE_CHECKING:
 
 
 _UNSAVED_REPLACEMENT_CONTEXT = (
-    "Saved-task retry is unavailable: preparation changed the Codex thread, "
-    "and Hub has no saved context snapshot for that change. Send a new request "
-    "containing the complete task and relevant context."
+    "Повтор недоступен: при подготовке сменился тред Codex, а снимка контекста нет. "
+    "Отправьте задачу заново целиком, с нужным контекстом."
+)
+
+# Suffixes appended to a pre-execution failure notice (ADR 0106 copy contract).
+RETRY_MATERIALS = "\nВ запросе были вложения: отправьте задачу и вложения заново."
+RETRY_ROOT_UNVERIFIED = "\nПовтор недоступен: не удалось проверить папку проекта на компьютере."
+RETRY_BINDING_CHANGED = (
+    "\nПовтор недоступен: сессия или настройки изменились. Отправьте задачу заново."
+)
+RETRY_INPUT_MISSING = "\nПовтор недоступен: исходный запрос не сохранён. Отправьте задачу заново."
+RETRY_OFFERED = (
+    "\nЧтобы повторить в той же сессии, ответьте retry на это сообщение. "
+    "Разрешения на инструменты понадобятся заново."
 )
 
 
@@ -87,16 +98,13 @@ class PreexecutionRetryState:
             raise StateError("preparation retry ticket requires its failure transaction")
         job_id = str(job["job_id"])
         if self.has_materials(job_id):
-            return (
-                "\n\nRetry: This request included materials. Send the original task and "
-                "materials again; Hub will not run an incomplete saved request."
-            )
+            return RETRY_MATERIALS
         session = self.state.get_session(str(job["session_id"]))
         topic = self.state.get_topic(int(job["topic_id"]))
         try:
             root = str(binding.canonical_root.resolve(strict=True))
         except (OSError, RuntimeError):
-            return "\n\nRetry is unavailable: the saved project root cannot be verified. Inspect local registration."
+            return RETRY_ROOT_UNVERIFIED
         checkpoint = self.connection.execute(
             "SELECT * FROM provider_execution_checkpoints WHERE job_id=?", (job_id,)
         ).fetchone()
@@ -124,15 +132,13 @@ class PreexecutionRetryState:
                 )
             )
         ):
-            return "\n\nRetry is unavailable: the saved execution binding changed. Inspect /status."
+            return RETRY_BINDING_CHANGED
         context_refusal = self._context_refusal(job_id, session.provider_session_id)
         if context_refusal is not None:
-            return "\n\n" + context_refusal
+            return "\n" + context_refusal
         inputs = self._inputs(job_id)
         if inputs == "[]":
-            return (
-                "\n\nRetry is unavailable: the saved source input is missing. Send the task again."
-            )
+            return RETRY_INPUT_MISSING
         self.connection.execute(
             """INSERT INTO provider_preexecution_retry_tickets
                (source_job_id,project_id,canonical_root,session_id,session_generation,
@@ -157,10 +163,7 @@ class PreexecutionRetryState:
                 timestamp,
             ),
         )
-        return (
-            "\n\nRetry: Reply exactly retry to this notice to submit the saved task text "
-            "in the same session. Tool permissions will still need fresh human decisions."
-        )
+        return RETRY_OFFERED
 
     def _inputs(self, job_id: str) -> str:
         rows = self.connection.execute(

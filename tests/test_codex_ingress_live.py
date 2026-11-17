@@ -100,11 +100,11 @@ class CodexIngressLiveTests(unittest.TestCase):
             "SELECT telegram_html FROM task_lifecycle_notices WHERE kind='codex_ingress_control'"
         ).fetchall()
         self.assertEqual(len(notices), 1)
-        self.assertIn("reserved", notices[0][0])
-        self.assertIn("Telegram ingress", notices[0][0])
+        self.assertIn("зарезервировал прерывание", notices[0][0])
+        self.assertIn("связь с Telegram стала ненадёжной", notices[0][0])
         self.assertNotIn("Stop confirmed", notices[0][0])
         notice = checkpoint_failure_notice(self.state, self.job.job_id, EOFError("Example closed"))
-        self.assertIn("Telegram ingress", notice)
+        self.assertIn("связь с Telegram стала ненадёжной", notice)
         with patch(
             "hermes_codex_router.codex_live_control.time.monotonic",
             return_value=self.control._next_ingress_assessment + 1,

@@ -228,10 +228,10 @@ class CodexQueueWorkerTests(unittest.TestCase):
             self.assertEqual(failed.provider_session_id, "example-existing-thread")
             outbox = worker.state.get_telegram_outbox_for_job(job_id)
             assert outbox is not None
-            self.assertIn("unsupported permission profile", outbox.telegram_html)
-            self.assertIn("No productive provider turn was sent", outbox.telegram_html)
+            self.assertIn("профиль прав, который Hub не поддерживает", outbox.telegram_html)
+            self.assertIn("Ничего не выполнялось", outbox.telegram_html)
             self.assertNotIn("example-private-profile", outbox.telegram_html)
-            self.assertNotIn("root paused", outbox.telegram_html)
+            self.assertNotIn("на паузе", outbox.telegram_html)
             self.assertFalse(worker.run_cycle())
             self.assertEqual([message["method"] for message in transport.sent], ["thread/resume"])
             self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
@@ -287,7 +287,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         self.assertEqual(failed.status, "indeterminate")
         outbox = worker.state.get_telegram_outbox_for_job(job_id)
         assert outbox is not None
-        self.assertIn("permission selection changed", outbox.telegram_html)
+        self.assertIn("сменилась настройка прав", outbox.telegram_html)
         checkpoint = worker.state._connection.execute(
             "SELECT provider_turn_id FROM provider_execution_checkpoints WHERE job_id=?", (job_id,)
         ).fetchone()
@@ -316,8 +316,8 @@ class CodexQueueWorkerTests(unittest.TestCase):
         outbox = worker.state.get_telegram_outbox_for_job(job_id)
         assert outbox is not None
         self.assertIn("Recovered final", outbox.telegram_html)
-        self.assertIn("permission selection changed", outbox.telegram_html)
-        self.assertIn("Review the recovered result and project changes", outbox.telegram_html)
+        self.assertIn("сменилась настройка прав", outbox.telegram_html)
+        self.assertIn("Проверьте итог и изменения в проекте", outbox.telegram_html)
         self.assertEqual(client.last_read["turn_id"], "turn-1")
         self.assertEqual(client.turns, 1)
         worker.close()

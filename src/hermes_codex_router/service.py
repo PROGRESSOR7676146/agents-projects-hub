@@ -80,6 +80,7 @@ from .model_selection import (
     available_openai_models,
     is_openai_model,
 )
+from .notice_copy import limit_notice, not_started_notice
 from .project_editing import ProjectEditStore
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import (
@@ -1190,7 +1191,9 @@ class ProjectHubService:
                         error_code=failure.error_code,
                         provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
-                        telegram_html=exc.public_message,
+                        telegram_html=not_started_notice(
+                            agent.display_name, failure.error_code, exc.public_message
+                        ),
                     )
                 elif recovered or failure.notice == "emergency_stop":
                     if failure.notice == "emergency_stop":
@@ -1214,10 +1217,7 @@ class ProjectHubService:
                         error_code=failure.error_code,
                         provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
-                        telegram_html=(
-                            f"{agent.display_name} limit reached. Reset telemetry was "
-                            "recorded; use /accounts for the current status."
-                        ),
+                        telegram_html=limit_notice(agent.display_name),
                     )
                 elif failure.notice == "provider_unavailable":
                     assert isinstance(exc, ProviderUnavailableError)
@@ -1229,7 +1229,9 @@ class ProjectHubService:
                         error_code=failure.error_code,
                         provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
-                        telegram_html=exc.public_message,
+                        telegram_html=not_started_notice(
+                            agent.display_name, failure.error_code, exc.public_message
+                        ),
                     )
                 else:
                     commit_worker_failure_notice(
@@ -1241,7 +1243,9 @@ class ProjectHubService:
                         error=exc,
                         failure=failure,
                         turn_status=turn_status,
-                        fallback_notice=uncertain_provider_notice(agent.display_name),
+                        fallback_notice=uncertain_provider_notice(
+                            agent.display_name, executing.job_id
+                        ),
                     )
             except Exception as survived_error:
                 survived("service.failure_notice_record", survived_error)

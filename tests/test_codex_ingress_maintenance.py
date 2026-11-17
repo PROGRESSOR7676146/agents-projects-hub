@@ -115,7 +115,7 @@ class CodexIngressMaintenanceTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(self.job.job_id).status, "result_ready")
         self.assertEqual(
             self.state.get_telegram_outbox_for_job(self.job.job_id).telegram_html,
-            "Recovered completed Codex result:\n\nExample recovered final",
+            "Восстановленный итог Codex:\n\nExample recovered final",
         )
 
     def test_post_fence_completion_preserves_unknown_delivery_and_unquiesced_owner(self):

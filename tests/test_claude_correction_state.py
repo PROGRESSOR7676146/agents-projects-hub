@@ -155,7 +155,8 @@ class ClaudeCorrectionStateTests(unittest.TestCase):
         notices = self.state._connection.execute(
             "SELECT kind,status FROM task_lifecycle_notices WHERE job_id=?", (self.child_id,)
         ).fetchall()
-        self.assertIn(("executing", "pending"), [tuple(row) for row in notices])
+        # The execution handoff is recorded silently (ADR 0106), never sent.
+        self.assertIn(("executing", "superseded"), [tuple(row) for row in notices])
         self.state.cancel_active_provider_job(self.parent_id, self.token, complete_stops=True)
         self.assertEqual(
             self.state._connection.execute(

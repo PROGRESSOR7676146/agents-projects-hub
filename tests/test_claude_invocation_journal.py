@@ -218,7 +218,7 @@ class ClaudeInvocationJournalTests(unittest.TestCase):
         self.item(text)
         self.assertEqual(
             self.journal.partial_text(self.job.job_id),
-            "[Earlier partial text omitted]\n" + text[-(MAX_PARTIAL_TEXT - 40) :],
+            "[Начало опущено]\n" + text[-(MAX_PARTIAL_TEXT - 40) :],
         )
 
     def test_completion_persists_exact_text_without_turn_and_supersedes_partial(self) -> None:
@@ -536,7 +536,7 @@ class ClaudeInvocationJournalTests(unittest.TestCase):
         self.assertEqual(checkpoint["completed_text"], text)
         self.assertEqual(
             self.journal.partial_text(self.job.job_id),
-            "[Earlier partial text omitted]\n" + text[-(MAX_PARTIAL_TEXT - 40) :],
+            "[Начало опущено]\n" + text[-(MAX_PARTIAL_TEXT - 40) :],
         )
 
     def test_visible_character_budget_counts_text_after_embedded_nul(self) -> None:

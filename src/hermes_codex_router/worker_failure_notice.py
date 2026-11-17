@@ -32,10 +32,7 @@ def commit_worker_failure_notice(
     if failure.notice == "retry_binding":
         notice = codex_failure_notice(error)
     elif failure.notice == "incoming_material":
-        notice = (
-            "Incoming material integrity validation failed; "
-            "the provider was not started. Send the material again."
-        )
+        notice = "Агент не запущен: вложение не прошло проверку целостности. Отправьте его заново."
     elif failure.notice == "checkpoint":
         notice = checkpoint_failure_notice(state, job.job_id, error, turn_status=turn_status)
     else:

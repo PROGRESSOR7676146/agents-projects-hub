@@ -193,7 +193,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             )
         self.assertEqual(result.status, "failed")
         notice = self.state.get_telegram_outbox_for_job(self.job.job_id)
-        self.assertIn("root", notice.telegram_html)
+        self.assertIn("папку проекта", notice.telegram_html)
         self.assertNotIn("fictional private path", notice.telegram_html)
         self.assertIsNone(self.sql("SELECT 1 FROM provider_preexecution_retry_tickets").fetchone())
         self.assertEqual(len(self.state.provider_jobs_for_topic(self.topic.topic_id)), 1)
@@ -398,7 +398,10 @@ class PreexecutionRetryTests(unittest.TestCase):
                 self.assertEqual(
                     state.execution_capacity_snapshot(1)["blocked_uncertain_scopes"], 1
                 )
-                self.assertIn("conflicts", state.get_telegram_outbox_for_job(job_id).telegram_html)
+                self.assertIn(
+                    "запуск уже мог начаться",
+                    state.get_telegram_outbox_for_job(job_id).telegram_html,
+                )
 
     def test_codex_label_on_another_runtime_cannot_create_retry_authority(self) -> None:
         lease = self.state.lease_provider_job("codex", "example-worker")
@@ -578,8 +581,8 @@ class PreexecutionRetryTests(unittest.TestCase):
         )
         self.preparation_failure(self.job.job_id, 101, prepared_thread="example-replacement-thread")
         notice = self.state.get_telegram_outbox_for_job(self.job.job_id)
-        self.assertNotIn("Reply exactly retry", notice.telegram_html)
-        self.assertIn("no saved context snapshot", notice.telegram_html)
+        self.assertNotIn("ответьте retry на это сообщение", notice.telegram_html)
+        self.assertIn("снимка контекста нет", notice.telegram_html)
         self.assertIsNone(
             self.sql("SELECT 1 FROM provider_preexecution_retry_tickets LIMIT 1").fetchone()
         )
@@ -604,7 +607,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             ("example-original-thread", self.job.job_id),
         )
         before = self.snapshot()
-        with self.assertRaisesRegex(PreparationRetryRefused, "no saved context snapshot"):
+        with self.assertRaisesRegex(PreparationRetryRefused, "снимка контекста нет"):
             PreexecutionRetryState(self.state)._validate(
                 self.job.job_id,
                 canonical_root=self.harness.root,
@@ -644,7 +647,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             ("example-original-thread", self.job.job_id),
         )
         before = self.snapshot()
-        with self.assertRaisesRegex(PreparationRetryRefused, "no saved context snapshot"):
+        with self.assertRaisesRegex(PreparationRetryRefused, "снимка контекста нет"):
             self.retry(child.job_id, 102, 31)
         self.assertEqual(self.snapshot(), before)
         self.sql(
@@ -681,7 +684,7 @@ class PreexecutionRetryTests(unittest.TestCase):
         )
         self.preparation_failure(child.job_id, 102, prepared_thread="example-replacement-thread")
         self.assertIn(
-            "no saved context snapshot",
+            "снимка контекста нет",
             self.state.get_telegram_outbox_for_job(child.job_id).telegram_html,
         )
         self.assertIsNone(
@@ -869,7 +872,7 @@ class PreexecutionRetryTests(unittest.TestCase):
         material = self.add_material(self.job.job_id)
         self.preparation_failure(self.job.job_id, 101)
         self.assertNotIn(
-            "Reply exactly retry",
+            "ответьте retry на это сообщение",
             self.state.get_telegram_outbox_for_job(self.job.job_id).telegram_html,
         )
         self.state.mark_incoming_materials_discarded(
@@ -1098,7 +1101,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                 )
                 if accepted:
                     self.assertIn(
-                        "conflicts",
+                        "запуск уже мог начаться",
                         self.state.get_telegram_outbox_for_job(job.job_id).telegram_html,
                     )
                     self.assertEqual(
@@ -1297,8 +1300,8 @@ class PreexecutionRetryTests(unittest.TestCase):
         self.assertEqual(state.get_session(original.session_id).provider_session_id, "thread-1")
         delivery = state.lease_telegram_outbox("codex", "example-sender")
         assert delivery is not None and delivery.lease_token is not None
-        self.assertIn("no saved context snapshot", delivery.telegram_html)
-        self.assertNotIn("Reply exactly retry", delivery.telegram_html)
+        self.assertIn("снимка контекста нет", delivery.telegram_html)
+        self.assertNotIn("ответьте retry на это сообщение", delivery.telegram_html)
         complete_final_delivery(
             state, delivery.outbox_id, delivery.lease_token, telegram_message_id=101
         )

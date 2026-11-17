@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 from hermes_codex_router.provider_queue_capacity import QueueCapacityConfig
+from hermes_codex_router.queue_visibility import QUEUE_NOTICE_DELAY
 from hermes_codex_router.state import HubState
 from hermes_codex_router.task_notice_sender import deliver_task_notice
 
@@ -68,6 +69,11 @@ class QueueVisibilityTests(unittest.TestCase):
             )
         return self.state.enqueue_provider_job(**arguments)
 
+    @staticmethod
+    def due() -> datetime:
+        # An ordinary queue wait becomes deliverable only after the quiet delay.
+        return datetime.now(timezone.utc) + QUEUE_NOTICE_DELAY + timedelta(seconds=1)
+
     def notices(self, job_id: str):
         return self.state._connection.execute(
             "SELECT * FROM task_lifecycle_notices WHERE job_id=? ORDER BY created_at,kind",
@@ -86,7 +92,7 @@ class QueueVisibilityTests(unittest.TestCase):
 
     def test_terminal_change_after_lease_supersedes_before_transport(self) -> None:
         job, _ = self.enqueue(10)
-        now = datetime.now(timezone.utc)
+        now = self.due()
         lease = self.state.task_notices.lease_notice("sender-a", now=now)
         assert lease is not None and lease.lease_token is not None
         # A separate state owner can terminalize directly, after notice leasing.
@@ -181,6 +187,51 @@ class QueueVisibilityTests(unittest.TestCase):
         blocked, _ = self.enqueue(12, topic=other, session=session, capacity=capacity)
         self.assertEqual(self.capacity_reason(blocked.job_id), "root_active")
 
+    def test_only_owner_decisions_are_sent_at_once_and_fifo_stays_silent(self) -> None:
+        first, _ = self.enqueue(10, enabled=False)
+        executing = self.start(first)
+        fifo, _ = self.enqueue(11)
+        other, session = self.topic_session("example-project", 8)
+        busy, _ = self.enqueue(12, topic=other, session=session)
+
+        def queued(job_id: str):
+            return next(row for row in self.notices(job_id) if row["kind"] == "queued")
+
+        self.assertEqual(self.capacity_reason(fifo.job_id), "topic_fifo")
+        self.assertEqual(queued(fifo.job_id)["status"], "superseded")
+        self.assertEqual(self.capacity_reason(busy.job_id), "root_active")
+        self.assertIsNone(
+            self.state.task_notices.lease_notice("sender-a", now=datetime.now(timezone.utc))
+        )
+        assert executing.lease_token is not None
+        self.state.mark_provider_job_indeterminate(
+            first.job_id, executing.lease_token, error_code="fictional_outcome"
+        )
+        third, third_session = self.topic_session("example-project", 9)
+        with self.assertRaisesRegex(Exception, "persistent local writer or uncertainty"):
+            self.enqueue(13, topic=third, session=third_session)
+        # The ordinary wait becomes due later; a superseded FIFO row never does.
+        lease = self.state.task_notices.lease_notice("sender-a", now=self.due())
+        assert lease is not None
+        self.assertEqual(lease.notice_id, queued(busy.job_id)["notice_id"])
+        self.assertIsNone(self.state.task_notices.lease_notice("sender-b", now=self.due()))
+
+    def test_decision_queue_reason_is_due_immediately(self) -> None:
+        earlier, _ = self.enqueue(10, enabled=False)
+        with self.state._connection:
+            self.state._connection.execute(
+                "INSERT INTO provider_job_holds (job_id, cause_job_id, held_at) VALUES (?,?,?)",
+                (earlier.job_id, earlier.job_id, datetime.now(timezone.utc).isoformat()),
+            )
+        other, session = self.topic_session("example-project", 8)
+        job, _ = self.enqueue(11, topic=other, session=session)
+        self.assertEqual(self.capacity_reason(job.job_id), "root_held_fifo")
+        lease = self.state.task_notices.lease_notice("sender-a", now=datetime.now(timezone.utc))
+        assert lease is not None
+        self.assertEqual(lease.job_id, job.job_id)
+        self.assertIn("ждёт вашего решения", lease.telegram_html)
+        self.assertIn("Открыть ту тему", lease.telegram_html)
+
     def test_burst_append_does_not_replace_original_capacity_snapshot(self) -> None:
         capacity = QueueCapacityConfig(1, (), {"codex": 1})
         job, _ = self.enqueue(10, batch=True, capacity=capacity)
@@ -203,10 +254,20 @@ class QueueVisibilityTests(unittest.TestCase):
         notices = self.notices(job.job_id)
         self.assertEqual({row["kind"] for row in notices}, {"accepted", "queued"})
         self.assertTrue(all(row["reply_to_message_id"] == 10 for row in notices))
-        text = " ".join(row["telegram_html"] for row in notices)
-        self.assertIn("not started", text)
-        self.assertIn("unknown", text)
-        self.assertNotIn("1 slot", text)
+        accepted = next(row for row in notices if row["kind"] == "accepted")
+        queued = next(row for row in notices if row["kind"] == "queued")
+        # Acceptance is the opt-in record only; it is never sent.
+        self.assertEqual((accepted["status"], accepted["attempt_count"]), ("superseded", 0))
+        # An ordinary worker wait is reported only after the quiet delay.
+        self.assertEqual(queued["status"], "pending")
+        self.assertGreaterEqual(
+            datetime.fromisoformat(queued["available_at"])
+            - datetime.fromisoformat(queued["created_at"]),
+            QUEUE_NOTICE_DELAY,
+        )
+        self.assertIn("агент не запущен", queued["telegram_html"])
+        self.assertIn("Обработчик Hub", queued["telegram_html"])
+        self.assertNotIn("слот", queued["telegram_html"])
 
     def test_acceptance_failure_rolls_back_job_receipt_sequence_and_notices(self) -> None:
         original = self.state.task_notices.prepare_notice_in_transaction
@@ -262,7 +323,7 @@ class QueueVisibilityTests(unittest.TestCase):
         job, _ = self.enqueue(11)
         queued = next(row for row in self.notices(job.job_id) if row["kind"] == "queued")
         self.assertIn("topic_fifo", queued["event_key"])
-        self.assertIn("delivery", queued["telegram_html"])
+        self.assertIn("доставку", queued["telegram_html"])
 
     def saved_result(self, delivery_status: str):
         earlier, _ = self.enqueue(10, enabled=False)
@@ -291,12 +352,11 @@ class QueueVisibilityTests(unittest.TestCase):
         tail, _ = self.enqueue(11)
         notice = next(row for row in self.notices(tail.job_id) if row["kind"] == "queued")
         self.assertIn("delivery_unknown", notice["event_key"])
-        self.assertIn("saved", notice["telegram_html"])
-        self.assertIn("unconfirmed", notice["telegram_html"])
-        self.assertIn("continue without confirmed delivery", notice["telegram_html"])
-        self.assertIn("investigate", notice["telegram_html"])
-        self.assertIn("not resend", notice["telegram_html"])
-        self.assertNotIn("Wait or use /stop", notice["telegram_html"])
+        self.assertIn("сохранён", notice["telegram_html"])
+        self.assertIn("не подтверждена", notice["telegram_html"])
+        self.assertIn("без подтверждённой доставки", notice["telegram_html"])
+        self.assertIn("Повторно не отправляем", notice["telegram_html"])
+        self.assertNotIn("/stop", notice["telegram_html"])
         self.assertEqual(self.state.get_provider_job(earlier.job_id), job_before)
         self.assertEqual(self.state.get_telegram_outbox_for_job(earlier.job_id), outbox_before)
         self.assertIsNone(self.state.lease_provider_job("codex", "fictional-worker"))
@@ -351,11 +411,13 @@ class QueueVisibilityTests(unittest.TestCase):
         job, _ = self.enqueue(10, batch=True)
         queued = next(row for row in self.notices(job.job_id) if row["kind"] == "queued")
         self.assertIn("collecting", queued["event_key"])
-        self.assertIn("messages", queued["telegram_html"])
+        self.assertIn("сообщения", queued["telegram_html"])
+        # Deliberate input batching is recorded but never announced.
+        self.assertEqual((queued["status"], queued["attempt_count"]), ("superseded", 0))
 
     def test_execution_supersedes_only_unattempted_transient_notices(self) -> None:
         job, _ = self.enqueue(10)
-        now = datetime.now(timezone.utc)
+        now = self.due()
         lease = self.state.task_notices.lease_notice("sender-a", now=now)
         assert lease is not None and lease.lease_token is not None
         self.state.task_notices.begin_send(lease.notice_id, lease.lease_token, now=now)
@@ -364,14 +426,18 @@ class QueueVisibilityTests(unittest.TestCase):
         attempted = next(row for row in rows if row["notice_id"] == lease.notice_id)
         self.assertEqual(attempted["status"], "leased")
         execution = next(row for row in rows if row["kind"] == "executing")
-        self.assertIn("handoff", execution["telegram_html"])
-        self.assertIn("not yet confirmed", execution["telegram_html"])
+        self.assertIn("приём ещё не подтверждён", execution["telegram_html"])
         self.assertIn(str(executing.attempt_count), execution["event_key"])
-        self.assertEqual(sum(row["status"] == "superseded" for row in rows), 1)
+        # The handoff is history only; acceptance and handoff are both silent.
+        self.assertEqual((execution["status"], execution["attempt_count"]), ("superseded", 0))
+        self.assertEqual(
+            {row["kind"] for row in rows if row["status"] == "superseded"},
+            {"accepted", "executing"},
+        )
 
     def test_unattempted_sender_lease_is_superseded_before_network_send(self) -> None:
         job, _ = self.enqueue(10)
-        now = datetime.now(timezone.utc)
+        now = self.due()
         lease = self.state.task_notices.lease_notice("sender-a", now=now)
         assert lease is not None and lease.lease_token is not None
         self.start(job)
@@ -419,11 +485,14 @@ class QueueVisibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "executing notice fault"):
                 self.start(job)
         self.assertEqual(self.state.get_provider_job(job.job_id).status, "leased")
-        self.assertEqual({row["status"] for row in self.notices(job.job_id)}, {"pending"})
+        self.assertEqual(
+            {row["kind"]: row["status"] for row in self.notices(job.job_id)},
+            {"accepted": "superseded", "queued": "pending"},
+        )
 
     def test_unknown_delivery_history_survives_terminal_uncertainty_and_restart(self) -> None:
         job, _ = self.enqueue(10)
-        now = datetime.now(timezone.utc)
+        now = self.due()
         lease = self.state.task_notices.lease_notice("sender-a", now=now)
         assert lease is not None and lease.lease_token is not None
         self.state.task_notices.begin_send(lease.notice_id, lease.lease_token, now=now)
@@ -521,7 +590,7 @@ class QueueVisibilityTests(unittest.TestCase):
 
     def test_rejected_send_attempt_history_is_preserved_after_execution(self) -> None:
         job, _ = self.enqueue(10)
-        now = datetime.now(timezone.utc)
+        now = self.due()
         lease = self.state.task_notices.lease_notice("sender-a", now=now)
         assert lease is not None and lease.lease_token is not None
         self.state.task_notices.begin_send(lease.notice_id, lease.lease_token, now=now)

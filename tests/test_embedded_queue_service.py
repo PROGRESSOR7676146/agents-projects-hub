@@ -911,7 +911,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
 
         job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
         self.assertEqual((job.status, job.error_code), ("indeterminate", "OSError"))
-        self.assertIn("Partial response (incomplete)", "".join(telegram.sent))
+        self.assertIn("Частичный ответ (не завершён)", "".join(telegram.sent))
         self.assertIsNone(
             service.state._connection.execute(
                 "SELECT result_id FROM provider_job_results WHERE job_id=?", (job.job_id,)

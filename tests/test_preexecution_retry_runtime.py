@@ -56,9 +56,9 @@ class PreparationRetryRuntimeTests(unittest.TestCase):
         self.assertEqual(failed.payload_text, self.fixture.payload)
         self.assertIsNone(ExecutionJournal(state).read(self.child.job_id))
         notice = state.get_telegram_outbox_for_job(self.child.job_id).telegram_html
-        self.assertIn("The provider was not started", notice)
+        self.assertIn("Codex не запускался", notice)
         self.assertNotIn("may already have", notice)
-        self.assertNotIn("Reply exactly retry", notice)
+        self.assertNotIn("ответьте retry", notice)
         self.assertIsNone(
             self.fixture.sql(
                 "SELECT 1 FROM provider_preexecution_retry_tickets WHERE source_job_id=?",

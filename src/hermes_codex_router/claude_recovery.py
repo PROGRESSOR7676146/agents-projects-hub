@@ -8,7 +8,7 @@ from .artifacts import (
     remove_spooled_artifact,
     spool_staged_artifacts,
 )
-from .codex_failure import uncertain_provider_notice
+from .codex_failure import partial_response_block, uncertain_provider_notice
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
@@ -101,15 +101,15 @@ def _recover_leased_claude_job(
         if material_notice is not None:
             visible += material_notice
         elif state.incoming_materials_for_job(job.job_id):
-            visible += "\n\nAttachment availability was not saved; recovery cannot confirm which attachments were supplied."
+            visible += "\n\nНе сохранено, какие вложения были переданы; восстановление этого не подтверждает."
         if rejections:
-            visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+            visible += "\n\nЧасть файлов-результатов восстановить не удалось."
         result = state.commit_provider_result(
             job.job_id,
             token,
             visible_response=visible,
             sender_agent_id=agent_id,
-            telegram_html="Recovered completed Claude result:\n\n" + html.escape(visible),
+            telegram_html="Восстановленный итог Claude:\n\n" + html.escape(visible),
             provider_session_id=native,
             safe_metadata_json=RECOVERED_RESULT_METADATA_JSON,
             user_excerpt=job.payload_text,
@@ -128,9 +128,9 @@ def _recover_leased_claude_job(
             # completion or turn it into execution uncertainty. Preserve the
             # lease/root; another bounded stale-recovery cycle retries delivery.
             return True
-        notice = uncertain_provider_notice(config.require_agent(agent_id).display_name)
+        notice = uncertain_provider_notice(config.require_agent(agent_id).display_name, job.job_id)
         if partial:
-            notice += "\n\nSaved incomplete visible response:\n" + html.escape(partial)
+            notice += partial_response_block(partial)
         state.terminate_provider_job_with_notice(
             job.job_id,
             token,

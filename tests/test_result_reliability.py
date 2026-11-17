@@ -100,7 +100,7 @@ class ResultReliabilityTests(unittest.TestCase):
                 TurnObservation(worker.state, fixture.config).run_once(cast(Any, lambda: client))
             )
             self.assertIn(
-                "reply exactly retry",
+                "ответьте retry на это сообщение",
                 worker.state.get_telegram_outbox_for_job(old_id).telegram_html,
             )
             self.assertEqual(client.turns, 1)
@@ -193,11 +193,9 @@ class ResultReliabilityTests(unittest.TestCase):
                         self.assertEqual(old.status, "indeterminate")
                     notice = worker.state.get_telegram_outbox_for_job(old_id)
                     if final_status in {"failed", "interrupted"}:
-                        self.assertIn("reply exactly retry", notice.telegram_html)
+                        self.assertIn("ответьте retry на это сообщение", notice.telegram_html)
                         if tail_id is not None:
-                            self.assertIn(
-                                "1 earlier queued request(s) remain paused", notice.telegram_html
-                            )
+                            self.assertIn("Запросов на паузе: 1", notice.telegram_html)
                             held = worker.state._connection.execute(
                                 "SELECT 1 FROM provider_job_holds WHERE job_id = ?", (tail_id,)
                             ).fetchone()
@@ -264,7 +262,7 @@ class ResultReliabilityTests(unittest.TestCase):
         try:
             self.assertTrue(service.handle_update(embedded_fixtures.update(1, "Original task")))
             self.assertTrue(service.run_embedded_queue_cycle())
-            self.assertIn("reply exactly retry", telegram.sent[-1])
+            self.assertIn("ответьте retry на это сообщение", telegram.sent[-1])
             topic = service.state.find_topic(-1001234567890, 77)
             assert topic is not None
             old = service.state.provider_jobs_for_topic(topic.topic_id)[0]
@@ -400,8 +398,8 @@ class ResultReliabilityTests(unittest.TestCase):
                 worker.state.reliability_snapshot()["unresolved_uncertain_execution"], 0
             )
             self.assertIn("Partial visible work", notice.telegram_html)
-            self.assertIn("Continue with inspection", notice.telegram_html)
-            self.assertIn("1 earlier request(s) remain paused", notice.telegram_html)
+            self.assertIn("продолжить с проверкой", notice.telegram_html)
+            self.assertIn("Запросов на паузе до вашего решения: 1", notice.telegram_html)
             self.assertNotIn("send a new message", notice.telegram_html)
             self.assertEqual(client.turns, 1)
             delivery = worker.state.lease_telegram_outbox("codex", "fictional-sender")
@@ -536,10 +534,11 @@ class ResultReliabilityTests(unittest.TestCase):
             self.assertIn("429", notice.telegram_html)
             self.assertIn("Partial &lt;answer&gt;", notice.telegram_html)
             self.assertNotIn("private diagnostic", notice.telegram_html)
-            self.assertIn("incomplete", notice.telegram_html.lower())
-            self.assertIn("What happened:", notice.telegram_html)
-            self.assertIn("Saved:", notice.telegram_html)
-            self.assertIn("Next:", notice.telegram_html)
+            self.assertIn("не завершён", notice.telegram_html.lower())
+            # What happened -> what it means -> one action (ADR 0106).
+            self.assertIn("лимит запросов", notice.telegram_html)
+            self.assertIn("Итог неизвестен", notice.telegram_html)
+            self.assertIn("Hub попробует сверить итог сам", notice.telegram_html)
             self.assertEqual(worker.state.telegram_contract_version(job.session_id), 0)
             lease = worker.state.lease_telegram_outbox("codex", "fictional-sender")
             assert lease is not None and lease.lease_token is not None
@@ -808,11 +807,11 @@ class ResultReliabilityTests(unittest.TestCase):
         error = CodexTurnError(RpcError("Private error detail"), "x" * 30_000 + "<latest>")
         self.assertLessEqual(len(error.partial_text), MAX_PARTIAL_TEXT)
         notice = codex_failure_notice(error)
-        self.assertIn("Earlier partial text omitted", notice)
+        self.assertIn("Начало опущено", notice)
         self.assertIn("&lt;latest&gt;", notice)
         self.assertNotIn("Private error detail", notice)
-        self.assertIn("wait for read-only reconciliation", notice)
-        self.assertIn("do not repeat the task", notice)
+        self.assertIn("Hub попробует сверить итог сам", notice)
+        self.assertIn("Ничего не повторяйте", notice)
 
     def test_retry_backoff_respects_hint_and_caps_without_overflow(self) -> None:
         self.assertEqual(delivery_retry_delay(RuntimeError(), 1), 1)
@@ -836,7 +835,7 @@ class ResultReliabilityTests(unittest.TestCase):
             self.assertEqual(client.turns, 0)
             self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
             notice = worker.state.get_telegram_outbox_for_job(job_id)
-            self.assertIn("before starting", notice.telegram_html)
+            self.assertIn("Ничего не выполнялось", notice.telegram_html)
         finally:
             worker.close()
             fixture.tearDown()

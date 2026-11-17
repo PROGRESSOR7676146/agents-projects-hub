@@ -126,6 +126,12 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#durable-queue-and-co
   notices MUST distinguish queue, execution, approval wait and unknown outcome, name the observed
   blocker and offer a safe action. Queue reasons are snapshots, not continuous capacity claims;
   owner-topic links MUST use numeric identity.
+  - Routine transitions MUST stay quiet: acceptance and execution handoff are recorded but not
+    sent; a queue wait is sent at once only when it needs an owner decision, otherwise after a
+    bounded delay and only if still queued (ADR 0106).
+  - Owner-facing notices MUST be Russian and say what happened, what it means and one action,
+    within 220 visible characters for status and 400 for failure or blocker; incomplete text
+    and fixed technical detail are collapsed (ADR 0106).
   - Activity MUST reflect meaningful exact-bound provider evidence, not heartbeat/typing; bounded
     configurable quiet warnings re-arm only on progress and MUST NOT approve, stop, unlock or
     replay.

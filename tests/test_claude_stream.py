@@ -572,23 +572,21 @@ class ClaudeStreamTests(unittest.TestCase):
             self.assertEqual(raised.exception.session_id, SESSION)
             self.assertNotIn("fictional provider error", str(raised.exception))
             if code == "claude_provider_unavailable":
-                self.assertIn("network", str(raised.exception))
-                self.assertIn(
-                    "conversation and saved partial work are preserved", str(raised.exception)
-                )
+                self.assertIn("сеть", str(raised.exception))
+                self.assertIn("Беседа сохранена", str(raised.exception))
 
     def test_typed_terminal_failures_have_bounded_actionable_messages(self) -> None:
         messages: set[str] = set()
         cases = (
-            ("authentication_failed", "error_during_execution", "authentication", "route locally"),
-            ("billing_error", "error_during_execution", "billing", "route locally"),
-            ("model_not_found", "error_during_execution", "selected model", "model selection"),
-            ("overloaded", "error_during_execution", "overload", "partial work"),
-            ("rate_limit", "error_during_execution", "did not identify the limit", "partial work"),
-            (None, "error_max_turns", "turn limit", "execution limits"),
-            (None, "error_max_budget_usd", "budget", "execution limits"),
-            (None, "error_max_structured_output_retries", "structured", "output format"),
-            ("private unknown error", "error_during_execution", "provider failure", "partial work"),
+            ("authentication_failed", "error_during_execution", "авторизации", "маршрута"),
+            ("billing_error", "error_during_execution", "оплате", "маршрута"),
+            ("model_not_found", "error_during_execution", "модель не найдена", "другую модель"),
+            ("overloaded", "error_during_execution", "перегружен", "частичный результат"),
+            ("rate_limit", "error_during_execution", "какой лимит — неизвестно", "продолжай"),
+            (None, "error_max_turns", "лимит шагов", "настроенные лимиты"),
+            (None, "error_max_budget_usd", "бюджет", "настроенные лимиты"),
+            (None, "error_max_structured_output_retries", "структурированного", "формат вывода"),
+            ("private unknown error", "error_during_execution", "ошибке провайдера", "частичный"),
         )
         for error, subtype, reason, action in cases:
             with self.subTest(error=error, subtype=subtype):
@@ -608,7 +606,7 @@ class ClaudeStreamTests(unittest.TestCase):
                 message = raised.exception.public_message
                 self.assertIn(reason, message)
                 self.assertIn(action, message)
-                self.assertIn("No completed result was returned", message)
+                self.assertIn("Итогового ответа нет", message)
                 self.assertLessEqual(len(message), 300)
                 self.assertNotIn("private", message)
                 self.assertNotIn(SESSION, message)

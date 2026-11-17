@@ -452,7 +452,7 @@ class ExecutionJournal:
             ).fetchall()
             text = "\n\n".join(str(row[0]) for row in rows)
         if len(text) > MAX_PARTIAL_TEXT:
-            return "[Earlier partial text omitted]\n" + text[-(MAX_PARTIAL_TEXT - 40) :]
+            return "[Начало опущено]\n" + text[-(MAX_PARTIAL_TEXT - 40) :]
         return text
 
     def claim_stale(self, agent_id: str, worker_id: str) -> ProviderJobRecord | None:

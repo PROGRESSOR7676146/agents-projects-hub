@@ -214,7 +214,7 @@ class ClaudeRecoveryTests(unittest.TestCase):
                 result = worker.state.get_provider_result(job)
                 self.assertIn(SAVED_TEXT, result.visible_response)
                 self.assertEqual(
-                    "Attachment availability was not saved" in result.visible_response, material
+                    "Не сохранено, какие вложения" in result.visible_response, material
                 )
                 self.assertNotIn("Example GIF unavailable", result.visible_response)
                 self.assert_no_replay(worker, adapter, job)
@@ -265,7 +265,7 @@ class ClaudeRecoveryTests(unittest.TestCase):
         self.assertTrue(worker.run_cycle())
 
         notice = self.assert_unknown(worker, job_id)
-        self.assertIn("incomplete", notice.casefold())
+        self.assertIn("частичный ответ (не завершён)", notice.casefold())
         self.assertIn("saved tail", notice)
         self.assertNotIn(partial, notice)
         self.assertLessEqual(len(notice), MAX_PARTIAL_TEXT + 2000)
