@@ -198,6 +198,9 @@ class ClaudeCorrectionInput:
             return True
         if kind != "result":
             return True
+        if event.get("parent_tool_use_id") is not None:
+            # Only the submission's own native turn may complete it.
+            raise ClaudeStreamError("claude subagent result cannot complete the turn")
         self.sealed = True
         if self.complete or not self.receipts or self.receipts[0] != 1 or len(self.results) >= 2:
             raise ClaudeStreamError("claude text input result boundary is unverified")

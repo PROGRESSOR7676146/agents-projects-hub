@@ -138,6 +138,43 @@ class ClaudeCorrectionTests(unittest.TestCase):
             [("receipt", self.channel.initial.uuid, 1)],
         )
 
+    def test_subagent_events_never_complete_or_acknowledge_the_submission(self) -> None:
+        # Child-only replay followed by a result: no receipt of the submission.
+        self.host_reader()
+        self.feed(
+            self.subagent(json.loads(self.channel.initial.encode())["message"], isReplay=True)
+        )
+        with self.assertRaises(ClaudeStreamError):
+            self.feed(self.result("Unowned answer"))
+        # A parent-owned replay of the correction cannot acknowledge it.
+        self.setUp()
+        self.host_reader()
+        self.feed(self.echo(self.channel.initial))
+        self.channel.poll()
+        self.feed({**self.echo(self.child), "parent_tool_use_id": "toolu_01ExampleAgentCall"})
+        self.feed(self.result("First answer"))
+        with self.assertRaises(ClaudeStreamError):
+            self.reader.finish()
+        # A child-owned terminal result cannot complete the host turn.
+        self.setUp()
+        self.host_reader()
+        self.feed(self.echo(self.channel.initial))
+        with self.assertRaisesRegex(ClaudeStreamError, "subagent result"):
+            self.feed({**self.result("Child answer"), "parent_tool_use_id": "toolu_01Example"})
+
+    def test_restrictive_policies_reject_subagent_prompts_first(self) -> None:
+        from hermes_codex_router.claude_file_policy import file_tool_event_policy
+
+        for policy in (None, file_tool_event_policy("editor")):
+            with self.subTest(policy=policy):
+                self.setUp()
+                self.reader = ClaudeStreamReader(
+                    expected_session_id=SESSION, correction_input=self.channel, event_policy=policy
+                )
+                self.feed(self.echo(self.channel.initial))
+                with self.assertRaisesRegex(ClaudeStreamError, "policy"):
+                    self.feed(self.subagent("Example child prompt"))
+
     def test_unowned_or_malformed_user_text_still_refuses(self) -> None:
         for parent in (None, "", "   ", 7):
             with self.subTest(parent=parent):
