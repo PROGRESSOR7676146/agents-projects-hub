@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.20] - 2026-11-17
+
 - Keep a host Claude turn running when it delegates to a native subagent: the
   child's prompt is no longer mistaken for an unverified input receipt that
   ended the turn as indeterminate.
