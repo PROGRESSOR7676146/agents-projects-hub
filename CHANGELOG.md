@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.21] - 2026-11-17
+
 - Quieter, shorter notices (ADR 0106): Hub no longer sends "accepted" and
   "handoff" messages, reports an ordinary queue wait only after two minutes,
   and writes failure and uncertainty notices in short Russian with one action.
