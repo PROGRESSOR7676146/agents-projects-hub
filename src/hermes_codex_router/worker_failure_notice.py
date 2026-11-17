@@ -27,6 +27,7 @@ def commit_worker_failure_notice(
     turn_status: str,
     fallback_notice: str,
     error_detail: str | None = None,
+    decision_prompt: bool = False,
 ) -> ProviderJobRecord:
     runtime = config.require_agent(job.agent_id).runtime
     if failure.notice == "retry_binding":
@@ -53,4 +54,5 @@ def commit_worker_failure_notice(
         else None,
         sender_agent_id=job.agent_id,
         telegram_html=notice,
+        decision_prompt=decision_prompt and failure.notice == "uncertain",
     )

@@ -217,6 +217,19 @@ class HubConfig:
             and self.outbox_runtime == "external"
         )
 
+    @property
+    def hub_uncertain_decision_enabled(self) -> bool:
+        """Whether uncertain non-Codex jobs can offer the Hub-bot owner decision (ADR 0107)."""
+        hub_bot_id = self.hub_bot.telegram_user_id if self.hub_bot is not None else None
+        return (
+            artifact_capabilities.REMOTE_UNCERTAIN_DECISION
+            and type(hub_bot_id) is int
+            and hub_bot_id > 0
+            and self.dispatch_mode == "queue"
+            and self.queue_runtime == "external"
+            and self.outbox_runtime == "external"
+        )
+
     def project_for_chat(self, chat_id: int) -> ProjectBinding:
         for project in self.projects:
             if project.telegram_chat_id == chat_id:

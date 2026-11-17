@@ -153,8 +153,22 @@ def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
             connection.execute(f"DROP TABLE {table}")
 
 
+def remove_uncertain_decision_schema(connection: sqlite3.Connection) -> None:
+    """Remove only the empty schema57 owner-decision ledger from fictional fixtures."""
+    existing = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_job_owner_decisions'"
+    ).fetchone()
+    if existing is None:
+        return
+    assert (
+        connection.execute("SELECT COUNT(*) FROM provider_job_owner_decisions").fetchone()[0] == 0
+    )
+    connection.execute("DROP TABLE provider_job_owner_decisions")
+
+
 def remove_delivery_hold_telegram_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema56 structures from fictional historical fixtures."""
+    remove_uncertain_decision_schema(connection)
     remove_claude_corrections_schema(connection)
     tables = (
         "telegram_delivery_hold_remote_dispositions",

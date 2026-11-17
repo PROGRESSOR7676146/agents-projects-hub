@@ -678,6 +678,7 @@ def _release_info_command(args: argparse.Namespace) -> int:
             "ok": CURRENT_RELEASE.verified,
             **asdict(CURRENT_RELEASE),
             "remote_delivery_hold_recovery": artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY,
+            "remote_uncertain_decision": artifact_capabilities.REMOTE_UNCERTAIN_DECISION,
         }
     )
     return 0 if CURRENT_RELEASE.verified else 1

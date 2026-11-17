@@ -38,6 +38,13 @@ Step 3 scope, after a GPT Astra consult (approve with amendments):
 - When the buttons ship, the uncertainty notice's action changes from the local
   `indeterminate-resolve` command to the buttons.
 
+Step 3 state: implemented offline under
+[ADR 0107](../decisions/0107-telegram-decision-for-uncertain-claude-work.md)
+(schema 57, artifact switch off). Next trigger: the switch-off release, then
+the owner's decision to publish the switch-on release and deploy it with the
+switch-off release as rollback, then Telegram acceptance of both buttons.
+Recovered and non-Claude uncertainty keep the local command.
+
 ## Current goal and order
 
 Active functional increment: bounded durable Claude corrections under

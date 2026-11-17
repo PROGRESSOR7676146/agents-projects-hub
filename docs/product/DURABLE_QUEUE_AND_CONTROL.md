@@ -70,6 +70,11 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#durable-queue-and-co
     work; mismatch, unfinished or missing evidence retains uncertainty, partials and root exclusion.
   - Owner resolution MUST be immutable, exact and idempotent, preserving original
     job/error/delivery/replay history; it MAY release only the root for new work.
+  - A configured owner MAY decide an uncertain live Claude job by one Hub-bot button only after
+    the worker proved its process ended: close without retry, or one inspection-first job in the
+    same session with the root's queued tail held. The press MUST recheck the delivered prompt,
+    session snapshot, job and root in one transaction and append an immutable decision; repeats
+    return it without effects (ADR 0107, default-off artifact switch).
   - Later exact terminal proof MAY correct a notice without erasing its history; active/unknown work
     remains blocked, and failed/interrupted continuations require explicit inspection-first new work
     in the same session with queued tails held.

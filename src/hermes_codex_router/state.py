@@ -76,6 +76,7 @@ from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
 from .telegram_ingress_ledger import TelegramIngressLedger
 from .telegram_turn_provenance import TelegramTurnProvenance, validate_ingress_identity
+from .uncertain_decision_state import UncertainDecisionState
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
@@ -1488,6 +1489,7 @@ class HubState(TelegramDeliveryHoldHubStateFacade):
         preparation_retry: PreparationRetryBinding | None = None,
         provider_runtime: str | None = None,
         now: datetime | None = None,
+        decision_prompt: bool = False,
     ) -> ProviderJobRecord:
         """Terminalize work with one failure notice, or cancel it for a covering stop."""
         if status not in {"failed", "indeterminate"}:
@@ -1627,6 +1629,8 @@ class HubState(TelegramDeliveryHoldHubStateFacade):
                 ),
             )
             self._insert_telegram_outbox_parts(outbox_id, html)
+            if decision_prompt and status == "indeterminate" and terminal_turn_status is None:
+                UncertainDecisionState(self).attach_prompt_in_transaction(outbox_id, row)
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = ?, lease_owner = NULL, lease_token = NULL,

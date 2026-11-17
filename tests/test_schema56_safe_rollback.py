@@ -346,15 +346,15 @@ class Schema56SafeRollbackTests(unittest.TestCase):
         self.assertEqual(lease.job_id, tail_id)
         self.assertEqual(self.state.get_telegram_outbox(self.outbox.outbox_id).status, "unknown")
 
-    def test_populated_schema55_migrates_to_56_and_reopens_with_retained_state(self) -> None:
+    def test_populated_schema55_migrates_to_current_and_reopens_with_retained_state(self) -> None:
         legacy = self.hub.config.state_path.with_name("fictional-schema55.db")
         project_historical_database(self.hub.config.state_path, legacy, 55)
 
         result = migrations.migrate_database(legacy)
 
-        self.assertEqual((result.previous_version, result.current_version), (55, 56))
+        self.assertEqual((result.previous_version, result.current_version), (55, 57))
         with closing(HubState.open_existing(legacy)) as reopened:
-            self.assertEqual(reopened.schema_version, 56)
+            self.assertEqual(reopened.schema_version, 57)
             self.assertEqual(
                 reopened.get_telegram_outbox(self.outbox.outbox_id).status,
                 "unknown",
@@ -364,12 +364,12 @@ class Schema56SafeRollbackTests(unittest.TestCase):
                 "outstanding",
             )
         with closing(HubState.open_existing(legacy)) as restarted:
-            self.assertEqual(restarted.schema_version, 56)
+            self.assertEqual(restarted.schema_version, 57)
 
-    def test_future_schema57_state_is_a_concrete_compatibility_blocker(self) -> None:
+    def test_future_schema58_state_is_a_concrete_compatibility_blocker(self) -> None:
         """A result-inspection schema increment needs its own compatible rollback."""
         with self.state._connection:
-            self.state._connection.execute("PRAGMA user_version = 57")
+            self.state._connection.execute("PRAGMA user_version = 58")
 
         with self.assertRaisesRegex(StateError, "state_schema_unsupported"):
             HubState.open_existing(self.hub.service.config.state_path)

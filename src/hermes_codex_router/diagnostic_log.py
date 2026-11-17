@@ -43,6 +43,8 @@ SITES = frozenset(
         "alerts.thread_metadata_read",
         "claude_permission_host.boundary_unverified",
         "claude_host_scope.cleanup",
+        "external_worker.uncertain_decision_proof",
+        "uncertain_decision.markup",
         "claude_stream.quota_observation",
         "claude_stream.usage_summary",
         "claude_stream.interim_progress",
