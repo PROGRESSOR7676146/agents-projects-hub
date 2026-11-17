@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Enable the Telegram decision for uncertain Claude work (ADR 0107) by owner
+  decision; 0.11.22 keeps it off and is the rollback target.
+
 ## [0.11.22] - 2026-11-17
 
 - Telegram decision for uncertain Claude work (ADR 0107): when a live Claude
