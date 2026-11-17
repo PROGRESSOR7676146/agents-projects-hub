@@ -124,7 +124,11 @@ class NoticeCopyTests(unittest.TestCase):
 
     def test_uncertain_notice_names_the_supported_owner_decision(self) -> None:
         notice = uncertain_provider_notice("Claude", JOB_ID)
-        self.assertIn(f"<code>indeterminate-resolve {JOB_ID}</code>", notice)
+        self.assertIn(
+            "<code>agents-projects-hub indeterminate-resolve &lt;config&gt; "
+            f"{JOB_ID} --resolution acknowledged</code>",
+            notice,
+        )
         self.assertIn("без повтора", notice)
 
     def test_assembled_preexecution_notices_stay_within_limit(self) -> None:

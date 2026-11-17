@@ -35,7 +35,8 @@ uncertainty blocked the project. The owner reads these on a phone.
    files may have changed, that there is no automatic retry, and that the
    project is paused. It never suggests an action that the pause would refuse.
    Until a Telegram decision exists, its one action is the supported owner
-   resolution, shown as the copyable local `indeterminate-resolve <job>`
+   resolution, shown as the copyable local
+   `agents-projects-hub indeterminate-resolve <config> <job> --resolution acknowledged`
    command (ADR 0074).
 3. **Collapsed detail.** Explicitly incomplete provider text keeps its
    existing bound but moves into a Telegram expandable quote after the action.

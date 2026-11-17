@@ -148,7 +148,8 @@ def owner_resolution_action(job_id: str) -> str:
     """
     return (
         "Снять паузу без повтора может владелец на компьютере: "
-        f"<code>indeterminate-resolve {html.escape(job_id)}</code>"
+        "<code>agents-projects-hub indeterminate-resolve &lt;config&gt; "
+        f"{html.escape(job_id)} --resolution acknowledged</code>"
     )
 
 
