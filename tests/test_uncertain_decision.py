@@ -215,6 +215,46 @@ class UncertainDecisionStateTests(_StateFixture):
             1,
         )
 
+    def test_continue_refuses_when_a_confirmed_request_would_run_first(self) -> None:
+        with enabled():
+            job = self.uncertain(60, follower=61)
+            snapshot = self.deliver_prompt(job.job_id)
+            with self.state._connection:
+                self.state._connection.execute(
+                    """INSERT INTO provider_job_holds (job_id, cause_job_id, held_at, decision)
+                       VALUES (?, ?, 'now', 'confirmed')""",
+                    (self.follower.job_id, job.job_id),
+                )
+            with self.assertRaisesRegex(StateError, "Закрыть без повтора"):
+                self.decide("continue", snapshot)
+            self.assertIsNone(
+                self.state._connection.execute(
+                    "SELECT 1 FROM provider_job_resolutions WHERE job_id=?", (job.job_id,)
+                ).fetchone()
+            )
+            self.assertEqual(
+                self.state._connection.execute(
+                    "SELECT COUNT(*) FROM provider_jobs WHERE idempotency_key LIKE 'continuation:%'"
+                ).fetchone()[0],
+                0,
+            )
+            self.assertTrue(self.decide("close", snapshot).created)
+
+    def test_only_the_last_notice_part_can_be_the_prompt(self) -> None:
+        with enabled():
+            job = self.uncertain(62)
+            snapshot = self.deliver_prompt(job.job_id)
+            prompt = self.parts(job.job_id)[-1]
+            with self.state._connection:
+                self.state._connection.execute(
+                    """INSERT INTO telegram_outbox_parts
+                       (outbox_id, part_index, telegram_html, part_type)
+                       VALUES (?, ?, 'later text', 'text')""",
+                    (prompt["outbox_id"], int(prompt["part_index"]) + 1),
+                )
+            with self.assertRaisesRegex(StateError, "не доставленный"):
+                self.decide("close", snapshot)
+
     def test_stale_or_foreign_presses_change_nothing(self) -> None:
         with enabled():
             job = self.uncertain(16)
@@ -476,7 +516,7 @@ class CallbackHandlerTests(_StateFixture):
             self.press(service, f"ud:c:{snapshot}")
             self.press(service, "ud:done")
         answers = service.telegram.answers
-        self.assertEqual(answers[0], "Закрыто без повтора; проект снят с паузы")
+        self.assertEqual(answers[0], "Закрыто без повтора; пауза от этой задачи снята")
         self.assertEqual(answers[1], "Решение уже принято: закрыто без повтора")
         self.assertEqual(answers[2], "Решение уже принято")
         method, kwargs = service.telegram.calls[0]
@@ -548,6 +588,59 @@ class OwnedExitProofTests(unittest.TestCase):
                 process.kill()
                 process.wait()
         self.assertIsNotNone(process.returncode)
+        self.assertTrue(adapter.confirm_owned_claude_exit())
+
+    def test_wait_timeout_keeps_the_proof_withheld(self) -> None:
+        import subprocess
+
+        from hermes_codex_router import external_runtime
+        from hermes_codex_router.external_runtime import ExternalCliAdapter
+
+        adapter = ExternalCliAdapter("claude")
+        process = mock.Mock(returncode=None, pid=999_999_999)
+        process.wait.side_effect = subprocess.TimeoutExpired("claude", 5)
+        with (
+            mock.patch.object(external_runtime, "peek_exit_code", return_value=None),
+            mock.patch.object(external_runtime.os, "killpg") as killpg,
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            adapter._terminate_claude_process(process, graceful=False)
+        killpg.assert_called_once()
+        self.assertFalse(adapter.confirm_owned_claude_exit())
+
+    def test_group_kill_takes_the_descendant_with_the_leader(self) -> None:
+        import os
+        import subprocess
+        import time
+
+        from hermes_codex_router.external_runtime import ExternalCliAdapter
+
+        adapter = ExternalCliAdapter("claude")
+        process = subprocess.Popen(
+            ["sh", "-c", "sleep 30 & echo $!; wait"],
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert process.stdout is not None
+        child = int(process.stdout.readline())
+        try:
+            adapter._terminate_claude_process(process, graceful=False)  # type: ignore[arg-type]
+        finally:
+            process.stdout.close()
+        deadline = time.monotonic() + 5
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                with open(f"/proc/{child}/stat") as stat:
+                    alive = stat.read().split(") ", 1)[1][0] != "Z"
+            except FileNotFoundError:
+                alive = False
+            if alive:
+                time.sleep(0.05)
+        if alive:
+            os.kill(child, 9)
+        self.assertFalse(alive)
         self.assertTrue(adapter.confirm_owned_claude_exit())
 
     def test_host_scope_must_be_observed_inactive(self) -> None:

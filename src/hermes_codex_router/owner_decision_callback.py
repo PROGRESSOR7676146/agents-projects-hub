@@ -116,7 +116,7 @@ def _outcome(decision: UncertainDecision) -> str:
             else "Решение уже принято: закрыто без повтора"
         )
     if decision.action == "close":
-        return "Закрыто без повтора; проект снят с паузы"
+        return "Закрыто без повтора; пауза от этой задачи снята"
     held = f"; запросов на паузе: {decision.held_count}" if decision.held_count else ""
     return "Проверка и продолжение поставлены в очередь" + held
 

@@ -128,7 +128,10 @@ class UncertainDecisionState:
                    FROM telegram_outbox_parts parts
                    JOIN telegram_outbox outbox ON outbox.outbox_id = parts.outbox_id
                    WHERE outbox.chat_id = ? AND parts.telegram_message_id = ?
-                     AND parts.receipt_validation_version = 1""",
+                     AND parts.receipt_validation_version = 1 AND parts.part_type = 'text'
+                     AND outbox.purpose = 'execution_notice'
+                     AND parts.part_index = (SELECT MAX(last.part_index)
+                       FROM telegram_outbox_parts last WHERE last.outbox_id = parts.outbox_id)""",
                 (chat_id, prompt_message_id),
             ).fetchone()
             if (
@@ -268,7 +271,14 @@ class UncertainDecisionState:
             raise StateError("В проекте есть другая активная или неопределённая работа")
 
     def _hold_tail(self, scope: str, job_id: str, now: str) -> int:
-        """Keep earlier accepted work behind the inspection; the owner releases it."""
+        """Keep earlier accepted work behind the inspection; the owner releases it.
+
+        A queued request whose earlier hold the owner already confirmed cannot
+        be held again without reusing that old decision, and it would run before
+        the inspection. "Continue" then refuses and rolls back; "close" remains.
+        """
+        from .state import StateError
+
         self.connection.execute(
             """INSERT OR IGNORE INTO provider_job_holds (job_id, cause_job_id, held_at)
                SELECT tail.job_id, ?, ? FROM provider_jobs tail
@@ -276,16 +286,20 @@ class UncertainDecisionState:
                WHERE topics.execution_scope = ? AND tail.status IN ('queued', 'retry_wait')""",
             (job_id, now, scope),
         )
-        return int(
-            self.connection.execute(
-                """SELECT COUNT(*) FROM provider_job_holds holds
-                   JOIN provider_jobs jobs ON jobs.job_id = holds.job_id
-                   JOIN topics ON topics.topic_id = jobs.topic_id
-                   WHERE topics.execution_scope = ? AND jobs.status IN ('queued', 'retry_wait')
-                     AND holds.decision = 'pending'""",
-                (scope,),
-            ).fetchone()[0]
-        )
+        counts = self.connection.execute(
+            """SELECT COUNT(*) AS total, COALESCE(SUM(holds.decision = 'pending'), 0) AS held
+               FROM provider_jobs jobs
+               JOIN topics ON topics.topic_id = jobs.topic_id
+               LEFT JOIN provider_job_holds holds ON holds.job_id = jobs.job_id
+               WHERE topics.execution_scope = ? AND jobs.status IN ('queued', 'retry_wait')""",
+            (scope,),
+        ).fetchone()
+        if int(counts["held"]) != int(counts["total"]):
+            raise StateError(
+                "В очереди проекта есть уже подтверждённые запросы; "
+                "проверка не встанет перед ними. Выберите «Закрыть без повтора»"
+            )
+        return int(counts["held"])
 
     def _insert_continuation(self, job: sqlite3.Row, message_id: int, now: str) -> str:
         from .state import StateError

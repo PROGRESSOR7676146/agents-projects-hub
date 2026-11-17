@@ -1271,6 +1271,11 @@ class ExternalCliAdapter:
         Its group was killed and the leader reaped, and the turn's host scope,
         when one was used, is killed again and observed inactive. A false
         result only withholds the owner's Telegram decision.
+
+        Invariant: only ``_terminate_claude_process`` reaps a Claude leader,
+        and it signals the whole group before waiting. The run loop observes
+        exit with ``WNOWAIT`` and never reaps, so an already reaped leader means
+        an earlier group kill and reap completed.
         """
         if self.runtime != "claude":
             return False
