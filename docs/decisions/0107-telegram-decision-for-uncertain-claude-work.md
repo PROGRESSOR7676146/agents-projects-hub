@@ -2,7 +2,8 @@
 
 Status: accepted, 2026-11-17 (owner decision, stabilization plan step 3,
 after a GPT Astra consult). Source implementation is separate from installed
-acceptance. The release that introduces it ships the capability off.
+acceptance. The release that introduces it (0.11.22) ships the capability
+off; the owner enabled it in 0.11.23, 2026-11-17, with 0.11.22 as rollback.
 Amends: [ADR 0106](0106-quiet-short-russian-notices.md) and REQ-QUEUE-004.
 
 ## Context

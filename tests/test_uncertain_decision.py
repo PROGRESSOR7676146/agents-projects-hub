@@ -148,7 +148,7 @@ class UncertainDecisionStateTests(_StateFixture):
                 "00000000-0000-4000-8000-000000000001",
             ),
         )
-        with self.assertRaisesRegex(StateError, "выключено"):
+        with enabled(False), self.assertRaisesRegex(StateError, "выключено"):
             self.decide("close", parse_prompt_part(parts[-1]["telegram_html"]) or "")
 
     def test_disabled_artifact_never_attaches_a_prompt(self) -> None:
