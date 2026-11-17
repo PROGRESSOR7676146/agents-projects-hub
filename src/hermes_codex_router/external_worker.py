@@ -873,7 +873,7 @@ class ExternalQueueWorker:
                             executing,
                             token,
                             project_root,
-                            uncertain_provider_notice(self.agent.display_name),
+                            uncertain_provider_notice(self.agent.display_name, executing.job_id),
                         )
                         if failure.notice == "uncertain"
                         else "",

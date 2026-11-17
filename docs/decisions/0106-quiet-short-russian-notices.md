@@ -23,7 +23,8 @@ uncertainty blocked the project. The owner reads these on a phone.
    decision or action (`held`, `delivery_unknown`, `root_held_fifo`,
    `root_uncertain`, `root_writer`) is due at once. Other wait reasons become
    due only after `QUEUE_NOTICE_DELAY` (120 s). The existing first-send check
-   supersedes the snapshot unsent if the job leaves the queue first.
+   supersedes the snapshot unsent once the job starts executing or ends; a
+   leased job that has not started still counts as waiting.
    Same-topic FIFO and input collection are recorded but never sent, because
    the blocker is visible in that topic or the batching is deliberate.
    No-progress, approval and delivery warnings are unchanged in timing.
@@ -33,6 +34,9 @@ uncertainty blocked the project. The owner reads these on a phone.
    most 400, excluding collapsed content. An uncertainty notice states that
    files may have changed, that there is no automatic retry, and that the
    project is paused. It never suggests an action that the pause would refuse.
+   Until a Telegram decision exists, its one action is the supported owner
+   resolution, shown as the copyable local `indeterminate-resolve <job>`
+   command (ADR 0074).
 3. **Collapsed detail.** Explicitly incomplete provider text keeps its
    existing bound but moves into a Telegram expandable quote after the action.
    A pre-start refusal shows a Russian reason and action. Its fixed provider
@@ -50,6 +54,9 @@ no-replay and collapse rules.
   explanation is translated.
 - Unattempted delayed snapshots use the existing `available_at` lease
   filter. Attempted or unknown deliveries keep their evidence.
+- Rows prepared by an older release keep their old text and may still be
+  sent once after the upgrade. Deployment runs from an idle Hub, so this
+  backlog is small; it is not rewritten.
 - A quick job now produces no Hub lifecycle message. Telegram typing actions,
   the provider's own progress messages and the quiet warnings remain the
   activity signals.

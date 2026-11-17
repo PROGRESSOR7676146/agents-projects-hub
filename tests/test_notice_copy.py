@@ -15,6 +15,7 @@ from hermes_codex_router.approval_observations import APPROVAL_CATEGORIES, appro
 from hermes_codex_router.claude_activity import NOTICE_COPY
 from hermes_codex_router.claude_stream import _terminal_failure_message
 from hermes_codex_router.codex_failure import (
+    MAX_PARTIAL_TEXT,
     CodexPermissionPolicyDriftError,
     CodexPermissionProfileError,
     CodexPreparationError,
@@ -27,7 +28,19 @@ from hermes_codex_router.codex_failure import (
 from hermes_codex_router.codex_ingress_control import INGRESS_PRECAUTION_NOTICE
 from hermes_codex_router.delivery_wait import delivery_wait_explanation
 from hermes_codex_router.notice_copy import _NOT_STARTED, limit_notice, not_started_notice
+from hermes_codex_router.preexecution_retry_state import (
+    _UNSAVED_REPLACEMENT_CONTEXT,
+    RETRY_BINDING_CHANGED,
+    RETRY_INPUT_MISSING,
+    RETRY_MATERIALS,
+    RETRY_OFFERED,
+    RETRY_ROOT_UNVERIFIED,
+)
 from hermes_codex_router.task_activity import no_progress_text
+from hermes_codex_router.telegram_multipart import TELEGRAM_HTML_LIMIT, split_telegram_html
+
+JOB_ID = "00000000-0000-4000-8000-000000000001"
+LONG_NAME = "Example Agent With A Long Display Name"
 
 STATUS_LIMIT = 220
 FAILURE_LIMIT = 400
@@ -65,7 +78,7 @@ class NoticeCopyTests(unittest.TestCase):
                     )
                     self.assert_copy(notice, FAILURE_LIMIT)
                     self.assertNotIn("private", notice)
-        self.assert_copy(uncertain_provider_notice("Claude"), FAILURE_LIMIT)
+        self.assert_copy(uncertain_provider_notice(LONG_NAME, JOB_ID), FAILURE_LIMIT)
         for code in (
             "claude_quota_exhausted",
             "claude_rate_limited",
@@ -100,7 +113,7 @@ class NoticeCopyTests(unittest.TestCase):
 
     def test_indeterminate_notice_never_promises_a_replay(self) -> None:
         for notice in (
-            uncertain_provider_notice("Claude"),
+            uncertain_provider_notice("Claude", JOB_ID),
             codex_failure_notice(RuntimeError("closed")),
         ):
             self.assertIn("Итог неизвестен", notice)
@@ -108,6 +121,48 @@ class NoticeCopyTests(unittest.TestCase):
             self.assertIn("на паузе", notice)
             # A new message is refused while the project is paused; never suggest it.
             self.assertNotIn("новое сообщение", notice)
+
+    def test_uncertain_notice_names_the_supported_owner_decision(self) -> None:
+        notice = uncertain_provider_notice("Claude", JOB_ID)
+        self.assertIn(f"<code>indeterminate-resolve {JOB_ID}</code>", notice)
+        self.assertIn("без повтора", notice)
+
+    def test_assembled_preexecution_notices_stay_within_limit(self) -> None:
+        bases = (
+            codex_failure_notice(CodexPreparationError("private")),
+            codex_failure_notice(CodexRetryBindingError("private")),
+        )
+        suffixes = (
+            RETRY_MATERIALS,
+            RETRY_ROOT_UNVERIFIED,
+            RETRY_BINDING_CHANGED,
+            RETRY_INPUT_MISSING,
+            RETRY_OFFERED,
+            "\n" + _UNSAVED_REPLACEMENT_CONTEXT,
+        )
+        for base in bases:
+            for suffix in suffixes:
+                with self.subTest(suffix=suffix[:30]):
+                    self.assert_copy(base + suffix, FAILURE_LIMIT)
+        held = (
+            codex_failure_notice(RuntimeError("closed"), turn_status="failed", held_count=999)
+            + "\nЗапросов на паузе до вашего решения: 999."
+        )
+        self.assert_copy(held, FAILURE_LIMIT)
+
+    def test_maximal_partial_splits_into_valid_collapsed_parts(self) -> None:
+        partial = ("Fictional <tag> & 😀 текст " * 2000)[: MAX_PARTIAL_TEXT - 40]
+        error = RuntimeError("closed")
+        error.partial_text = partial  # type: ignore[attr-defined]
+        parts = split_telegram_html(codex_failure_notice(error))
+        self.assertGreater(len(parts), 1)
+        for part in parts:
+            self.assertLessEqual(len(part), TELEGRAM_HTML_LIMIT)
+            self.assertEqual(part.count("<blockquote expandable>"), part.count("</blockquote>"))
+        self.assertNotIn("<blockquote", parts[0].split("<b>Частичный ответ")[0])
+        self.assertTrue(all(part.startswith("<blockquote expandable>") for part in parts[1:]))
+        joined = "".join(parts).replace("</blockquote><blockquote expandable>", "")
+        self.assertIn(html.escape(partial.strip()), joined)
 
     def test_partial_response_is_collapsed_escaped_and_after_the_action(self) -> None:
         self.assertEqual(partial_response_block("   "), "")

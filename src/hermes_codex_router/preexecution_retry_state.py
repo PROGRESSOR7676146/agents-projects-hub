@@ -21,6 +21,18 @@ _UNSAVED_REPLACEMENT_CONTEXT = (
     "Отправьте задачу заново целиком, с нужным контекстом."
 )
 
+# Suffixes appended to a pre-execution failure notice (ADR 0106 copy contract).
+RETRY_MATERIALS = "\nВ запросе были вложения: отправьте задачу и вложения заново."
+RETRY_ROOT_UNVERIFIED = "\nПовтор недоступен: не удалось проверить папку проекта на компьютере."
+RETRY_BINDING_CHANGED = (
+    "\nПовтор недоступен: сессия или настройки изменились. Отправьте задачу заново."
+)
+RETRY_INPUT_MISSING = "\nПовтор недоступен: исходный запрос не сохранён. Отправьте задачу заново."
+RETRY_OFFERED = (
+    "\nЧтобы повторить в той же сессии, ответьте retry на это сообщение. "
+    "Разрешения на инструменты понадобятся заново."
+)
+
 
 class PreparationRetryRefused(StateError):
     """A saved failed request cannot safely become a new invocation."""
@@ -86,13 +98,13 @@ class PreexecutionRetryState:
             raise StateError("preparation retry ticket requires its failure transaction")
         job_id = str(job["job_id"])
         if self.has_materials(job_id):
-            return "\nВ запросе были вложения: отправьте задачу и вложения заново."
+            return RETRY_MATERIALS
         session = self.state.get_session(str(job["session_id"]))
         topic = self.state.get_topic(int(job["topic_id"]))
         try:
             root = str(binding.canonical_root.resolve(strict=True))
         except (OSError, RuntimeError):
-            return "\nПовтор недоступен: не удалось проверить папку проекта на компьютере."
+            return RETRY_ROOT_UNVERIFIED
         checkpoint = self.connection.execute(
             "SELECT * FROM provider_execution_checkpoints WHERE job_id=?", (job_id,)
         ).fetchone()
@@ -120,13 +132,13 @@ class PreexecutionRetryState:
                 )
             )
         ):
-            return "\nПовтор недоступен: сессия или настройки изменились. Отправьте задачу заново."
+            return RETRY_BINDING_CHANGED
         context_refusal = self._context_refusal(job_id, session.provider_session_id)
         if context_refusal is not None:
             return "\n" + context_refusal
         inputs = self._inputs(job_id)
         if inputs == "[]":
-            return "\nПовтор недоступен: исходный запрос не сохранён. Отправьте задачу заново."
+            return RETRY_INPUT_MISSING
         self.connection.execute(
             """INSERT INTO provider_preexecution_retry_tickets
                (source_job_id,project_id,canonical_root,session_id,session_generation,
@@ -151,10 +163,7 @@ class PreexecutionRetryState:
                 timestamp,
             ),
         )
-        return (
-            "\nЧтобы повторить в той же сессии, ответьте retry на это сообщение. "
-            "Разрешения на инструменты понадобятся заново."
-        )
+        return RETRY_OFFERED
 
     def _inputs(self, job_id: str) -> str:
         rows = self.connection.execute(

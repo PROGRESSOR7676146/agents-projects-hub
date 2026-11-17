@@ -538,7 +538,7 @@ class ResultReliabilityTests(unittest.TestCase):
             # What happened -> what it means -> one action (ADR 0106).
             self.assertIn("лимит запросов", notice.telegram_html)
             self.assertIn("Итог неизвестен", notice.telegram_html)
-            self.assertIn("Hub сверит итог сам", notice.telegram_html)
+            self.assertIn("Hub попробует сверить итог сам", notice.telegram_html)
             self.assertEqual(worker.state.telegram_contract_version(job.session_id), 0)
             lease = worker.state.lease_telegram_outbox("codex", "fictional-sender")
             assert lease is not None and lease.lease_token is not None
@@ -810,7 +810,7 @@ class ResultReliabilityTests(unittest.TestCase):
         self.assertIn("Начало опущено", notice)
         self.assertIn("&lt;latest&gt;", notice)
         self.assertNotIn("Private error detail", notice)
-        self.assertIn("Hub сверит итог сам", notice)
+        self.assertIn("Hub попробует сверить итог сам", notice)
         self.assertIn("Ничего не повторяйте", notice)
 
     def test_retry_backoff_respects_hint_and_caps_without_overflow(self) -> None:

@@ -92,7 +92,7 @@ def codex_failure_notice(
     if isinstance(error, CodexRetryBindingError):
         return (
             "Повтор не запущен: Hub не смог подтвердить сохранённую задачу, сессию или права. "
-            "Codex не запускался. Отправьте задачу заново."
+            "Codex не запускался. Проверьте привязку в /status, затем отправьте задачу заново."
         )
     if isinstance(error, CodexPermissionProfileError):
         return (
@@ -133,18 +133,30 @@ def codex_failure_notice(
             "\nИтог неизвестен: файлы могли измениться. Автоповтора не будет; "
             "новые запуски в проекте на паузе."
         )
-        notice += "\nНичего не повторяйте: Hub сверит итог сам и сообщит."
+        notice += "\nНичего не повторяйте: Hub попробует сверить итог сам и сообщит."
     partial = getattr(error, "partial_text", "")
     if isinstance(partial, str):
         notice += partial_response_block(partial[:MAX_PARTIAL_TEXT])
     return notice
 
 
-def uncertain_provider_notice(display_name: str) -> str:
+def owner_resolution_action(job_id: str) -> str:
+    """The one supported owner decision for an unresolved uncertain job.
+
+    The local owner command records an immutable resolution without replay and
+    releases only the project root (ADR 0074).
+    """
+    return (
+        "Снять паузу без повтора может владелец на компьютере: "
+        f"<code>indeterminate-resolve {html.escape(job_id)}</code>"
+    )
+
+
+def uncertain_provider_notice(display_name: str, job_id: str) -> str:
     """Explain an uncertain non-Codex outcome without exposing provider diagnostics."""
     safe_name = html.escape(display_name)
     return (
         f"⚠️ {safe_name} прервался без итогового ответа.\n"
         "Итог неизвестен: файлы могли измениться. Автоповтора не будет; "
-        "новые запуски в проекте на паузе до вашего решения."
+        "новые запуски в проекте на паузе до вашего решения.\n" + owner_resolution_action(job_id)
     )
