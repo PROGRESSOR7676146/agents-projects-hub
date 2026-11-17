@@ -153,6 +153,15 @@ class ClaudeCorrectionInput:
                 raise ClaudeStreamError("claude text input lifecycle is unverified")
             history.append(sequence[len(history)])
             return False
+        if kind == "user" and event.get("parent_tool_use_id") is not None:
+            # A forwarded subagent message names the Agent call that owns it
+            # (headless docs: parent_tool_use_id). It is tool-internal, never a
+            # receipt of our submission. Event policies that forbid children
+            # (text-only, confined file tools) reject it before this point.
+            parent = event["parent_tool_use_id"]
+            if not isinstance(parent, str) or not parent.strip():
+                raise ClaudeStreamError("claude subagent message ownership is invalid")
+            return True
         if kind == "user" and event.get("isReplay") is True:
             if len(self.receipts) >= len(self.frames) or self.complete:
                 raise ClaudeStreamError("claude text input receipt is duplicated")
@@ -189,6 +198,9 @@ class ClaudeCorrectionInput:
             return True
         if kind != "result":
             return True
+        if event.get("parent_tool_use_id") is not None:
+            # Only the submission's own native turn may complete it.
+            raise ClaudeStreamError("claude subagent result cannot complete the turn")
         self.sealed = True
         if self.complete or not self.receipts or self.receipts[0] != 1 or len(self.results) >= 2:
             raise ClaudeStreamError("claude text input result boundary is unverified")
