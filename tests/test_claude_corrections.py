@@ -9,6 +9,7 @@ from hermes_codex_router.claude_corrections import (
     ClaudeCorrectionInput,
     ClaudeInputFrame,
 )
+from hermes_codex_router.claude_host_profile import host_event_policy
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeStreamReader,
@@ -94,6 +95,57 @@ class ClaudeCorrectionTests(unittest.TestCase):
                     event["session_id"] = str(uuid.uuid4())
                 else:
                     self.feed(event)
+                with self.assertRaises(ClaudeStreamError):
+                    self.feed(event)
+
+    def host_reader(self) -> ClaudeStreamReader:
+        self.reader = ClaudeStreamReader(
+            expected_session_id=SESSION,
+            correction_input=self.channel,
+            event_policy=host_event_policy,
+        )
+        return self.reader
+
+    def subagent(self, content: object, **extra: object) -> dict[str, object]:
+        return {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": "toolu_01ExampleAgentCall",
+            "session_id": SESSION,
+            "uuid": str(uuid.uuid4()),
+            **extra,
+        }
+
+    def test_host_subagent_messages_are_not_input_receipts(self) -> None:
+        # A host turn that delegates to a native subagent receives the child's
+        # prompt as a user event owned by the Agent call. It must neither end
+        # the turn as unverified nor count as the submission's receipt.
+        self.host_reader()
+        self.feed(self.subagent([{"type": "text", "text": "Example child prompt"}], isReplay=True))
+        self.assertEqual([item for item in self.events if item[0] == "receipt"], [])
+        self.feed(self.echo(self.channel.initial))
+        self.feed(self.subagent("Example child prompt"))
+        self.feed(self.subagent([{"type": "text", "text": "Example child prompt"}]))
+        self.feed(
+            self.subagent([{"type": "tool_result", "tool_use_id": "toolu_02", "content": "x"}])
+        )
+        self.feed(self.result("Answer after delegation"))
+        self.assertTrue(self.channel.complete)
+        parsed = parse_claude_stream(self.reader.finish(), expected_session_id=SESSION)
+        self.assertEqual(parsed.text, "Answer after delegation")
+        self.assertEqual(
+            [item for item in self.events if item[0] == "receipt"],
+            [("receipt", self.channel.initial.uuid, 1)],
+        )
+
+    def test_unowned_or_malformed_user_text_still_refuses(self) -> None:
+        for parent in (None, "", "   ", 7):
+            with self.subTest(parent=parent):
+                self.setUp()
+                self.host_reader()
+                self.feed(self.echo(self.channel.initial))
+                event = self.subagent([{"type": "text", "text": "Injected"}])
+                event["parent_tool_use_id"] = parent
                 with self.assertRaises(ClaudeStreamError):
                     self.feed(event)
 
