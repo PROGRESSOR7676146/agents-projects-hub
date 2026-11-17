@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Quieter, shorter notices (ADR 0106): Hub no longer sends "accepted" and
+  "handoff" messages, reports an ordinary queue wait only after two minutes,
+  and writes failure and uncertainty notices in short Russian with one action.
+  Incomplete provider text is collapsed behind Telegram's expander.
+
 ## [0.11.20] - 2026-11-17
 
 - Keep a host Claude turn running when it delegates to a native subagent: the

@@ -43,8 +43,8 @@ class CodexPermissionProfileTests(unittest.TestCase):
                                 self.turn(client, Path(directory))
                         self.assertEqual([m["method"] for m in transport.sent], [method])
                         notice = codex_failure_notice(caught.exception)
-                        self.assertIn("unsupported permission profile", notice)
-                        self.assertIn("No productive provider turn was sent", notice)
+                        self.assertIn("профиль прав, который Hub не поддерживает", notice)
+                        self.assertIn("Ничего не выполнялось", notice)
                         self.assertNotIn("example-private-profile", notice)
                         self.assertNotIn("Retry after Codex is available", notice)
 

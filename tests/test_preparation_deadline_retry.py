@@ -87,7 +87,7 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                 self.assertEqual([entry["method"] for entry in transport.sent], ["thread/start"])
                 notice = state.get_telegram_outbox_for_job(job_id)
                 assert notice is not None
-                self.assertIn("Reply exactly retry", notice.telegram_html)
+                self.assertIn("ответьте retry на это сообщение", notice.telegram_html)
                 if notice.telegram_message_id is None:
                     delivery = state.lease_telegram_outbox("codex", "example-sender")
                     assert delivery is not None and delivery.lease_token is not None

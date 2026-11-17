@@ -28,6 +28,16 @@ _TOOLS = {
 }
 
 
+def no_progress_text(mode: str) -> str:
+    """A quiet warning re-armed only by progress; it never stops or restarts work."""
+    subject = (
+        "⏳ Инструмент или сборка давно не подают признаков работы"
+        if mode == "tool"
+        else "⏳ Давно нет новых действий от агента"
+    )
+    return f"{subject}; задача может ещё выполняться, ничего не перезапускалось. Прервать: /stop."
+
+
 class TaskActivityState:
     def __init__(
         self,
@@ -397,9 +407,7 @@ class TaskActivityState:
                     bound,
                     event_key=f"activity:{row['job_id']}:no-progress:{row['episode']}",
                     kind="no_progress",
-                    text="No new progress has been observed from the active "
-                    + ("tool or build" if bound["mode"] == "tool" else "turn")
-                    + ". The task may still be running. Check /status or use /stop in this topic; work has not been restarted.",
+                    text=no_progress_text(str(bound["mode"])),
                     now=now,
                 )
             )

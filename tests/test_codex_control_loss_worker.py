@@ -203,7 +203,7 @@ class ControlLossWorkerTests(unittest.TestCase):
         self.assertTrue(all(row["detail"] == job_id for row in events))
         notice = worker.state.lease_telegram_outbox("codex", "example-sender")
         assert notice is not None
-        self.assertIn("Hub attempted to interrupt this exact turn", notice.telegram_html)
+        self.assertIn("Hub попытался прервать", notice.telegram_html)
         self.assertEqual(provider.status, "inProgress")
 
     def test_stdio_completed_final_recovers_read_only_without_owning_socket(self):
@@ -249,7 +249,7 @@ class ControlLossWorkerTests(unittest.TestCase):
         self.assertNotIn("thread/resume", provider.calls)
         notice = worker.state.lease_telegram_outbox("codex", "example-sender")
         assert notice is not None
-        self.assertIn("root paused", notice.telegram_html)
+        self.assertIn("новые запуски в проекте на паузе", notice.telegram_html)
         # Prepared notice is retained, even if Telegram delivery is unavailable.
         self.assertNotEqual(notice.status, "delivered")
         worker.run_cycle()  # Passive observation may run; productive work must not.
@@ -294,7 +294,7 @@ class ControlLossWorkerTests(unittest.TestCase):
         self.assertEqual(provider.calls.count("turn/start"), 1)
         notice = worker.state.lease_telegram_outbox("codex", "example-sender")
         assert notice is not None
-        self.assertIn("Hub attempted to interrupt this exact turn", notice.telegram_html)
+        self.assertIn("Hub попытался прервать", notice.telegram_html)
 
     def test_configured_profile_drift_does_not_disable_protective_interrupt(self):
         original_guard = ExecutionJournal.can_control_accepted_turn

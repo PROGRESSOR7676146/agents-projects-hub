@@ -617,7 +617,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertTrue(antigravity.run_cycle())
             self.assertEqual(opencode.state.get_provider_job(open_job).status, "failed")
             self.assertIn(
-                "limit reached",
+                "достигнут лимит использования",
                 opencode.state.get_telegram_outbox_for_job(open_job).telegram_html,
             )
             self.assertEqual(antigravity.state.get_provider_job(agy_job).status, "result_ready")
@@ -980,10 +980,10 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertTrue(worker.run_cycle())
             self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
             notice = worker.state.get_telegram_outbox_for_job(job_id).telegram_html
-            self.assertIn("did not retry", notice)
-            self.assertIn("What happened:", notice)
-            self.assertIn("Saved:", notice)
-            self.assertIn("Next:", notice)
+            self.assertIn("Автоповтора не будет", notice)
+            self.assertIn("прервался без итогового ответа", notice)
+            self.assertIn("Итог неизвестен", notice)
+            self.assertIn("на паузе до вашего решения", notice)
         finally:
             worker.close()
 

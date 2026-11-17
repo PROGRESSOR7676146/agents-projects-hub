@@ -127,7 +127,7 @@ class ClaudeWorkerJournalTests(unittest.TestCase):
         self.assertEqual(
             ExecutionJournal(worker.state).partial_text(self.job_id), "Saved <partial>"
         )
-        self.assertIn("Partial response (incomplete)", self.notice(worker))
+        self.assertIn("Частичный ответ (не завершён)", self.notice(worker))
         self.assertIn("Saved &lt;partial&gt;", self.notice(worker))
         self.assertFalse(worker.run_cycle())
         self.assertEqual(adapter.calls, 1)
@@ -137,7 +137,7 @@ class ClaudeWorkerJournalTests(unittest.TestCase):
         self.assertEqual(adapter.observed, (1, None, None))
         self.assertEqual(worker.state.get_provider_job(self.job_id).status, "failed")
         self.assert_incomplete_journal(worker, items=1)
-        self.assertIn("Partial response (incomplete)", self.notice(worker))
+        self.assertIn("Частичный ответ (не завершён)", self.notice(worker))
         self.assertIn("Saved &lt;partial&gt;", self.notice(worker))
 
     def test_wrong_final_session_never_records_completion(self) -> None:
@@ -150,7 +150,7 @@ class ClaudeWorkerJournalTests(unittest.TestCase):
         self.assertEqual(worker.state.get_provider_job(self.job_id).status, "indeterminate")
         self.assert_incomplete_journal(worker, items=0)
         self.assertNotIn("Saved &lt;partial&gt;", self.notice(worker))
-        self.assertNotIn("Partial response (incomplete)", self.notice(worker))
+        self.assertNotIn("Частичный ответ (не завершён)", self.notice(worker))
         self.assertFalse(worker.run_cycle())
         self.assertEqual(adapter.calls, 1)
 
@@ -195,7 +195,7 @@ class ClaudeWorkerJournalTests(unittest.TestCase):
         self.assertEqual(worker.state.get_provider_job(self.job_id).status, "indeterminate")
         self.assert_incomplete_journal(worker, items=1)
         self.assertNotIn("Saved &lt;partial&gt;", self.notice(worker))
-        self.assertNotIn("Partial response (incomplete)", self.notice(worker))
+        self.assertNotIn("Частичный ответ (не завершён)", self.notice(worker))
         self.assertNotIn("private binding diagnosis", self.notice(worker))
 
 

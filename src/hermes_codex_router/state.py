@@ -1524,9 +1524,9 @@ class HubState(TelegramDeliveryHoldHubStateFacade):
             if contradictory:
                 status, failure_class = "indeterminate", "ambiguous_execution"
                 html = (
-                    "Codex preparation failure conflicts with saved execution evidence. "
-                    "The outcome is unconfirmed; Hub kept the evidence and did not retry. "
-                    "Inspect /status before continuing."
+                    "⚠️ Codex сообщил об ошибке подготовки, но запуск уже мог начаться.\n"
+                    "Итог неизвестен: файлы могли измениться. Автоповтора не будет; "
+                    "новые запуски в проекте на паузе."
                 )
             if status == "failed" and self._provider_job_state.honor_stop(
                 job_id, lease_token, expected_status
@@ -1603,8 +1603,7 @@ class HubState(TelegramDeliveryHoldHubStateFacade):
                 )
                 if held_count:
                     html = _bounded(
-                        html + f"\n\nQueue: {held_count} earlier request(s) remain paused "
-                        "until the owner reviews them.",
+                        html + f"\nЗапросов на паузе до вашего решения: {held_count}.",
                         name="Telegram outbox text",
                         maximum=MAX_PROVIDER_RESPONSE_LENGTH,
                     )

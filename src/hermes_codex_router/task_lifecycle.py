@@ -155,6 +155,7 @@ class TaskLifecycleState:
         reply_to_message_id: int | None = None,
         telegram_html: str,
         now: datetime,
+        available_at: datetime | None = None,
     ) -> tuple[TaskLifecycleNotice, bool]:
         if not self.db.in_transaction:
             raise self.state_error("task notice preparation requires an active transaction")
@@ -166,6 +167,9 @@ class TaskLifecycleState:
         if reply_to_message_id is not None:
             self._integer(reply_to_message_id, "reply identity")
         timestamp = self._time(now)
+        due = self._time(available_at) if available_at is not None else timestamp
+        if due < timestamp:
+            raise self.state_error("task notice cannot become due before it is prepared")
         self._validate_destination(
             job_id, stop_request_id, chat_id, thread_id, assessment_disposition_id
         )
@@ -209,7 +213,7 @@ class TaskLifecycleState:
             "(notice_id,event_key,kind,job_id,stop_request_id,chat_id,thread_id,"
             f"reply_to_message_id,telegram_html,status,available_at,created_at,updated_at{subject_column}) "
             f"VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?{subject_placeholder})",
-            (notice_id, event_key, *immutable, timestamp, timestamp, timestamp, *subject_values),
+            (notice_id, event_key, *immutable, due, timestamp, timestamp, *subject_values),
         )
         return self.get_notice(notice_id), True
 

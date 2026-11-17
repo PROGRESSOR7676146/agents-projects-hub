@@ -136,7 +136,7 @@ class CodexIngressNoticeTests(unittest.TestCase):
             sender_agent_id="codex",
             telegram_html="Example retained notice",
         )
-        prefix = "Recovered completed Codex result:\n\n"
+        prefix = "Восстановленный итог Codex:\n\n"
         raw = "x" * (200_000 - len(prefix))
         ObservedTurnResults(self.state, self.fixture.fixture.harness.config).apply_outcome(
             self.job.job_id,
@@ -164,5 +164,5 @@ class CodexIngressNoticeTests(unittest.TestCase):
                 )
             )
         notice = self.state.get_telegram_outbox_for_job(self.job.job_id).telegram_html
-        self.assertIn("Telegram ingress", notice)
+        self.assertIn("связь с Telegram стала ненадёжной", notice)
         self.assertEqual(self.state.get_provider_job(self.job.job_id).status, "indeterminate")

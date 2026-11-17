@@ -301,7 +301,7 @@ class PreacceptanceApprovalTests(unittest.TestCase):
         outcome = deliver_task_notice(self.state.task_notices, bot, "example-sender", now=self.now)
         self.assertTrue(outcome.delivered)
         self.assertEqual(len(bot.sent), 1)
-        self.assertIn("Codex session", bot.sent[0][2])
+        self.assertIn("Codex просит разрешение", bot.sent[0][2])
         self.assertNotIn("/stop", bot.sent[0][2])
         self.assertEqual(self.state.get_provider_job(self.job.job_id).status, "executing")
         self.assertEqual(self.state.get_session(self.session.session_id).writer_mode, "telegram")

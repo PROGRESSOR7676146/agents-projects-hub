@@ -16,8 +16,8 @@ from .claude_activity_binding import (
 from .task_lifecycle import TaskLifecycleNotice, TaskLifecycleState
 
 NOTICE_COPY = (
-    "No new completed visible messages have been observed from Claude. "
-    "The task's outcome is not confirmed. Check /status or use /stop in this topic."
+    "⏳ Готового ответа от Claude пока нет; работа может продолжаться, "
+    "итог не подтверждён. Прервать: /stop."
 )
 
 

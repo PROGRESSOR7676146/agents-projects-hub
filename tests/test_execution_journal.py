@@ -311,7 +311,7 @@ class ExecutionJournalTests(unittest.TestCase):
         assert topic is not None
         job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
         self.assertEqual(job.status, "completed")
-        self.assertTrue(any("permission selection changed" in text for text in telegram.sent))
+        self.assertTrue(any("сменилась настройка прав" in text for text in telegram.sent))
         self.assertTrue(any("Recovered embedded result" in text for text in telegram.sent))
         self.assertEqual(len(client.turn_threads), 1)
 

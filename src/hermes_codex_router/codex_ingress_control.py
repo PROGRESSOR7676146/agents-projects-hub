@@ -19,10 +19,9 @@ from .stop_coverage import STOP_COVERS_JOB_SQL
 from .task_lifecycle import TaskLifecycleState
 
 INGRESS_PRECAUTION_NOTICE = (
-    "Hub reserved a precautionary interrupt when reliable Telegram ingress became unavailable or unconfirmed for this exact turn. "
-    "This earlier reservation was a Hub precaution, separate from any owner /stop. It does not prove transmission or "
-    "termination. Saved turn outcome and confirmed owner delivery remain separate. "
-    "The task was not replayed; inspect /status before further work."
+    "Hub на всякий случай запросил прерывание хода: связь с Telegram стала ненадёжной. "
+    "Это не /stop владельца и не доказательство остановки; задача не повторялась. "
+    "Итог хода — в /status."
 )
 
 

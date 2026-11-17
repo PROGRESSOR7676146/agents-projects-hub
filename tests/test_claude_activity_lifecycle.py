@@ -121,7 +121,7 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
         )
         if quiet_notice:
             self.assertEqual(len(delivered_notices), 1)
-            self.assertIn("not confirmed", delivered_notices[0][2])
+            self.assertIn("итог не подтверждён", delivered_notices[0][2])
             self.assertEqual(
                 worker.state._connection.execute(
                     "SELECT status FROM task_lifecycle_notices "

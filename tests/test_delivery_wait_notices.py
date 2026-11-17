@@ -51,10 +51,10 @@ class DeliveryWaitNoticeTests(TestCase):
         self.assertEqual(args[:2], (self.fixture.topic.chat_id, self.fixture.topic.thread_id))
         self.assertEqual(kwargs["reply_to_message_id"], 10)
         for fragment in (
-            "saved",
-            "unconfirmed",
-            "investigate",
-            "continue without confirmed delivery",
+            "сохранён",
+            "не подтверждена",
+            "не повторяем",
+            "без подтверждённой доставки",
         ):
             self.assertIn(fragment, args[2])
         self.assertNotIn("/delivery", args[2])
@@ -200,10 +200,10 @@ class DeliveryWaitSenderTests(TestCase):
     def _assert_sender_notice(self, *, remote_recovery_enabled):
         self.assertTrue(self.sender.run_cycle())
         self.assertEqual(len(self.hub.sent), 1)
-        self.assertIn("unconfirmed", self.hub.sent[0][2])
-        self.assertIn("local delivery-hold preview/apply", self.hub.sent[0][2])
+        self.assertIn("не подтверждена", self.hub.sent[0][2])
+        self.assertIn("без подтверждённой доставки", self.hub.sent[0][2])
         if remote_recovery_enabled:
-            self.assertIn("replying /delivery to this exact Hub warning", self.hub.sent[0][2])
+            self.assertIn("ответьте /delivery на это сообщение", self.hub.sent[0][2])
         else:
             self.assertNotIn("/delivery", self.hub.sent[0][2])
         self.assertEqual(

@@ -14,19 +14,15 @@ if TYPE_CHECKING:
 
 def delivery_wait_explanation(*, hub_owner_recovery_enabled: bool) -> str:
     """Describe only recovery controls that this notice can actually offer."""
-    recovery = (
-        "by replying /delivery to this exact Hub warning, or through the separate local "
-        "delivery-hold preview/apply"
+    action = (
+        "Чтобы продолжить без подтверждённой доставки, ответьте /delivery на это сообщение."
         if hub_owner_recovery_enabled
-        else "through the separate local delivery-hold preview/apply"
+        else "Продолжить без подтверждённой доставки можно только на компьютере (delivery-hold)."
     )
     return (
-        "The earlier result is saved, but its Telegram delivery is unconfirmed. "
-        "At this observation, later work in this topic is blocked. The owner can "
-        f"investigate the saved delivery, or explicitly continue without confirmed delivery {recovery}. "
-        "This queue-only decision retains session and writer restrictions; separate delivery-control "
-        "consent can reconcile those delivery waits. Hub will not resend the result or repeat provider "
-        "work automatically. Check /status for the current state; /stop does not reconcile this delivery."
+        "📭 Прежний ответ сохранён, но его доставка в Telegram не подтверждена; "
+        "следующие запросы в этой теме ждут. Повторно не отправляем и работу не повторяем.\n"
+        + action
     )
 
 

@@ -63,6 +63,21 @@ def codex_failure_reason(error: BaseException) -> str:
     return "provider_error"
 
 
+def partial_response_block(partial: str) -> str:
+    """Collapse explicitly incomplete visible text behind Telegram's expander.
+
+    The caller bounds the retained text; this only escapes and labels it so a
+    short notice stays readable on a phone (ADR 0106).
+    """
+    text = partial.strip()
+    if not text:
+        return ""
+    return (
+        "\n\n<b>Частичный ответ (не завершён):</b>\n"
+        f"<blockquote expandable>{html.escape(text)}</blockquote>"
+    )
+
+
 def codex_failure_notice(
     error: BaseException,
     *,
@@ -70,79 +85,58 @@ def codex_failure_notice(
     held_count: int = 0,
     protective_interrupt_attempted: bool = False,
 ) -> str:
-    """Only fixed causes and explicitly visible assistant text reach Telegram."""
+    """Only fixed causes and explicitly visible assistant text reach Telegram.
+
+    Shape (ADR 0106): what happened, what it means, one action.
+    """
     if isinstance(error, CodexRetryBindingError):
         return (
-            "Retry paused: Hub could not verify the saved task/context, session, root, route or permissions. "
-            "The provider was not started. Inspect /status and send a fresh task "
-            "only after checking the binding."
+            "Повтор не запущен: Hub не смог подтвердить сохранённую задачу, сессию или права. "
+            "Codex не запускался. Отправьте задачу заново."
         )
     if isinstance(error, CodexPermissionProfileError):
         return (
-            "What happened: Hub could not verify the configured Codex permission profile.\n\n"
-            "Saved: No productive provider turn was sent. The task was not replayed.\n\n"
-            "Next: Verify the local profile configuration and supported launch route. "
-            "Keep the existing restrictions; use /new for an explicitly changed selection."
+            "Codex не запущен: Hub не смог проверить настроенный профиль прав. "
+            "Ничего не выполнялось и не повторялось. "
+            "Нужно проверить профиль на компьютере; другой профиль выбирается через /new."
         )
     if isinstance(error, UnsupportedCodexPermissionProfileError):
         return (
-            "What happened: Codex selected an unsupported permission profile. "
-            "Hub refused to send a productive turn with this profile.\n\n"
-            "Saved: No productive provider turn was sent. The task was not replayed.\n\n"
-            "Next: Add reviewed Hub support for the selected profile before sending "
-            "a new request. Keep the existing security restrictions."
+            "Codex не запущен: выбран профиль прав, который Hub не поддерживает. "
+            "Ничего не выполнялось и не повторялось. Выберите поддерживаемый профиль через /new."
         )
     if isinstance(error, CodexPreparationError):
-        return (
-            "What happened: Codex could not prepare the task before starting it.\n\n"
-            "Saved: No productive provider turn was sent.\n\n"
-            "Next: Check /status and resolve the preparation failure."
-        )
+        return "Codex не запущен: не удалось подготовить задачу. Ничего не выполнялось."
     reason = getattr(error, "failure_reason", codex_failure_reason(error))
     causes = {
-        "permission_policy_changed": "Codex permission selection changed during the task.",
-        "rate_limited": "Codex stopped after a provider rate-limit error (429 or usage limit).",
-        "connection_lost": "Hub lost the connection to Codex before confirming completion.",
-        "timeout": "Hub timed out waiting for Codex to confirm completion.",
+        "permission_policy_changed": "Во время задачи у Codex сменилась настройка прав.",
+        "rate_limited": "Codex упёрся в лимит запросов провайдера (429).",
+        "connection_lost": "Hub потерял связь с Codex до подтверждения завершения.",
+        "timeout": "Hub не дождался от Codex подтверждения завершения.",
     }
     default_cause = (
-        "Codex ended with a provider error."
+        "Codex завершил ход с ошибкой провайдера."
         if turn_status == "failed"
-        else "Hub could no longer follow the Codex turn before confirming completion."
+        else "Hub перестал видеть ход Codex до его завершения."
     )
-    notice = "What happened: " + causes.get(reason, default_cause)
+    notice = "⚠️ " + causes.get(reason, default_cause)
     if protective_interrupt_attempted:
-        notice += (
-            " Hub attempted to interrupt this exact turn; its request does not prove termination."
-        )
-    if turn_status in {"failed", "interrupted"}:
-        notice += (
-            "\n\nSaved: The exact Codex turn has stopped with a terminal error. "
-            "Its outcome is incomplete; files or external state may already have changed. "
-            "Hub kept the partial response and did not replay the task."
-        )
-    else:
-        notice += (
-            "\n\nSaved: Completion and turn activity are unconfirmed. The task may have "
-            "changed files or performed other actions. Hub did not retry it."
-        )
-    partial = getattr(error, "partial_text", "")
-    if isinstance(partial, str) and partial.strip():
-        notice += "\n\nPartial response (incomplete):\n" + html.escape(partial[:MAX_PARTIAL_TEXT])
-    if turn_status in {"failed", "interrupted"}:
-        notice += (
-            "\n\nNext: Continue with inspection — reply exactly retry to this notice. "
-            "Hub will start a new turn in the same session to inspect current project state "
-            "and prior changes before continuing. If local CLI owns the session, close it "
-            "and use /return first."
-        )
+        notice += " Hub попытался прервать ход; остановка не подтверждена."
+    terminal = turn_status in {"failed", "interrupted"}
+    if terminal:
+        notice += "\nХод остановлен, но не доделан: файлы могли измениться. Автоповтора не будет."
+        notice += "\nЧтобы продолжить с проверкой состояния, ответьте retry на это сообщение."
         if held_count:
-            notice += f" {held_count} earlier queued request(s) remain paused for review."
+            notice += f" Запросов на паузе: {held_count}."
     else:
         notice += (
-            "\n\nNext: Hub keeps this root paused while the exact turn status is unknown. "
-            "Check /status and wait for read-only reconciliation; do not repeat the task."
+            "\nИтог неизвестен: файлы могли измениться. Автоповтора не будет; "
+            "новые запуски в проекте на паузе."
         )
+        notice += "\nНичего не повторяйте: Hub сверит итог сам и сообщит."
+    partial = getattr(error, "partial_text", "")
+    if isinstance(partial, str):
+        notice += partial_response_block(partial[:MAX_PARTIAL_TEXT])
     return notice
 
 
@@ -150,10 +144,7 @@ def uncertain_provider_notice(display_name: str) -> str:
     """Explain an uncertain non-Codex outcome without exposing provider diagnostics."""
     safe_name = html.escape(display_name)
     return (
-        f"What happened: {safe_name} stopped before a final response.\n\n"
-        "Saved: Completion is unconfirmed. The task may have changed files or performed "
-        "other actions. Hub did not retry it automatically.\n\n"
-        f"Next: Send a new message asking {safe_name} to inspect the current project state, "
-        "summarize what remains, and continue safely. Hub creates a new job only from that "
-        "explicit request."
+        f"⚠️ {safe_name} прервался без итогового ответа.\n"
+        "Итог неизвестен: файлы могли измениться. Автоповтора не будет; "
+        "новые запуски в проекте на паузе до вашего решения."
     )

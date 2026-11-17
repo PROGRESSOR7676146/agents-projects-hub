@@ -543,51 +543,38 @@ def _usage_limit_rejected(event: dict[str, object]) -> bool:
 
 
 def _terminal_failure_message(code: str) -> str:
-    inspect_work = "Inspect saved partial work before sending a new request."
-    inspect_limits = (
-        "Inspect saved partial work and the configured execution limits before continuing."
-    )
-    check_route = "Check the configured Claude/CPA route locally before sending new work."
+    """Russian owner copy (ADR 0106): what happened, what it means, one action."""
+    inspect_work = "Проверьте частичный результат, прежде чем повторять."
+    inspect_limits = "Проверьте частичный результат и настроенные лимиты."
+    check_route = "Нужна проверка маршрута Claude/CPA на компьютере."
     reason, action = {
         "claude_quota_exhausted": (
-            "Claude's account usage limit was reached; the route reported no reset time, "
-            "so reset time is unknown.",
-            "The conversation and saved partial work are preserved; send the request again "
-            "after the limit resets.",
+            "Claude: исчерпан лимит использования аккаунта; время сброса неизвестно.",
+            "Беседа сохранена; отправьте запрос снова после сброса лимита.",
         ),
         "claude_rate_limited": (
-            "Claude rejected this request with HTTP 429. The route did not identify the limit "
-            "or its reset time.",
-            "The conversation and any saved partial work are preserved; you can send a short "
-            "follow-up such as “continue” later.",
+            "Claude отклонил запрос из-за лимита (HTTP 429); какой лимит — неизвестно.",
+            "Беседа сохранена; позже напишите «продолжай».",
         ),
-        "claude_authentication_failed": ("Claude reported an authentication failure.", check_route),
-        "claude_billing_error": ("Claude reported a billing rejection.", check_route),
+        "claude_authentication_failed": ("Claude: ошибка авторизации.", check_route),
+        "claude_billing_error": ("Claude: отказ по оплате.", check_route),
         "claude_model_not_found": (
-            "Claude reported that the selected model was not found.",
-            "Review the configured model selection before sending new work.",
+            "Claude: выбранная модель не найдена.",
+            "Выберите другую модель.",
         ),
-        "claude_provider_overloaded": (
-            "Claude reported temporary provider overload.",
-            inspect_work,
-        ),
+        "claude_provider_overloaded": ("Claude временно перегружен.", inspect_work),
         "claude_provider_unavailable": (
-            "Claude could not reach its API after retrying "
-            "(a temporary network, DNS or upstream outage).",
-            "The conversation and saved partial work are preserved; once the connection is "
-            "back, send a short follow-up such as “continue” to resume.",
+            "Claude не достучался до API даже после повторов (сеть, DNS или сбой провайдера).",
+            "Беседа сохранена; когда связь вернётся, напишите «продолжай».",
         ),
-        "claude_turn_limit": ("Claude reached the configured turn limit.", inspect_limits),
-        "claude_budget_exhausted": (
-            "Claude reached the configured execution budget.",
-            inspect_limits,
-        ),
+        "claude_turn_limit": ("Claude упёрся в настроенный лимит шагов.", inspect_limits),
+        "claude_budget_exhausted": ("Claude исчерпал настроенный бюджет.", inspect_limits),
         "claude_structured_output_failed": (
-            "Claude exhausted its structured-output attempts.",
-            "Inspect saved partial work and the requested output format before continuing.",
+            "Claude исчерпал попытки структурированного вывода.",
+            "Проверьте частичный результат и формат вывода.",
         ),
-    }.get(code, ("Claude reported a terminal provider failure.", inspect_work))
-    return f"{reason} No completed result was returned. {action}"
+    }.get(code, ("Claude сообщил об ошибке провайдера.", inspect_work))
+    return f"⚠️ {reason} Итогового ответа нет.\n{action}"
 
 
 def _validate_terminal(terminal: dict[str, object]) -> bool:

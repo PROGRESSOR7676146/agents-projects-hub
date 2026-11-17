@@ -235,13 +235,13 @@ class ObservedTurnResults:
             )
             if stopped_completion:
                 notice = (
-                    "Stop confirmed: the exact provider turn completed before interruption. "
-                    "Its result is withheld because you requested stop. "
-                    "Changes already made were not undone; inspect the project before new work."
+                    "⏹ Остановка подтверждена: ход успел завершиться до прерывания. "
+                    "Ответ не показан, потому что вы просили остановку; сделанные изменения "
+                    "не откатывались. Проверьте проект перед новой работой."
                 )
             elif outcome.status == "completed":
                 visible = _completed_visible_text(outcome, artifacts_rejected)
-                notice = "Recovered completed Codex result:\n\n" + html.escape(visible)
+                notice = "Восстановленный итог Codex:\n\n" + html.escape(visible)
             else:
                 partial = ExecutionJournal(self.state).partial_text(job_id)
                 error = CodexTurnError(RpcError("stream disconnected"), partial)

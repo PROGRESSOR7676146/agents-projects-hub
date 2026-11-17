@@ -50,12 +50,19 @@ def approval_event_key(job_id: str, identity: str) -> str:
     return f"activity:{job_id}:approval:{identity}"
 
 
+_APPROVAL_CATEGORIES_RU = {
+    "command": "выполнение команды",
+    "file_change": "изменение файлов",
+    "network": "доступ к сети",
+    "permissions": "дополнительные права",
+}
+
+
 def approval_notice_html(category: str) -> str:
+    APPROVAL_CATEGORIES[category]  # unknown categories stay a programming error
     return (
-        "A request for human permission for "
-        + APPROVAL_CATEGORIES[category]
-        + " was observed in this Codex session. Review the exact request in Codex/tlive "
-        "to allow or deny it. Hub cannot approve it."
+        f"🔐 Codex просит разрешение: {_APPROVAL_CATEGORIES_RU[category]}. "
+        "Ответьте на запрос в Codex/tlive; Hub разрешать не может."
     )
 
 

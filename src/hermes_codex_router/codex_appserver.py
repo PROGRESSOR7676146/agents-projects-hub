@@ -83,7 +83,7 @@ def validate_codex_thread_id(value: str) -> None:
 
 def _bounded_partial_text(text: str) -> str:
     return (
-        "[Earlier partial text omitted]\n" + text[-(MAX_PARTIAL_TEXT - 40) :]
+        "[Начало опущено]\n" + text[-(MAX_PARTIAL_TEXT - 40) :]
         if len(text) > MAX_PARTIAL_TEXT
         else text
     )

@@ -241,7 +241,7 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
                 self.assertEqual(hub.sent, [])
                 sender.run_cycle(now=now + timedelta(seconds=threshold))
                 self.assertEqual(len(hub.sent), 1)
-                self.assertIn("No new progress", hub.sent[0][2])
+                self.assertIn("задача может ещё выполняться", hub.sent[0][2])
                 sender.run_cycle(now=now + timedelta(seconds=threshold + 1))
                 self.assertEqual(len(hub.sent), 1)
             after = tuple(
