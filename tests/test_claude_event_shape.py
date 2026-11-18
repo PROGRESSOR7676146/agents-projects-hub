@@ -59,22 +59,29 @@ class ClaudeEventShapeTests(unittest.TestCase):
         )
 
     def test_untrusted_names_values_and_sizes_are_bounded(self) -> None:
-        private = "Example private value /home/example/secret"
+        # Identifier-shaped tool names and IDs are still private: only known
+        # protocol vocabulary is named, everything else is "?" or counted.
         shape = claude_event_shape(
             {
-                "type": private,
+                "type": "mcp__example_private_tool",
                 "subtype": 7,
+                "state": "example_private_state",
                 "isMeta": "yes",
                 "parent_tool_use_id": "toolu_01ExamplePrivate",
-                "message": {"content": [{"type": private}, "not-a-block"]},
-                private: 1,
+                "message": {"content": [{"type": "mcp__example_private_block"}, "not-a-block"]},
+                "toolu_01ExamplePrivate": 1,
+                "example_private_key": 2,
+                "session_id": SESSION,
                 **{f"field_{index:02d}": index for index in range(40)},
             }
         )
-        self.assertNotIn("private", shape.casefold())
-        self.assertNotIn("toolu", shape)
-        self.assertIn("type=? subtype=? content=list:? meta=other parent=set", shape)
-        self.assertTrue(shape.endswith(",+30"), shape)
+        for private in ("private", "toolu", "mcp", "field_"):
+            self.assertNotIn(private, shape.casefold())
+        self.assertEqual(
+            shape,
+            "event type=? subtype=? state=? content=list:? meta=other parent=set "
+            "keys=isMeta,message,parent_tool_use_id,session_id,state,subtype,type,+42",
+        )
         self.assertLessEqual(len(shape), MAX_SHAPE_CHARACTERS)
         self.assertEqual(claude_event_shape({}), "event type=absent")
         self.assertEqual(
