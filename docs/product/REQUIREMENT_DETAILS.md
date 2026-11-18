@@ -44,7 +44,8 @@ target without switching active agent.
 
 Socket Codex uses `turn/steer`; rejection returns FIFO, ambiguity is
 `indeterminate`. Opt-in Claude accepts one streamed correction with exact
-receipts; other runtimes retain FIFO.
+receipts; leading-`/` text stays FIFO and Claude-topic `/goal` is refused;
+other runtimes retain FIFO.
 
 ### REQ-UX-003
 
