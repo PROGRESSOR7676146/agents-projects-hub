@@ -119,6 +119,26 @@ Then follow the accepted order:
 4. Five simultaneous independent execution scopes, using the existing capacity
    and worker foundation; never five writers on one root.
 
+Owner requests of 2026-11-18, taken up after the 0.11.24 deployment, in order:
+
+1. Topic status panel, which the owner calls "informers": the interim
+   substitute for Telegram widgets in groups, per the
+   [plan](TOPIC_PANEL_IMPLEMENTATION_PLAN.ru.md) and its
+   [checks](TOPIC_PANEL_ACCEPTANCE.ru.md). The owner declined forwarding
+   reasoning summaries and a separate silence ping; the panel is where the owner
+   sees at a glance whether work is fine, whether there is recent activity and
+   when to intervene. It ships default-off; enabling it and live acceptance
+   stay with the owner.
+2. Unconfirmed-delivery notice: offer the owner a Telegram decision in plain
+   Russian instead of a local command, tracked in
+   [owner-step defects](OWNER_STEP_DEFECTS.md).
+3. Fresh-session handoff: when a session is ready to close, the agent or the
+   Hub opens a new session and passes the handoff into it, so long sessions do
+   not keep re-reading their whole history. The Hub side stays model-free and
+   owner-initiated, for example a «Новая сессия с handoff» button that resets the
+   session and submits the bounded handoff as the first input. Needs an owning
+   requirement, an ADR and an Astra consult before code.
+
 ### Fixed progress checkpoints for this goal
 
 Historical minimal-goal weights are closed: source/review 25, developer/offline
