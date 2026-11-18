@@ -5,6 +5,14 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-11-18
+
+- Fewer dropped Claude turns: a message starting with `/` sent during a running
+  Claude turn now waits for the next turn instead of being streamed as a native
+  CLI command, and `/goal` in a Claude topic is refused with a short reply.
+- A Claude turn ended by stream validation keeps the protocol shape of the
+  rejected event in the private job detail, never its text or identifiers.
+
 ## [0.11.23] - 2026-11-17
 
 - Enable the Telegram decision for uncertain Claude work (ADR 0107) by owner
