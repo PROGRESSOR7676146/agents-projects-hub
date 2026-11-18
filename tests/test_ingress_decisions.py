@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from hermes_codex_router.ingress_decisions import (
     ControlCommandDecision,
@@ -96,6 +97,23 @@ class IngressDecisionTests(unittest.TestCase):
         assert isinstance(decision, ProductiveRouteDecision)
         self.assertEqual(decision.targets, ("codex",))
         self.assertEqual(decision.admission, "accept")
+
+    def test_native_goal_is_refused_only_for_claude_targets(self) -> None:
+        context = replace(
+            self.context(active_agent_id="gemini"), claude_agent_ids=frozenset({"gemini"})
+        )
+        for text in ("/goal ship the release", "/goal", "/GOAL@example_hub_bot finish"):
+            with self.subTest(text=text):
+                decision = decide_ingress(self.message(text), context)
+                assert isinstance(decision, ProductiveRouteDecision)
+                self.assertEqual(decision.admission, "reject_native_goal")
+        for text, active in (("/goal ship", "codex"), ("set a /goal later", "gemini")):
+            with self.subTest(text=text, active=active):
+                decision = decide_ingress(
+                    self.message(text), replace(context, active_agent_id=active)
+                )
+                assert isinstance(decision, ProductiveRouteDecision)
+                self.assertEqual(decision.admission, "accept")
 
     def test_hub_mention_is_removed_before_provider_routing(self) -> None:
         decision = decide_ingress(

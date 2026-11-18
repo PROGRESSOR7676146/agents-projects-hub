@@ -5,6 +5,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
+from hermes_codex_router.ingress_decisions import NATIVE_GOAL_REFUSAL
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import StateError
 from hermes_codex_router.telegram import parse_topic_message
@@ -260,6 +261,29 @@ class ClaudeServiceSelectionTests(unittest.TestCase):
         )
         self.assertEqual(self.client.started_threads, 0)
         self.assertEqual(self.client.turn_threads, [])
+
+    def test_native_goal_is_refused_in_claude_topic_without_a_job(self):
+        self.assertTrue(self.service.handle_update(service_fixtures.update(1, "/agent claude")))
+        self.assertTrue(
+            self.service.handle_update(service_fixtures.update(2, "/goal ship the release"))
+        )
+        self.assertIn(NATIVE_GOAL_REFUSAL, self.telegram.sent)
+        self.assertEqual(self.service.state.provider_jobs_for_topic(self.topic.topic_id), ())
+        self.assertEqual(self.client.turn_threads, [])
+        # Ordinary text that mentions /goal is still a productive Claude turn.
+        self.assertTrue(
+            self.service.handle_update(service_fixtures.update(3, "what does /goal do?"))
+        )
+        jobs = self.service.state.provider_jobs_for_topic(self.topic.topic_id)
+        self.assertEqual(
+            [(job.agent_id, job.payload_text) for job in jobs], [("claude", "what does /goal do?")]
+        )
+
+    def test_native_goal_stays_ordinary_input_for_codex(self):
+        self.assertTrue(self.service.handle_update(service_fixtures.update(1, "/goal ship it")))
+        self.assertNotIn(NATIVE_GOAL_REFUSAL, self.telegram.sent)
+        jobs = self.service.state.provider_jobs_for_topic(self.topic.topic_id)
+        self.assertEqual([job.agent_id for job in jobs], ["codex"])
 
     def test_explicit_service_settings_preserve_exact_claude_session(self):
         message = parse_topic_message(service_fixtures.update(1, "/agent claude"))

@@ -48,6 +48,7 @@ SITES = frozenset(
         "claude_stream.quota_observation",
         "claude_stream.usage_summary",
         "claude_stream.interim_progress",
+        "claude_stream.rejection_detail",
         "claude_recovery.artifact_cleanup",
         "codex_activity.retired",
         "codex_activity.retirement_callback",

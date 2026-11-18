@@ -65,6 +65,7 @@ from .incoming_materials import (
 )
 from .ingress_decisions import (
     CONTROL_COMMANDS,
+    NATIVE_GOAL_REFUSAL,
     ControlCommandDecision,
     EmergencyStopDecision,
     IgnoreDecision,
@@ -734,6 +735,20 @@ class ProjectHubService:
         if disposition == "rejected" and not self._uses_external_outbox_sender():
             self._deliver_embedded_blocker_notice(self.state)
         return disposition == "rejected"
+
+    def _claude_agent_ids(self) -> frozenset[str]:
+        return frozenset(
+            agent.agent_id for agent in self.config.agents if agent.runtime == "claude"
+        )
+
+    def _refuse_claimed(self, message: TopicMessage, text: str) -> bool:
+        """Answer an input that must not become provider work, exactly once."""
+        if not self.state.claim_message(
+            message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
+        ):
+            return False
+        self._send_text(message, text)
+        return True
 
     def _reject_persistent_root_input(
         self, message: TopicMessage, topic: TopicRecord, session: SessionRecord
@@ -2807,6 +2822,7 @@ class ProjectHubService:
                 if self._queue_enabled(candidate.agent_id)
             ),
             primary_agent_id=self.agent.agent_id,
+            claude_agent_ids=self._claude_agent_ids(),
         )
         decision = decide_ingress(message, ingress_context)
         if isinstance(decision, PassiveForwardDecision):
@@ -3387,6 +3403,8 @@ class ProjectHubService:
         if not isinstance(decision, ProductiveRouteDecision):
             raise ServiceError("unexpected productive ingress decision")
         local_targets = decision.local_targets
+        if decision.admission == "reject_native_goal":
+            return self._refuse_claimed(message, NATIVE_GOAL_REFUSAL)
         if "codex" in local_targets:
             refused = self._reject_permission_changed_input(message, topic)
             if refused is not None:

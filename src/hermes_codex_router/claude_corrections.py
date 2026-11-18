@@ -225,6 +225,27 @@ class ClaudeCorrectionInput:
             event["result"] = aggregate
         return True
 
+    def diagnostic(self, event: dict[str, object]) -> str:
+        """Counts and lifecycle role for a rejected event; never IDs or text."""
+        detail = (
+            f"input inputs={len(self.frames)} receipts={len(self.receipts)} "
+            f"results={len(self.results)}"
+        )
+        if event.get("type") != "command_lifecycle":
+            return detail
+        identifier = event.get("command_uuid")
+        role = (
+            "initial"
+            if identifier == self.initial.uuid
+            else "correction"
+            if any(identifier == frame.uuid for frame in self.frames[1:])
+            else "unknown"
+        )
+        history = (
+            "+".join(self.lifecycle.get(identifier, ())) if isinstance(identifier, str) else ""
+        )
+        return f"{detail} command={role} history={history or '-'}"
+
     def finish(self) -> None:
         if not self.complete:
             raise ClaudeStreamError("claude text input has no complete processed result")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 import uuid
+from unittest.mock import patch
 
 from hermes_codex_router.claude_corrections import (
     ClaudeCorrectionCallbacks,
@@ -185,6 +186,73 @@ class ClaudeCorrectionTests(unittest.TestCase):
                 event["parent_tool_use_id"] = parent
                 with self.assertRaises(ClaudeStreamError):
                     self.feed(event)
+
+    def test_rejected_event_detail_keeps_shape_and_counts_without_values(self) -> None:
+        # A session Stop hook (native /goal) feeds its verdict back as a meta
+        # user message: still refused, now with a classifiable private detail.
+        self.host_reader()
+        self.feed(self.echo(self.channel.initial))
+        hook = {
+            "type": "user",
+            "isMeta": True,
+            "parent_tool_use_id": None,
+            "session_id": SESSION,
+            "uuid": str(uuid.uuid4()),
+            "message": {"role": "user", "content": "Example private goal feedback"},
+        }
+        with self.assertRaises(ClaudeStreamError) as raised:
+            self.feed(hook)
+        detail = str(raised.exception)
+        self.assertTrue(detail.startswith("claude text input receipt is unverified ["), detail)
+        self.assertIn("event type=user content=str meta=true parent=null", detail)
+        self.assertIn("input inputs=1 receipts=1 results=0]", detail)
+        for value in ("private", SESSION, self.channel.initial.uuid, hook["uuid"]):
+            self.assertNotIn(str(value), detail)
+
+    def test_rejected_lifecycle_detail_names_command_role_and_history(self) -> None:
+        self.feed(self.echo(self.channel.initial))
+        self.channel.poll()
+        lifecycle = {
+            "type": "command_lifecycle",
+            "session_id": SESSION,
+            "command_uuid": self.child.uuid,
+            "uuid": str(uuid.uuid4()),
+        }
+        self.feed({**lifecycle, "state": "queued"})
+        with self.assertRaises(ClaudeStreamError) as raised:
+            self.feed({**lifecycle, "state": "queued", "uuid": str(uuid.uuid4())})
+        detail = str(raised.exception)
+        self.assertIn("lifecycle is unverified [event type=command_lifecycle state=queued", detail)
+        self.assertIn(
+            "input inputs=2 receipts=1 results=0 command=correction history=queued]", detail
+        )
+        self.assertNotIn(self.child.uuid, detail)
+        self.setUp()
+        with self.assertRaises(ClaudeStreamError) as raised:
+            self.feed({**lifecycle, "command_uuid": str(uuid.uuid4()), "state": "queued"})
+        self.assertIn("command=unknown history=-]", str(raised.exception))
+
+    def test_failed_detail_keeps_the_original_rejection(self) -> None:
+        self.feed(self.echo(self.channel.initial))
+        with (
+            patch(
+                "hermes_codex_router.claude_stream.claude_event_shape",
+                side_effect=RuntimeError("example failure"),
+            ),
+            self.assertRaises(ClaudeStreamError) as raised,
+        ):
+            self.feed({"type": "user", "message": {"content": "Example"}})
+        self.assertEqual(
+            str(raised.exception),
+            "claude text input receipt is unverified [event shape unavailable]",
+        )
+
+    def test_policy_refusal_detail_stays_generic(self) -> None:
+        reader = ClaudeStreamReader(expected_session_id=SESSION, correction_input=self.channel)
+        event = {"type": "system", "subtype": "hook_started", "session_id": SESSION}
+        with self.assertRaises(ClaudeStreamError) as raised:
+            reader.feed((json.dumps(event) + "\n").encode())
+        self.assertEqual(str(raised.exception), "claude text-only runtime policy was violated")
 
     def test_parent_result_with_unacknowledged_child_is_not_completion(self) -> None:
         self.feed(self.echo(self.channel.initial))

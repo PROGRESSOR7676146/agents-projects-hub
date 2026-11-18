@@ -239,6 +239,29 @@ class ClaudeCorrectionStateTests(unittest.TestCase):
                 self.assertIsNone(self.claim())
                 self.assertNotEqual(self.state.get_provider_job(self.child_id).status, "executing")
 
+    def test_native_command_text_is_never_a_correction(self) -> None:
+        # Claude CLI runs leading-slash streamed input as its own command
+        # (for example /goal installs a session Stop hook), not as text.
+        for text in ("/goal ship the release", "  /compact", "\n/clear"):
+            with self.subTest(text=text):
+                self.setUp()
+                with self.state._connection:
+                    self.state._connection.execute(
+                        "UPDATE provider_jobs SET payload_text=? WHERE job_id=?",
+                        (text, self.child_id),
+                    )
+                self.assertIsNone(self.claim())
+                child = self.state.get_provider_job(self.child_id)
+                self.assertEqual((child.status, child.attempt_count), ("queued", 0))
+                self.assertIsNone(self.store.child(self.parent_id))
+        self.setUp()
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET payload_text=? WHERE job_id=?",
+                ("Use a/b paths, not /goal", self.child_id),
+            )
+        self.assertIsNotNone(self.claim())
+
     def test_receipts_without_result_cannot_complete_or_requeue(self) -> None:
         frame = self.claim()
         assert frame

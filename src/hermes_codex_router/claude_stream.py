@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
+from .claude_event_shape import claude_event_shape
 from .claude_quota_observation import USAGE_LIMIT_TYPES, QuotaObservationCallback, QuotaObserver
 from .claude_usage import ClaudeUsageObserver, UsageSummaryCallback
 from .diagnostic_log import survived
@@ -303,6 +304,27 @@ class ClaudeStreamReader:
         if not line.strip():
             return
         event = _event(line, self.event_policy)
+        try:
+            self._accept(event, raw)
+        except ClaudeStreamError as exc:
+            raise ClaudeStreamError(f"{exc} [{self._rejection_detail(event)}]") from exc
+
+    def _rejection_detail(self, event: dict[str, object]) -> str:
+        """Bounded protocol shape of a rejected event for the private job detail.
+
+        Never its values; policy refusals stay generic. Diagnostics must never
+        change the turn's outcome, so a failure here keeps the original error.
+        """
+        try:
+            detail = claude_event_shape(event)
+            if self.correction_input is not None:
+                detail += " " + self.correction_input.diagnostic(event)
+            return detail
+        except Exception as error:
+            survived("claude_stream.rejection_detail", error)
+            return "event shape unavailable"
+
+    def _accept(self, event: dict[str, object], raw: bytes) -> None:
         self._events += 1
         if self._events > (MAX_CLAUDE_FILE_EVENTS if self.event_policy else MAX_CLAUDE_EVENTS):
             raise ClaudeStreamError("claude structured output exceeded its event limit")

@@ -13,7 +13,13 @@ Admission = Literal[
     "reject_material_inline",
     "reject_multiple_queue_targets",
     "reject_empty_request",
+    "reject_native_goal",
 ]
+
+NATIVE_GOAL_REFUSAL = (
+    "Команда /goal в темах Claude не поддерживается: Hub не может безопасно вести её цикл. "
+    "Опишите цель обычным сообщением."
+)
 
 CONTROL_COMMANDS = frozenset(
     {
@@ -43,6 +49,7 @@ class IngressDecisionContext:
     managed_external_agent_ids: frozenset[str]
     queue_enabled_agent_ids: frozenset[str]
     primary_agent_id: str
+    claude_agent_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,8 +170,16 @@ def decide_ingress(message: TopicMessage, context: IngressDecisionContext) -> In
         if context.primary_agent_id in local_targets
         else first_local_target
     )
-    if has_material and requires_inline_root:
-        route_admission: Admission = "reject_material_inline"
+    if (
+        command is not None
+        and command.name == "goal"
+        and any(target in context.claude_agent_ids for target in local_targets)
+    ):
+        # Streamed Claude input would run /goal as a native session Stop hook
+        # whose continuations the Hub cannot own; refuse before admission.
+        route_admission: Admission = "reject_native_goal"
+    elif has_material and requires_inline_root:
+        route_admission = "reject_material_inline"
     elif context.primary_agent_id in context.queue_enabled_agent_ids and len(local_targets) > 1:
         route_admission = "reject_multiple_queue_targets"
     elif (

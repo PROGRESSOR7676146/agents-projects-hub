@@ -61,7 +61,11 @@ input; selected/pasted quotations are context, not Reply addressing.
   MUST produce a later FIFO turn without loss or simulation.
   - Explicit default-off Claude streamed input MAY deliver one compatible text-only FIFO successor
     through the same owned external process, without images; later, material, explicit-context,
-    handoff and retry inputs MUST retain ordinary FIFO.
+    handoff, retry and leading-`/` inputs MUST retain ordinary FIFO, because the native CLI runs
+    streamed slash text as its own command. `/goal` in a Claude topic MUST be refused without a
+    job: its native session Stop hook would inject continuations the Hub cannot own.
+  - A rejected stream event MUST keep only its protocol shape and input counts in the private
+    job detail, never its text, identifiers or tool names; policy refusals stay generic.
   - Process, session, root, tool profile, permission host and writer ownership MUST stay with the
     parent until complete stream and cleanup settle; tools MUST NOT be interrupted to simulate
     steering.

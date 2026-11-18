@@ -119,6 +119,9 @@ class ClaudeCorrectionState:
         if candidate is None or (
             candidate["status"] != "queued"
             or not 0 < len(candidate["payload_text"]) <= MAX_CORRECTION_CHARACTERS
+            # The native CLI runs leading-slash streamed input as its own
+            # command (e.g. /goal adds a Stop hook); it stays ordinary FIFO.
+            or str(candidate["payload_text"]).lstrip().startswith("/")
             or candidate["attempt_count"] >= candidate["max_attempts"]
             or any(
                 candidate[field] != row[field]
