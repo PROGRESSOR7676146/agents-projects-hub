@@ -61,6 +61,7 @@ live acceptance.
 - [Incremental refactoring plan](operations/REFACTORING_PLAN.md)
 - [CLI-to-Telegram session transfer implementation plan](operations/SESSION_TRANSFER_IMPLEMENTATION_PLAN.md)
 - [Saved Codex session connection](operations/SESSION_CONNECT.md)
+- [Topic panel implementation plan without Widgets](operations/TOPIC_PANEL_IMPLEMENTATION_PLAN.ru.md)
 - [Project/group onboarding](operations/PROJECT_GROUP_ONBOARDING_PLAN.md)
 - [Testing and privacy gate](testing/README.md)
 - [Native Claude streamed-input characterization](testing/CLAUDE_STREAM_INPUT.md)
