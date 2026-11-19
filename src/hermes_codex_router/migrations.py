@@ -10,10 +10,14 @@ from typing import Iterator
 
 from .database_backup import backup_database as backup_database
 from .migration_sql import _execute_migration_script
+from .schema_artifact_losses import ARTIFACT_LOSS_SCHEMA as MIGRATION_59
 from .schema_artifact_retirements import (
     ARTIFACT_RETIREMENT_SCHEMA as MIGRATION_58,
 )
-from .schema_artifact_retirements import backfill_artifact_retirements
+from .schema_artifact_retirements import (
+    backfill_artifact_retirements,
+    has_complete_artifact_retirement_schema,
+)
 from .schema_claude_activity import CLAUDE_ACTIVITY_SCHEMA as MIGRATION_42
 from .schema_claude_corrections import CLAUDE_CORRECTIONS_SCHEMA as MIGRATION_55
 from .schema_claude_material_notice import CLAUDE_MATERIAL_NOTICE_SCHEMA as MIGRATION_53
@@ -1483,6 +1487,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_56,
         MIGRATION_57,
         MIGRATION_58,
+        MIGRATION_59,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1511,6 +1516,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                 _execute_migration_script(connection, script)
                 if version == 58:
                     backfill_artifact_retirements(connection)
+                if version == 59 and not has_complete_artifact_retirement_schema(connection):
+                    raise RuntimeError("schema58 artifact retirement evidence is unavailable")
                 if version == 1:
                     _ensure_legacy_columns(connection)
                 connection.execute(f"PRAGMA user_version = {version}")

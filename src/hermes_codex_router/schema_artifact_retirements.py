@@ -6,6 +6,35 @@ import sqlite3
 
 from .delivery_receipts import DeliveryReceipts
 
+ARTIFACT_RETIREMENT_TABLE = "telegram_artifact_retirements"
+ARTIFACT_RETIREMENT_COLUMNS = frozenset(
+    (
+        "outbox_id",
+        "part_index",
+        "attempt_id",
+        "binding_hash",
+        "telegram_message_id",
+        "delivered_at",
+        "file_path",
+        "file_name",
+        "file_size",
+        "file_sha256",
+        "retired_at",
+    )
+)
+ARTIFACT_RETIREMENT_TRIGGER_NAMES = frozenset(
+    (
+        "telegram_artifact_retirements_no_replace",
+        "telegram_artifact_retirements_insert_guard",
+        "telegram_artifact_retirements_no_update",
+        "telegram_artifact_retirements_no_delete",
+        "telegram_artifact_retirement_source_part_no_replace",
+        "telegram_artifact_retirement_source_part_immutable",
+        "telegram_artifact_retirement_source_outbox_no_replace",
+        "telegram_artifact_retirement_source_outbox_immutable",
+    )
+)
+
 ARTIFACT_RETIREMENT_SCHEMA = """
 CREATE TABLE telegram_artifact_retirements (
     outbox_id TEXT NOT NULL CHECK(length(outbox_id) BETWEEN 1 AND 128),
@@ -177,6 +206,28 @@ AND (
 )
 BEGIN SELECT RAISE(ABORT, 'retired artifact outbox is immutable'); END;
 """
+
+
+def has_complete_artifact_retirement_schema(connection: sqlite3.Connection) -> bool:
+    """Whether a schema-58 predecessor retains its receipt-proof guard set."""
+    object_type = connection.execute(
+        "SELECT type FROM sqlite_master WHERE name=?", (ARTIFACT_RETIREMENT_TABLE,)
+    ).fetchone()
+    if object_type is None or object_type[0] != "table":
+        return False
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(telegram_artifact_retirements)")
+    }
+    if columns != ARTIFACT_RETIREMENT_COLUMNS:
+        return False
+    triggers = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (?,?,?,?,?,?,?,?)",
+            tuple(ARTIFACT_RETIREMENT_TRIGGER_NAMES),
+        )
+    }
+    return triggers == ARTIFACT_RETIREMENT_TRIGGER_NAMES
 
 
 def backfill_artifact_retirements(connection: sqlite3.Connection) -> None:

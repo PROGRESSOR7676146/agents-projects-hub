@@ -30,6 +30,36 @@ uncaptured spool root recoverable. A foreign backup consumer must use its own
 reviewed compatibility adapter to validate that row against immutable Hub send
 evidence; legacy or incomplete receipt history remains a blocker.
 
+Schema 59 adds a separate local-owner loss attestation, not a replacement for
+that receipt record. The supported reader classifies every document artifact in
+a **closed** native SQLite snapshot as present, receipt-retired, narrow
+verified-unknown, explicit loss, or unresolved. It reports only document
+artifact coverage: it says nothing about a full recovery set, remote archive,
+or update readiness. `degraded_explicit_loss` may be retained as evidence but
+does not satisfy a recovery-required activation gate by itself.
+
+The local-only interface is deliberately outside Gateway/Telegram and disabled
+for schedulers:
+
+```bash
+agents-projects-hub artifact-loss inventory CLOSED_STATE_SNAPSHOT --spool-root PRIVATE_SPOOL_ROOT
+agents-projects-hub artifact-loss preview LIVE_STATE --spool-root PRIVATE_SPOOL_ROOT \
+  --targets PRIVATE_MODE_0600_SELECTION --recovery-audit-sha256 AUDIT_SHA256
+agents-projects-hub artifact-loss apply LIVE_STATE --spool-root PRIVATE_SPOOL_ROOT \
+  --targets PRIVATE_MODE_0600_SELECTION --recovery-audit-sha256 AUDIT_SHA256 \
+  --snapshot PREVIEW_SNAPSHOT --operation-id PREVIEW_OPERATION_ID \
+  --acknowledge-irrecoverable-loss
+```
+
+The selection document has exactly `{"version":1,"targets":[...]}`, is a
+regular mode-0600 file owned by the invoking local user, and contains
+`outbox_id`/`part_index` pairs. The audit digest binds a private recovery-search
+record selected by the local owner; Hub neither receives nor independently
+proves that record. Preview and apply recheck all source facts and serialize on
+the ledger head. An exact retry returns only its original operation after full
+ledger validation. Never call `apply` from a backup, monitor, healthcheck or
+unattended updater.
+
 ## Private installation record
 
 The owning install procedure supplies a canonical regular mode-0600 JSON file

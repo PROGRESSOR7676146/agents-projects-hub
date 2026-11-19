@@ -87,6 +87,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     uncaptured recovery scope MUST be explicit; archive/storage/scheduling ownership stays external.
     The first source slice does not complete installation publication or foreign-state-consumer
     compatibility integration (ADR 0090).
+  - Document-artifact coverage MUST be classified from a closed snapshot through its supported
+    reader. Exact receipt retirement and narrow verified `unknown` receipt evidence may account for
+    an absent file; owner-attested loss is explicitly `degraded_explicit_loss`, not complete
+    recovery coverage or an update-ready backup. Any update-policy exception is owned and explicit.
 - **REQ-OPS-011 (Implemented as an offline dry-run):** Release acceptance MUST rehearse candidate
   migration and distinct compatible runtime rollback entirely under temporary state, proving queued,
   outbox and uncertain work unchanged. It MUST NOT access deployment state, providers, Telegram or

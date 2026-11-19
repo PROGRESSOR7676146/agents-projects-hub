@@ -50,6 +50,7 @@ from .state_delivery import (
     TelegramOutboxRecord,
 )
 from .state_errors import StateError
+from .state_facades import HubStateFacade
 from .state_incoming_materials import IncomingMaterialsStateFacade
 from .state_lanes import LaneState
 from .state_outcomes import OutcomeJournalStateFacade, ProviderJobOutcome
@@ -71,7 +72,6 @@ from .state_sessions import (
     WriterTransferSnapshot,
 )
 from .state_stop import StopState
-from .state_telegram_delivery_hold import TelegramDeliveryHoldHubStateFacade
 from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
 from .telegram_ingress_ledger import TelegramIngressLedger
@@ -135,7 +135,7 @@ def _parse_timestamp(value: str, *, name: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-class HubState(TelegramDeliveryHoldHubStateFacade):
+class HubState(HubStateFacade):
     def __init__(
         self,
         connection: sqlite3.Connection,

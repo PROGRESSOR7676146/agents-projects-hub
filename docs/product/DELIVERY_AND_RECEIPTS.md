@@ -43,6 +43,15 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
     absent immutable ledger entries or any mismatch remain explicit blockers; an external consumer
     needs its own supported compatibility path and cannot infer a safe missing artifact from a
     terminal status alone.
+  - A local owner MAY separately attest an irrecoverably absent parked document only through an
+    exact private preview/apply operation. The immutable record MUST bind the source part, current
+    final-part binding and artifact identity; it MUST NOT create or alter a receipt, delivery state,
+    queue, hold, writer, provider or Telegram authority. A receipt retirement remains distinct and
+    takes precedence if later exact evidence appears.
+  - The native artifact-recovery reader MUST use an attestation only while its complete immutable
+    chain, source binding and missing-file observation still match. A reappeared file, malformed or
+    partial ledger, unsafe path, stale binding, unverified ID or another delivery state MUST remain
+    required/unresolved. A local owner attestation is not an external signature or delivery proof.
   - Reconciliation MUST wait for an active notice send to settle; unknown notices MUST retain their
     parts/history even when later terminal proof and bounded completion are saved.
   - Replacing a certain notice MUST atomically archive all parts, receipts and artifact references;

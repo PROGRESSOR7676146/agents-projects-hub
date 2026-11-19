@@ -5,6 +5,7 @@ import importlib.util
 import json
 import pathlib
 import tempfile
+import tomllib
 import unittest
 
 from hermes_codex_router.schema_compatibility import TARGET_SCHEMA_VERSION
@@ -29,6 +30,10 @@ class RecoveryCapsuleTests(unittest.TestCase):
         source = ROOT / "recovery/agents-projects-hub"
         manifest = json.loads((source / "manifest.json").read_text())
         runbook = (source / "RUNBOOK.md").read_text()
+        with (ROOT / "pyproject.toml").open("rb") as stream:
+            package_version = str(tomllib.load(stream)["project"]["version"])
+        self.assertEqual(manifest["maintained_release"], package_version)
+        self.assertIn(f"Hub `{package_version}`", runbook)
         self.assertEqual(manifest["state_schema"], TARGET_SCHEMA_VERSION)
         self.assertIn(f"state schema `{TARGET_SCHEMA_VERSION}`", runbook)
         self.assertIn(f"schema `{TARGET_SCHEMA_VERSION}/{TARGET_SCHEMA_VERSION}`", runbook)
