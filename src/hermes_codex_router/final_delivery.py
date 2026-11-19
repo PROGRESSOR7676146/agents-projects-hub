@@ -185,15 +185,21 @@ def deliver_final_part(
         )
         return FinalDeliveryResult(error=error)
     # Cleanup is outside transport/receipt catches: a fault cannot retry an accepted part.
-    receipted = any(
-        p.part_index == part.part_index
-        and p.telegram_message_id == message_id
-        and p.receipt_validation_version == 1
-        for p in delivery.get_outbox_parts(delivered.outbox_id)
-    )
-    if file_path is not None and receipted:
-        try:
-            remove_spooled_artifact(file_path, artifact_spool_root(state_path))
-        except Exception as error:
-            return FinalDeliveryResult(receipt_committed=True, cleanup_error=error)
+    # Documents remain spooled through a multipart prefix. Once the terminal
+    # receipt transaction commits retirement proof, every proved document may
+    # be cleaned without leaving a missing unproven file.
+    if delivered.status == "delivered":
+        for delivered_part in delivery.get_outbox_parts(delivered.outbox_id):
+            if (
+                delivered_part.part_type != "document"
+                or not delivered_part.file_path
+                or not delivery.artifact_retired(delivered.outbox_id, delivered_part.part_index)
+            ):
+                continue
+            try:
+                remove_spooled_artifact(
+                    Path(delivered_part.file_path), artifact_spool_root(state_path)
+                )
+            except Exception as error:
+                return FinalDeliveryResult(receipt_committed=True, cleanup_error=error)
     return FinalDeliveryResult(receipt_committed=True)

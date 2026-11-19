@@ -50,6 +50,149 @@ class DeliveryReceipts:
         data = json.dumps(dict(row), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(data.encode()).hexdigest()
 
+    def _exact_final_attempt(
+        self, outbox_id: str, part_index: int, telegram_message_id: int, delivered_at: str
+    ) -> sqlite3.Row | None:
+        attempts = self.db.execute(
+            """SELECT attempt.attempt_id,attempt.binding_hash
+               FROM telegram_send_attempts attempt
+               JOIN telegram_send_receipts receipt USING(attempt_id)
+               WHERE attempt.target_kind='final' AND attempt.target_id=?
+                 AND attempt.part_index=?
+                 AND receipt.telegram_message_id=? AND receipt.recorded_at=?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM telegram_send_attempts newer
+                     WHERE newer.target_kind='final' AND newer.target_id=attempt.target_id
+                       AND newer.part_index=attempt.part_index
+                       AND newer.sequence>attempt.sequence
+                 )
+               ORDER BY attempt.sequence""",
+            (outbox_id, part_index, telegram_message_id, delivered_at),
+        ).fetchall()
+        if len(attempts) != 1:
+            return None
+        attempt = attempts[0]
+        if self._binding("final", outbox_id, part_index) != attempt["binding_hash"]:
+            return None
+        return attempt
+
+    def _terminal_outbox_is_receipt_verified(self, outbox_id: str) -> bool:
+        """Require whole-result v1 evidence before retiring any document artifact."""
+        outbox = self.db.execute(
+            "SELECT status,delivered_at FROM telegram_outbox WHERE outbox_id=?", (outbox_id,)
+        ).fetchone()
+        if outbox is None or outbox["status"] != "delivered" or outbox["delivered_at"] is None:
+            return False
+        parts = self.db.execute(
+            """SELECT part_index,telegram_message_id,delivered_at,receipt_validation_version
+               FROM telegram_outbox_parts WHERE outbox_id=? ORDER BY part_index""",
+            (outbox_id,),
+        ).fetchall()
+        if not parts:
+            return False
+        for part in parts:
+            if (
+                part["receipt_validation_version"] != 1
+                or part["telegram_message_id"] is None
+                or part["delivered_at"] is None
+                or self._exact_final_attempt(
+                    outbox_id,
+                    int(part["part_index"]),
+                    int(part["telegram_message_id"]),
+                    str(part["delivered_at"]),
+                )
+                is None
+            ):
+                return False
+        return True
+
+    def artifact_retirement_snapshot(
+        self, outbox_id: str, part_index: int
+    ) -> dict[str, object] | None:
+        """Return one terminal document's independently revalidated receipt snapshot.
+
+        This deliberately derives the snapshot from both mutable delivery
+        projection and immutable send evidence.  It is usable during the
+        schema migration as well as the live terminal-delivery transaction;
+        incomplete historical rows stay absent rather than being inferred.
+        """
+        if not self._terminal_outbox_is_receipt_verified(outbox_id):
+            return None
+        part = self.db.execute(
+            """SELECT outbox.delivered_at AS terminal_delivered_at,
+                      parts.outbox_id,parts.part_index,parts.telegram_message_id,
+                      parts.delivered_at,parts.file_path,parts.file_name,parts.file_size,
+                      parts.file_sha256
+               FROM telegram_outbox outbox
+               JOIN telegram_outbox_parts parts USING(outbox_id)
+               WHERE outbox.outbox_id=? AND outbox.status='delivered'
+                 AND outbox.delivered_at IS NOT NULL AND parts.part_index=?
+                 AND parts.part_type='document' AND parts.receipt_validation_version=1
+                 AND parts.telegram_message_id IS NOT NULL AND parts.delivered_at IS NOT NULL
+                 AND parts.file_path IS NOT NULL AND parts.file_name IS NOT NULL
+                 AND parts.file_size IS NOT NULL AND parts.file_sha256 IS NOT NULL""",
+            (outbox_id, part_index),
+        ).fetchone()
+        if part is None:
+            return None
+        attempt = self._exact_final_attempt(
+            outbox_id,
+            part_index,
+            int(part["telegram_message_id"]),
+            str(part["delivered_at"]),
+        )
+        if attempt is None:
+            return None
+        return {
+            "outbox_id": outbox_id,
+            "part_index": part_index,
+            "attempt_id": str(attempt["attempt_id"]),
+            "binding_hash": str(attempt["binding_hash"]),
+            "telegram_message_id": int(part["telegram_message_id"]),
+            "delivered_at": str(part["delivered_at"]),
+            "file_path": str(part["file_path"]),
+            "file_name": str(part["file_name"]),
+            "file_size": int(part["file_size"]),
+            "file_sha256": str(part["file_sha256"]),
+            # The terminal outbox receipt is the only historical time that
+            # proves this aggregate record existed; do not invent a cleanup
+            # filesystem timestamp for a pre-schema artifact.
+            "retired_at": str(part["terminal_delivered_at"]),
+        }
+
+    def insert_artifact_retirement(self, snapshot: dict[str, object]) -> None:
+        """Append one already revalidated document retirement inside this transaction."""
+        self._require_transaction()
+        self.db.execute(
+            """INSERT INTO telegram_artifact_retirements
+               (outbox_id,part_index,attempt_id,binding_hash,telegram_message_id,delivered_at,
+                file_path,file_name,file_size,file_sha256,retired_at)
+               VALUES (:outbox_id,:part_index,:attempt_id,:binding_hash,:telegram_message_id,
+                       :delivered_at,:file_path,:file_name,:file_size,:file_sha256,:retired_at)""",
+            snapshot,
+        )
+
+    def retire_terminal_artifacts(self, outbox_id: str) -> bool:
+        """Append proof only for a complete exact result; otherwise retain every artifact."""
+        self._require_transaction()
+        if not self._terminal_outbox_is_receipt_verified(outbox_id):
+            return False
+        parts = self.db.execute(
+            """SELECT part_index FROM telegram_outbox_parts
+               WHERE outbox_id=? AND part_type='document' ORDER BY part_index""",
+            (outbox_id,),
+        ).fetchall()
+        snapshots: list[dict[str, object]] = []
+        for part in parts:
+            part_index = int(part["part_index"])
+            snapshot = self.artifact_retirement_snapshot(outbox_id, part_index)
+            if snapshot is None:
+                return False
+            snapshots.append(snapshot)
+        for snapshot in snapshots:
+            self.insert_artifact_retirement(snapshot)
+        return bool(snapshots)
+
     def begin(self, kind: str, target: str, token: str, part: int, timestamp: str) -> None:
         self._require_transaction()
         binding = self._binding(kind, target, part)
@@ -182,6 +325,7 @@ class DeliveryReceipts:
                 (message, timestamp, timestamp, target),
             )
             if kind == "final":
+                self.retire_terminal_artifacts(target)
                 self.db.execute(
                     """UPDATE provider_jobs SET status='completed',updated_at=?
                        WHERE job_id=? AND status='result_ready'""",

@@ -375,7 +375,7 @@ class InstalledBackupTests(unittest.TestCase):
 
     def test_unknown_database_and_incompatible_schema_refuse(self) -> None:
         with closing(sqlite3.connect(self.database)) as con, con:
-            con.execute("PRAGMA user_version=57")
+            con.execute("PRAGMA user_version=59")
         with self.assertRaisesRegex(InstalledBackupError, "cannot read retained schema"):
             describe_installation(self.spec, observe=self.observe)
 

@@ -35,6 +35,14 @@ Supporting detail: [reference](REQUIREMENT_DETAILS_QUEUE.md#delivery-and-receipt
     projection MUST NOT send again, and conflicts MUST refuse.
   - Receipt evidence MUST survive separately from mutable bookkeeping; newer attempts, changed
     bindings or owner consent MUST NOT allow mutation of a pinned delivery snapshot.
+  - A terminal-delivered document MAY have a separate append-only retirement record only when its
+    v1 projection, exact immutable final attempt/receipt, payload/artifact snapshot and terminal
+    outbox all agree. It records the original spool identity without claiming that a filesystem
+    unlink itself is externally proven; unknown and partially delivered outboxes receive no record.
+  - Migration MAY backfill that record only from already complete exact v1 evidence. Legacy v0,
+    absent immutable ledger entries or any mismatch remain explicit blockers; an external consumer
+    needs its own supported compatibility path and cannot infer a safe missing artifact from a
+    terminal status alone.
   - Reconciliation MUST wait for an active notice send to settle; unknown notices MUST retain their
     parts/history even when later terminal proof and bounded completion are saved.
   - Replacing a certain notice MUST atomically archive all parts, receipts and artifact references;

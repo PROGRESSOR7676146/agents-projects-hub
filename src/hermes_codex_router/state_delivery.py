@@ -305,6 +305,17 @@ class DeliveryStateFacade:
         ).fetchall()
         return tuple(self.outbox_part_record(row) for row in rows)
 
+    def artifact_retired(self, outbox_id: str, part_index: int) -> bool:
+        """Whether schema-owned proof permits cleanup of one delivered document."""
+        return (
+            self._connection.execute(
+                """SELECT 1 FROM telegram_artifact_retirements
+                   WHERE outbox_id=? AND part_index=?""",
+                (outbox_id, part_index),
+            ).fetchone()
+            is not None
+        )
+
     def next_outbox_part(
         self,
         outbox_id: str,

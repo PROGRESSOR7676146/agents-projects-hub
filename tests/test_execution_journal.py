@@ -569,6 +569,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_uncertain_decisions.py",
                         "schema_delivery_certainty.py",
                         "schema_delivery_receipts.py",
+                        "schema_artifact_retirements.py",
                         "schema_delivery_holds.py",
                         "schema_delivery_control.py",
                         "schema_delivery_control_activation.py",
@@ -581,6 +582,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_codex_permissions.py",
                         "schema_preacceptance_approvals.py",
                         "schema_preexecution_retry.py",
+                        "delivery_receipts.py",
                     ):
                         archive.writestr(
                             f"hermes_codex_router/{name}", (package / name).read_text()

@@ -136,6 +136,7 @@ def legacy_selection_columns(path: Path):
 
 def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema54 proof from fictional historical fixtures."""
+    remove_artifact_retirements_schema(connection)
     remove_delivery_hold_telegram_schema(connection)
     tables = ("telegram_send_receipts", "telegram_send_attempts")
     existing = {
@@ -151,6 +152,31 @@ def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             connection.execute(f"DROP TABLE {table}")
+
+
+def remove_artifact_retirements_schema(connection: sqlite3.Connection) -> None:
+    """Remove only empty schema58 proof from fictional historical fixtures."""
+    table = "telegram_artifact_retirements"
+    if (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        is None
+    ):
+        return
+    assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    for trigger in (
+        "telegram_artifact_retirements_no_replace",
+        "telegram_artifact_retirements_insert_guard",
+        "telegram_artifact_retirements_no_update",
+        "telegram_artifact_retirements_no_delete",
+        "telegram_artifact_retirement_source_part_no_replace",
+        "telegram_artifact_retirement_source_part_immutable",
+        "telegram_artifact_retirement_source_outbox_no_replace",
+        "telegram_artifact_retirement_source_outbox_immutable",
+    ):
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    connection.execute(f"DROP TABLE {table}")
 
 
 def remove_uncertain_decision_schema(connection: sqlite3.Connection) -> None:

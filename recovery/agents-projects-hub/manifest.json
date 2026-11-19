@@ -7,8 +7,8 @@
     "local-operator"
   ],
   "runbook": "RUNBOOK.md",
-  "maintained_release": "0.11.24",
-  "state_schema": 57,
+  "maintained_release": "0.11.25",
+  "state_schema": 58,
   "max_age_days": 30,
   "required_units": [
     "agents-projects-hub.service",
