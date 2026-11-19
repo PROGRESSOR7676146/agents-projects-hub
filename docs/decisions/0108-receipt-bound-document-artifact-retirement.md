@@ -1,7 +1,6 @@
 # ADR 0108: Receipt-bound document artifact retirement
 
-Status: accepted implementation decision; source publication and installation
-remain pending.
+Status: accepted implementation decision; installation remains pending.
 Date: 2026-11-19.
 Amends: [ADR 0060](0060-final-and-progress-delivery-certainty.md) and
 [ADR 0069](0069-late-receipts-and-notice-ordering.md).
@@ -71,7 +70,11 @@ and DDL/backfill rollback.  They use fictional SQLite and Telegram transports;
 they do not establish installed state, foreign-consumer compatibility, a backup
 run, or live Telegram acceptance.
 
-Before any activation, publish a reviewed artifact with a schema-58-compatible
-rollback, update the owned consumer separately, take a fresh consistent backup,
-and use the normal admission/drain/readback procedure.  No retry of an earlier
-ambiguous backup follows from this source change.
+Release 0.11.26 is the distinct schema-58-compatible runtime rollback artifact
+for 0.11.25. It records and preserves exact retirement evidence but retains
+spool files, so rollback never restores an old database or repeats cleanup.
+
+Before any activation, use both reviewed artifacts, update the owned consumer
+separately, take a fresh consistent backup, and use the normal
+admission/drain/readback procedure. No retry of an earlier ambiguous backup
+follows from this source change.

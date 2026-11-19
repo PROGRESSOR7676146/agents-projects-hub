@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.26] - 2026-11-19
+
+- Publish the distinct schema-58-compatible runtime rollback artifact for
+  v0.11.25. It retains spool files while preserving exact retirement evidence,
+  so an ordinary rollback never restores an old database or repeats cleanup.
+
 ## [0.11.25] - 2026-11-19
 
 - Add schema 58's append-only, receipt-bound document-artifact retirement
