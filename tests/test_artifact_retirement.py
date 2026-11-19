@@ -56,6 +56,31 @@ class ArtifactRetirementTests(unittest.TestCase):
             )
         return outbox.outbox_id, path, data
 
+    def _append_document_part(
+        self, state: HubState, outbox_id: str, *, part_index: int = 2
+    ) -> tuple[Path, bytes]:
+        root = artifact_spool_root(self.fixture.config.state_path)
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / f"artifact-{outbox_id}-{part_index}.md"
+        data = b"later receipt-bound example artifact\n"
+        path.write_bytes(data)
+        path.chmod(0o600)
+        with state._connection:
+            state._connection.execute(
+                """INSERT INTO telegram_outbox_parts
+                   (outbox_id,part_index,telegram_html,part_type,file_path,file_name,
+                    file_size,file_sha256,receipt_validation_version)
+                   VALUES (?,?,'later document','document',?,'later.md',?,?,0)""",
+                (
+                    outbox_id,
+                    part_index,
+                    str(path),
+                    len(data),
+                    hashlib.sha256(data).hexdigest(),
+                ),
+            )
+        return path, data
+
     @staticmethod
     def _retirements(connection: sqlite3.Connection, outbox_id: str) -> list[sqlite3.Row]:
         connection.row_factory = sqlite3.Row
@@ -128,7 +153,9 @@ class ArtifactRetirementTests(unittest.TestCase):
         )
         multipart_sender = self.fixture.sender(opencode=ReceiptBot(), antigravity=fixtures.Bot())
         try:
-            multipart_outbox, _, _ = self._document_part(multipart_sender.state, multipart_job)
+            multipart_outbox, multipart_path, _ = self._document_part(
+                multipart_sender.state, multipart_job
+            )
             self.assertGreater(
                 len(multipart_sender.state.get_telegram_outbox_parts(multipart_outbox)), 1
             )
@@ -139,6 +166,7 @@ class ArtifactRetirementTests(unittest.TestCase):
             self.assertEqual(
                 self._retirements(multipart_sender.state._connection, multipart_outbox), []
             )
+            self.assertTrue(multipart_path.exists())
             self.assertTrue(multipart_sender._deliver_one("opencode"))
             self.assertEqual(
                 multipart_sender.state.get_telegram_outbox(multipart_outbox).status, "delivered"
@@ -146,8 +174,38 @@ class ArtifactRetirementTests(unittest.TestCase):
             self.assertEqual(
                 len(self._retirements(multipart_sender.state._connection, multipart_outbox)), 1
             )
+            self.assertFalse(multipart_path.exists())
         finally:
             multipart_sender.close()
+
+    def test_legacy_prefix_cannot_retire_or_clean_later_document(self) -> None:
+        job_id = self.fixture.ready_outbox("opencode", 814)
+        sender = self.fixture.sender(opencode=ReceiptBot(), antigravity=fixtures.Bot())
+        try:
+            outbox = sender.state.get_telegram_outbox_for_job(job_id)
+            document_path, _ = self._append_document_part(sender.state, outbox.outbox_id)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            with sender.state._connection:
+                sender.state._connection.execute(
+                    """UPDATE telegram_outbox_parts SET telegram_message_id=70, delivered_at=?,
+                       receipt_validation_version=0 WHERE outbox_id=? AND part_index=1""",
+                    (timestamp, outbox.outbox_id),
+                )
+
+            self.assertTrue(sender._deliver_one("opencode"))
+            self.assertEqual(sender.state.get_telegram_outbox(outbox.outbox_id).status, "delivered")
+            self.assertEqual(self._retirements(sender.state._connection, outbox.outbox_id), [])
+            self.assertTrue(document_path.exists())
+        finally:
+            sender.close()
+
+        historical = self._project_schema57(
+            self.fixture.config.state_path, "artifact-legacy-prefix-schema57.db"
+        )
+        result = migrations.migrate_database(historical)
+        self.assertEqual((result.previous_version, result.current_version), (57, 58))
+        with closing(sqlite3.connect(historical)) as database:
+            self.assertEqual(self._retirements(database, outbox.outbox_id), [])
 
     def test_terminal_multiple_documents_retire_together(self) -> None:
         job_id = self.fixture.ready_outbox("opencode", 804)

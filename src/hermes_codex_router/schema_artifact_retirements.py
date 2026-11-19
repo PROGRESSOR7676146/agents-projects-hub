@@ -79,6 +79,32 @@ WHEN NOT EXISTS (
             AND newer.part_index=attempt.part_index
             AND newer.sequence>attempt.sequence
       )
+      AND NOT EXISTS (
+          SELECT 1 FROM telegram_outbox_parts all_part
+          WHERE all_part.outbox_id=NEW.outbox_id
+            AND (
+                all_part.receipt_validation_version!=1
+                OR all_part.telegram_message_id IS NULL
+                OR all_part.delivered_at IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM telegram_send_attempts all_attempt
+                    JOIN telegram_send_receipts all_receipt
+                      ON all_receipt.attempt_id=all_attempt.attempt_id
+                    WHERE all_attempt.target_kind='final'
+                      AND all_attempt.target_id=NEW.outbox_id
+                      AND all_attempt.part_index=all_part.part_index
+                      AND all_receipt.telegram_message_id=all_part.telegram_message_id
+                      AND all_receipt.recorded_at=all_part.delivered_at
+                      AND NOT EXISTS (
+                          SELECT 1 FROM telegram_send_attempts newer
+                          WHERE newer.target_kind='final'
+                            AND newer.target_id=all_attempt.target_id
+                            AND newer.part_index=all_attempt.part_index
+                            AND newer.sequence>all_attempt.sequence
+                      )
+                )
+            )
+      )
 )
 BEGIN SELECT RAISE(ABORT, 'artifact retirement lacks exact receipt evidence'); END;
 
