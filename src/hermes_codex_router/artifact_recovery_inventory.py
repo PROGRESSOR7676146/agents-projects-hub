@@ -260,6 +260,98 @@ def _receipt_verified_unknown(receipts: DeliveryReceipts, row: sqlite3.Row) -> b
     )
 
 
+def _exact_archived_attempt(
+    connection: sqlite3.Connection,
+    *,
+    outbox_id: str,
+    part_index: int,
+    telegram_message_id: object,
+    delivered_at: object,
+    binding_hash: object,
+) -> bool:
+    if (
+        type(telegram_message_id) is not int
+        or telegram_message_id <= 0
+        or not isinstance(delivered_at, str)
+        or not delivered_at
+        or not _valid_sha(binding_hash)
+    ):
+        return False
+    rows = connection.execute(
+        """SELECT attempt.binding_hash
+           FROM telegram_send_attempts attempt
+           JOIN telegram_send_receipts receipt USING(attempt_id)
+           WHERE attempt.target_kind='final' AND attempt.target_id=? AND attempt.part_index=?
+             AND receipt.telegram_message_id=? AND receipt.recorded_at=?
+             AND NOT EXISTS (
+                 SELECT 1 FROM telegram_send_attempts newer
+                 WHERE newer.target_kind='final' AND newer.target_id=attempt.target_id
+                   AND newer.part_index=attempt.part_index AND newer.sequence>attempt.sequence
+             )""",
+        (outbox_id, part_index, telegram_message_id, delivered_at),
+    ).fetchall()
+    return len(rows) == 1 and rows[0]["binding_hash"] == binding_hash
+
+
+def _receipt_retired_tombstone(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    if row["source_status"] != "delivered" or row["source_part_receipt_validation_version"] != 1:
+        return False
+    records = connection.execute(
+        """SELECT attempt_id,binding_hash,telegram_message_id,delivered_at,file_path,file_name,
+                  file_size,file_sha256,retired_at
+           FROM telegram_artifact_retirements WHERE outbox_id=? AND part_index=?""",
+        (row["outbox_id"], row["part_index"]),
+    ).fetchall()
+    if len(records) != 1:
+        return False
+    record = records[0]
+    if (
+        record["binding_hash"] != row["source_binding_hash"]
+        or record["telegram_message_id"] != row["source_part_telegram_message_id"]
+        or record["delivered_at"] != row["source_part_delivered_at"]
+        or record["file_path"] != row["source_file_path"]
+        or record["file_name"] != row["source_file_name"]
+        or record["file_size"] != row["file_size"]
+        or record["file_sha256"] != row["file_sha256"]
+        or record["retired_at"] != row["source_delivered_at"]
+    ):
+        return False
+    attempt = connection.execute(
+        """SELECT target_kind,target_id,part_index,binding_hash
+           FROM telegram_send_attempts WHERE attempt_id=?""",
+        (record["attempt_id"],),
+    ).fetchone()
+    return (
+        attempt is not None
+        and attempt["target_kind"] == "final"
+        and attempt["target_id"] == row["outbox_id"]
+        and attempt["part_index"] == row["part_index"]
+        and attempt["binding_hash"] == row["source_binding_hash"]
+        and _exact_archived_attempt(
+            connection,
+            outbox_id=str(row["outbox_id"]),
+            part_index=int(row["part_index"]),
+            telegram_message_id=row["source_part_telegram_message_id"],
+            delivered_at=row["source_part_delivered_at"],
+            binding_hash=row["source_binding_hash"],
+        )
+    )
+
+
+def _receipt_verified_unknown_tombstone(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    return row["source_status"] == "unknown" and (
+        row["source_part_receipt_validation_version"] == 1
+        and _exact_archived_attempt(
+            connection,
+            outbox_id=str(row["outbox_id"]),
+            part_index=int(row["part_index"]),
+            telegram_message_id=row["source_part_telegram_message_id"],
+            delivered_at=row["source_part_delivered_at"],
+            binding_hash=row["source_binding_hash"],
+        )
+    )
+
+
 def _eligible_explicit_loss_source(row: sqlite3.Row) -> bool:
     return (
         row["status"] in {"delivered", "unknown", "failed"}
@@ -311,6 +403,28 @@ def _explicit_loss(
         item["file_sha256"],
         item["file_size"],
     ) == (binding, row["file_sha256"], row["file_size"])
+
+
+def _tombstoned_loss_availability(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    spool_root: Path,
+    *,
+    retirement_table: bool,
+    ledger_valid: bool,
+) -> tuple[Availability, Path | None]:
+    status, path = _file_status(
+        row["source_file_path"], spool_root, row["file_size"], row["file_sha256"]
+    )
+    if status == "present":
+        return "present_required", path
+    if status == "missing" and retirement_table and _receipt_retired_tombstone(connection, row):
+        return "receipt_retired", path
+    if status == "missing" and _receipt_verified_unknown_tombstone(connection, row):
+        return "receipt_verified_unknown", path
+    if status == "missing" and ledger_valid:
+        return "explicit_loss", path
+    return "unresolved_missing", path
 
 
 def _ledger_status(
@@ -407,6 +521,82 @@ def inspect_artifact_recovery_inventory(
                     file_path=path,
                 )
             )
+        has_loss_items = _table_exists(connection, "artifact_loss_items")
+        has_tombstones = _table_exists(connection, "artifact_loss_archive_tombstones")
+        if has_tombstones:
+            tombstones = connection.execute(
+                """SELECT tombstone.* FROM artifact_loss_archive_tombstones tombstone
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM telegram_outbox_parts part
+                       WHERE part.outbox_id=tombstone.outbox_id
+                         AND part.part_index=tombstone.part_index
+                   )
+                   ORDER BY tombstone.outbox_id,tombstone.part_index"""
+            ).fetchall()
+            for tombstone in tombstones:
+                availability, path = _tombstoned_loss_availability(
+                    connection,
+                    tombstone,
+                    root,
+                    retirement_table=retirement_table,
+                    ledger_valid=ledger_valid,
+                )
+                entries.append(
+                    ArtifactRecoveryEntry(
+                        outbox_id=str(tombstone["outbox_id"]),
+                        part_index=int(tombstone["part_index"]),
+                        availability=availability,
+                        file_size=tombstone["file_size"]
+                        if type(tombstone["file_size"]) is int
+                        else None,
+                        file_sha256=tombstone["file_sha256"]
+                        if _valid_sha(tombstone["file_sha256"])
+                        else None,
+                        file_path=path,
+                    )
+                )
+        if has_loss_items:
+            absent = (
+                connection.execute(
+                    """SELECT item.outbox_id,item.part_index,item.file_size,item.file_sha256
+                   FROM artifact_loss_items item
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM telegram_outbox_parts part
+                       WHERE part.outbox_id=item.outbox_id AND part.part_index=item.part_index
+                         AND part.part_type='document'
+                   )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM artifact_loss_archive_tombstones tombstone
+                       WHERE tombstone.outbox_id=item.outbox_id
+                         AND tombstone.part_index=item.part_index
+                   )
+                   ORDER BY item.outbox_id,item.part_index"""
+                ).fetchall()
+                if has_tombstones
+                else connection.execute(
+                    """SELECT item.outbox_id,item.part_index,item.file_size,item.file_sha256
+                   FROM artifact_loss_items item
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM telegram_outbox_parts part
+                       WHERE part.outbox_id=item.outbox_id AND part.part_index=item.part_index
+                         AND part.part_type='document'
+                   )
+                   ORDER BY item.outbox_id,item.part_index"""
+                ).fetchall()
+            )
+            for item in absent:
+                entries.append(
+                    ArtifactRecoveryEntry(
+                        outbox_id=str(item["outbox_id"]),
+                        part_index=int(item["part_index"]),
+                        availability="unresolved_missing",
+                        file_size=item["file_size"] if type(item["file_size"]) is int else None,
+                        file_sha256=item["file_sha256"]
+                        if _valid_sha(item["file_sha256"])
+                        else None,
+                        file_path=None,
+                    )
+                )
         connection.commit()
     except BaseException:
         connection.rollback()
@@ -433,5 +623,5 @@ def inspect_artifact_recovery_inventory(
         ledger_head=head,
         ledger_valid=ledger_valid,
         coverage=coverage,
-        entries=tuple(entries),
+        entries=tuple(sorted(entries, key=lambda entry: (entry.outbox_id, entry.part_index))),
     )

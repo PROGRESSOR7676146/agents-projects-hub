@@ -33,6 +33,12 @@ silently rediscover the same already-accounted-for loss.
    receipt-retirement record.  Existing source artifact identity is frozen.
    A later positive receipt may still settle delivery; a valid retirement then
    takes precedence for recovery classification.
+   The ordinary recovery-notice archive may remove that source only after it
+   records an immutable tombstone containing the complete frozen final-binding
+   inputs, parked delivery state, item identity and exact archived-copy
+   reference.  The archive and tombstone are then immutable; a live source and
+   tombstone together, a missing source without one, or any archive mismatch
+   fails closed.
 4. The native read-only inventory verifies a closed SQLite snapshot, exact
    receipt retirement, narrow legacy `unknown` v1 receipt evidence, complete
    loss-ledger chain and current source binding.  It reports each document as
@@ -46,8 +52,10 @@ silently rediscover the same already-accounted-for loss.
 The ledger is a **local owner attestation**, not a Telegram receipt, signature,
 or proof that a private recovery audit occurred.  The trusted-host model does
 not claim to resist a same-UID actor forging a whole SQLite database.  The chain
-detects accidental or incomplete product-path records; an external signing key
-would be a separate trust-boundary decision.
+and exact schema-59 DDL comparison detect accidental or incomplete product-path
+records, including retained no-op guards; an actor that can rewrite both data
+and canonical DDL remains outside this boundary. An external signing key would
+be a separate trust-boundary decision.
 
 ## Consequences
 
@@ -60,6 +68,10 @@ would be a separate trust-boundary decision.
 - Normal operation cannot delete, replace, re-order or mutate a ledger record.
   An uncertain exact retry validates the entire ledger before returning its
   original receipt; concurrent previews serialize through the current head.
+- A recovery archive no longer deadlocks on a declared-loss source.  Its
+  tombstoned document remains in the read-only inventory and is still
+  `degraded_explicit_loss` until an identical spool file reappears; archival is
+  not a way to erase loss evidence or make a backup update-ready.
 - Schema 59 is additive.  Runtime rollback needs an artifact that reads schema
   59; restoring an old state database after newer work is not a rollback path.
   Its fixed release capability retains the reader and inventory but refuses a

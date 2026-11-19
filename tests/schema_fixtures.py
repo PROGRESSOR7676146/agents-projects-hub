@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router import migrations
+from hermes_codex_router.schema_artifact_losses import ARTIFACT_LOSS_TRIGGER_NAMES
 from hermes_codex_router.schema_codex_permissions import (
     PROFILE_TABLES,
     ensure_codex_permission_columns,
@@ -182,33 +183,18 @@ def remove_artifact_retirements_schema(connection: sqlite3.Connection) -> None:
 
 def remove_artifact_losses_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema59 loss evidence from fictional historical fixtures."""
-    tables = ("artifact_loss_items", "artifact_loss_operations")
+    tables = (
+        "artifact_loss_archive_tombstones",
+        "artifact_loss_items",
+        "artifact_loss_operations",
+    )
     existing = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
-    for trigger in (
-        "artifact_loss_operations_append_only",
-        "artifact_loss_operations_no_update",
-        "artifact_loss_operations_no_delete",
-        "artifact_loss_items_insert_guard",
-        "artifact_loss_items_no_update",
-        "artifact_loss_items_no_delete",
-        "artifact_loss_source_part_no_replace",
-        "artifact_loss_source_part_identity_immutable",
-        "artifact_loss_source_outbox_no_replace",
-        "artifact_loss_source_outbox_binding_immutable",
-        "artifact_loss_source_job_no_replace",
-        "artifact_loss_source_job_binding_immutable",
-        "artifact_loss_source_topic_no_replace",
-        "artifact_loss_source_topic_binding_immutable",
-        "artifact_loss_source_part_no_delete",
-        "artifact_loss_source_outbox_no_delete",
-        "artifact_loss_source_job_no_delete",
-        "artifact_loss_source_topic_no_delete",
-    ):
+    for trigger in ARTIFACT_LOSS_TRIGGER_NAMES:
         connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     for table in tables:
         if table in existing:

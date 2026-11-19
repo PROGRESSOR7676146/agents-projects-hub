@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from typing import Callable
+from typing import Callable, Mapping
 
 
 class DeliveryReceipts:
@@ -21,6 +21,12 @@ class DeliveryReceipts:
     def _require_transaction(self) -> None:
         if not self.db.in_transaction:
             raise self.error("receipt evidence requires an owning transaction")
+
+    @staticmethod
+    def binding_hash(values: Mapping[str, object]) -> str:
+        """Return the canonical final/progress binding digest for frozen fields."""
+        data = json.dumps(dict(values), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(data.encode()).hexdigest()
 
     def _binding(self, kind: str, target: str, part: int) -> str | None:
         if kind == "final":
@@ -47,8 +53,7 @@ class DeliveryReceipts:
             ).fetchone()
         if row is None:
             return None
-        data = json.dumps(dict(row), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(data.encode()).hexdigest()
+        return self.binding_hash(dict(row))
 
     def _exact_final_attempt(
         self, outbox_id: str, part_index: int, telegram_message_id: int, delivered_at: str

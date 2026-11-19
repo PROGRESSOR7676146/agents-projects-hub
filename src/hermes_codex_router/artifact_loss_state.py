@@ -273,6 +273,143 @@ class ArtifactLossState:
             )
         ]
 
+    def _live_item_matches(self, item: dict[str, Any]) -> bool:
+        """Whether the frozen live source still proves one declared-loss item."""
+        row = self.db.execute(
+            """SELECT outbox.status,outbox.attempt_count,outbox.lease_owner,outbox.lease_token,
+                      outbox.lease_expires_at,part.part_type,part.file_sha256,part.file_size
+               FROM telegram_outbox outbox
+               JOIN telegram_outbox_parts part USING(outbox_id)
+               WHERE outbox.outbox_id=? AND part.part_index=?""",
+            (item["outbox_id"], item["part_index"]),
+        ).fetchone()
+        if row is None:
+            return False
+        if (
+            row["status"] not in {"delivered", "unknown", "failed"}
+            or row["lease_owner"] is not None
+            or row["lease_token"] is not None
+            or row["lease_expires_at"] is not None
+            or (row["status"] == "failed" and row["attempt_count"] != 20)
+            or row["part_type"] != "document"
+            or row["file_sha256"] != item["file_sha256"]
+            or row["file_size"] != item["file_size"]
+        ):
+            return False
+        return (
+            DeliveryReceipts(self.db, self.error)._binding(
+                "final", str(item["outbox_id"]), int(item["part_index"])
+            )
+            == item["source_binding_hash"]
+        )
+
+    def _live_item_exists(self, item: dict[str, Any]) -> bool:
+        return (
+            self.db.execute(
+                """SELECT 1 FROM telegram_outbox_parts
+                   WHERE outbox_id=? AND part_index=?""",
+                (item["outbox_id"], item["part_index"]),
+            ).fetchone()
+            is not None
+        )
+
+    @staticmethod
+    def _tombstone_binding(tombstone: sqlite3.Row) -> str:
+        return DeliveryReceipts.binding_hash(
+            {
+                "outbox_id": tombstone["outbox_id"],
+                "job_id": tombstone["source_job_id"],
+                "sender_agent_id": tombstone["source_sender_agent_id"],
+                "chat_id": tombstone["source_chat_id"],
+                "thread_id": tombstone["source_thread_id"],
+                "purpose": tombstone["source_purpose"],
+                "telegram_html": tombstone["source_telegram_html"],
+                "part_index": tombstone["part_index"],
+                "part_html": tombstone["source_part_telegram_html"],
+                "part_type": tombstone["source_part_type"],
+                "file_path": tombstone["source_file_path"],
+                "file_name": tombstone["source_file_name"],
+                "file_size": tombstone["file_size"],
+                "file_sha256": tombstone["file_sha256"],
+                "session_id": tombstone["source_session_id"],
+                "session_generation": tombstone["source_session_generation"],
+                "topic_id": tombstone["source_topic_id"],
+                "topic_sequence": tombstone["source_topic_sequence"],
+                "agent_id": tombstone["source_agent_id"],
+                "project_id": tombstone["source_project_id"],
+                "topic_chat": tombstone["source_topic_chat_id"],
+                "topic_thread": tombstone["source_topic_thread_id"],
+            }
+        )
+
+    def _archive_tombstone_status(self, item: dict[str, Any]) -> bool | None:
+        """Return None when absent, otherwise validate immutable archived evidence."""
+        tombstone = self.db.execute(
+            """SELECT * FROM artifact_loss_archive_tombstones
+               WHERE outbox_id=? AND part_index=?""",
+            (item["outbox_id"], item["part_index"]),
+        ).fetchone()
+        if tombstone is None:
+            return None
+        if (
+            tombstone["operation_id"] != item["operation_id"]
+            or tombstone["source_binding_hash"] != item["source_binding_hash"]
+            or tombstone["file_sha256"] != item["file_sha256"]
+            or tombstone["file_size"] != item["file_size"]
+            or tombstone["source_status"] not in {"delivered", "unknown", "failed"}
+            or tombstone["source_status"] == "failed"
+            and tombstone["source_attempt_count"] != 20
+            or tombstone["source_part_type"] != "document"
+            or tombstone["archive_outbox_id"] != tombstone["outbox_id"]
+            or tombstone["archive_part_index"] != tombstone["part_index"]
+            or not _valid_sha(tombstone["source_binding_hash"])
+            or not _valid_sha(tombstone["file_sha256"])
+            or type(tombstone["file_size"]) is not int
+            or not 1 <= tombstone["file_size"] <= 50 * 1024 * 1024
+        ):
+            return False
+        if self._tombstone_binding(tombstone) != tombstone["source_binding_hash"]:
+            return False
+        archive = self.db.execute(
+            """SELECT notice.outbox_id AS notice_outbox_id,notice.telegram_html AS notice_html,
+                      notice.delivery_status,notice.telegram_message_id AS notice_message_id,
+                      notice.saved_at,archived.outbox_id AS archived_outbox_id,
+                      archived.telegram_html AS archived_html,
+                      archived.telegram_message_id AS archived_message_id,
+                      archived.delivered_at AS archived_delivered_at,archived.part_type,
+                      archived.file_path,archived.file_name,archived.file_size,
+                      archived.file_sha256,archived.receipt_validation_version
+               FROM provider_recovery_notices notice
+               JOIN provider_recovery_notice_parts archived USING(job_id)
+               WHERE notice.job_id=? AND archived.outbox_id=? AND archived.part_index=?""",
+            (
+                tombstone["archive_job_id"],
+                tombstone["archive_outbox_id"],
+                tombstone["archive_part_index"],
+            ),
+        ).fetchall()
+        if len(archive) != 1:
+            return False
+        row = archive[0]
+        return (
+            row["notice_outbox_id"] == tombstone["archive_outbox_id"]
+            and row["notice_html"] == tombstone["source_telegram_html"]
+            and row["delivery_status"] == tombstone["source_status"]
+            and row["notice_message_id"] == tombstone["source_telegram_message_id"]
+            and row["saved_at"] == tombstone["archive_saved_at"]
+            and row["archived_outbox_id"] == tombstone["archive_outbox_id"]
+            and row["archived_html"] == tombstone["source_part_telegram_html"]
+            and row["archived_message_id"] == tombstone["source_part_telegram_message_id"]
+            and row["archived_delivered_at"] == tombstone["source_part_delivered_at"]
+            and row["part_type"] == tombstone["source_part_type"]
+            and row["file_path"] == tombstone["source_file_path"]
+            and row["file_name"] == tombstone["source_file_name"]
+            and row["file_size"] == tombstone["file_size"]
+            and row["file_sha256"] == tombstone["file_sha256"]
+            and row["receipt_validation_version"]
+            == tombstone["source_part_receipt_validation_version"]
+        )
+
     def ledger_head(self) -> tuple[int, str]:
         """Return and validate the full append-only chain on the current connection."""
         if (
@@ -285,6 +422,18 @@ class ArtifactLossState:
             is not None
         ):
             raise self.error("artifact loss ledger has an orphaned item")
+        if (
+            self.db.execute(
+                """SELECT 1 FROM artifact_loss_archive_tombstones tombstone
+                   LEFT JOIN artifact_loss_items item
+                     ON item.operation_id=tombstone.operation_id
+                    AND item.outbox_id=tombstone.outbox_id
+                    AND item.part_index=tombstone.part_index
+                   WHERE item.operation_id IS NULL LIMIT 1"""
+            ).fetchone()
+            is not None
+        ):
+            raise self.error("artifact loss ledger has an orphaned archive tombstone")
         previous = _GENESIS
         sequence = 0
         rows = self.db.execute(
@@ -319,6 +468,19 @@ class ArtifactLossState:
                 for item in items
             ):
                 raise self.error("artifact loss operation has no items")
+            for item in items:
+                persisted = {**item, "operation_id": operation_id}
+                archived = self._archive_tombstone_status(persisted)
+                live = self._live_item_matches(persisted)
+                source_exists = self._live_item_exists(persisted)
+                if archived is False:
+                    raise self.error("artifact loss archive tombstone is invalid")
+                if source_exists and archived is not None:
+                    raise self.error("artifact loss source conflicts with its archive tombstone")
+                if source_exists and not live:
+                    raise self.error("artifact loss source evidence is invalid")
+                if not source_exists and archived is not True:
+                    raise self.error("artifact loss item source evidence is unavailable")
             snapshot = _digest(
                 self._snapshot_value(
                     previous_commit_hash=previous,

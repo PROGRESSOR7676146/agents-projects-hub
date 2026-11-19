@@ -88,8 +88,10 @@ def check_schema(
     if new_schema > live:
         if rollback is None:
             raise Refused("forward migration requires --rollback-release")
+    if rollback is not None and (new_schema > live or new_schema >= 59):
         need(rollback.get("schema_max") == new_schema, "rollback release schema mismatch")
     if new_schema >= 59:
+        need(rollback is not None, "schema-59 release requires --rollback-release")
         need(
             new.get("explicit_artifact_loss_declaration") is True,
             "candidate schema-59 release must permit artifact-loss declarations",
@@ -862,7 +864,7 @@ def prepare_stage(
     rollback_info = None
     rollback_dir = None
     rollback_wheel = None
-    if candidate["schema_max"] > live and rollback_release:
+    if (candidate["schema_max"] > live or candidate["schema_max"] >= 59) and rollback_release:
         rollback_dir = download_release(installation, rollback_release, runner)
         rollback_info, rollback_wheel = verify_assets(rollback_dir, rollback_release)
     check_schema(previous, candidate, live, rollback_info)
@@ -2102,6 +2104,11 @@ def apply_window(
             "plan must be in the ops directory",
         )
         plan = verify_saved_plan(plan_dir)
+        if plan["state_schema"] >= 59:
+            need(
+                "rollback_runtime" in plan and isinstance(plan.get("rollback_wheel"), str),
+                "schema-59 plan requires a bound rollback artifact",
+            )
         need(
             expected_digest is None
             or json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == expected_digest,
@@ -2236,6 +2243,7 @@ def apply_window(
             _effect(window, "backup", backup_state, fault)
 
             def create_manifest() -> None:
+                rollback_wheel = plan.get("rollback_wheel", plan["old_wheel"])
                 runner(
                     [
                         _runtime_cli(plan["new_runtime"]),
@@ -2245,7 +2253,7 @@ def apply_window(
                         "--active-artifact",
                         plan["new_wheel"],
                         "--rollback-artifact",
-                        plan.get("rollback_wheel", plan["old_wheel"]),
+                        rollback_wheel,
                         "--config",
                         installation["hub_config"],
                         "--backup",

@@ -165,6 +165,23 @@ class EvidenceTests(unittest.TestCase):
                 {"schema_max": 59, "explicit_artifact_loss_declaration": False},
             )
 
+        same_schema = {"schema_max": 59, "explicit_artifact_loss_declaration": True}
+        with self.assertRaisesRegex(hub_deploy.Refused, "--rollback-release"):
+            hub_deploy.check_schema(same_schema, same_schema, 59)
+        hub_deploy.check_schema(
+            same_schema,
+            same_schema,
+            59,
+            {"schema_max": 59, "explicit_artifact_loss_declaration": False},
+        )
+        with self.assertRaisesRegex(hub_deploy.Refused, "rollback release schema"):
+            hub_deploy.check_schema(
+                same_schema,
+                same_schema,
+                59,
+                {"schema_max": 60, "explicit_artifact_loss_declaration": False},
+            )
+
     def test_plan_digest_detects_any_change(self):
         plan = {"schema_version": 1, "files": [{"before": "a", "after": "b"}]}
         bound = hub_deploy.bind_plan(plan)
@@ -324,6 +341,7 @@ class StageFixture(unittest.TestCase):
         self.write_layout()
         self.assets = self.base / "assets"
         self.assets.mkdir()
+        self.release_infos = {}
         self.make_assets("v1.0.0", self.old_sha)
         self.make_assets("v2.0.0", self.new_sha)
         self.calls = []
@@ -354,7 +372,7 @@ class StageFixture(unittest.TestCase):
                 f'[Service]\nExecStart=\nExecStart="{self.old}/venv/bin/hub" --config "{self.configs}/claude-{self.old_sha[:7]}.json"\n'
             )
 
-    def make_assets(self, tag, sha, schema=7):
+    def make_assets(self, tag, sha, schema=7, explicit_artifact_loss_declaration=None):
         directory = self.assets / tag
         directory.mkdir()
         version = tag[1:]
@@ -385,6 +403,9 @@ class StageFixture(unittest.TestCase):
                 for name, data in files.items()
             ],
         }
+        if schema >= 59:
+            info["explicit_artifact_loss_declaration"] = explicit_artifact_loss_declaration
+        self.release_infos[sha] = info
         files["release-info.json"] = json.dumps(info).encode()
         for name, data in files.items():
             (directory / name).write_bytes(data)
@@ -420,17 +441,18 @@ class StageFixture(unittest.TestCase):
                 if str(self.old) in argv[0]
                 else ("d" * 40 if "d" * 40 in argv[0] else self.new_sha)
             )
-            return SimpleNamespace(
-                stdout=json.dumps(
-                    {
-                        "git_sha": sha,
-                        "clean_tree": True,
-                        "package_version": "1.0.0"
-                        if sha == self.old_sha
-                        else ("3.0.0" if sha == "d" * 40 else "2.0.0"),
-                    }
-                )
-            )
+            result = {
+                "git_sha": sha,
+                "clean_tree": True,
+                "package_version": "1.0.0"
+                if sha == self.old_sha
+                else ("3.0.0" if sha == "d" * 40 else "2.0.0"),
+            }
+            if self.release_infos[sha]["schema_max"] >= 59:
+                result["explicit_artifact_loss_declaration"] = self.release_infos[sha][
+                    "explicit_artifact_loss_declaration"
+                ]
+            return SimpleNamespace(stdout=json.dumps(result))
         if "hermes_codex_router.runtime_release" in argv:
             return SimpleNamespace(
                 stdout=json.dumps(
@@ -537,6 +559,37 @@ class StageTests(StageFixture):
             db.execute("PRAGMA user_version=8")
         with self.assertRaisesRegex(hub_deploy.Refused, "schema"):
             hub_deploy.prepare_stage(install, found, "v2.0.0", self.runner)
+
+    def test_schema59_same_schema_requires_false_capability_rollback_before_stage(self):
+        for tag, sha, capability in (
+            ("v1.0.0", self.old_sha, True),
+            ("v2.0.0", self.new_sha, True),
+            ("v3.0.0", "d" * 40, False),
+        ):
+            path = self.assets / tag
+            if path.exists():
+                shutil.rmtree(path)
+            self.make_assets(
+                tag,
+                sha,
+                schema=59,
+                explicit_artifact_loss_declaration=capability,
+            )
+        with closing(sqlite3.connect(self.db)) as connection:
+            connection.execute("PRAGMA user_version=59")
+        install = hub_deploy.load_installation(self.input)
+        old = hub_deploy.discover_installation(install, self.runner, lambda *_: True, lambda _: 0)
+
+        with self.assertRaisesRegex(hub_deploy.Refused, "--rollback-release"):
+            hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner)
+        self.assertFalse((self.releases / self.new_sha).exists())
+        self.assertFalse(any(call[0] == "uv" for call in self.calls))
+
+        prepared = hub_deploy.prepare_stage(
+            install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.assertFalse(prepared["rollback"]["explicit_artifact_loss_declaration"])
+        self.assertTrue(Path(prepared["rollback"]["new_wheel"]).is_file())
 
     def test_discovery_refuses_conflicting_pin_and_config(self):
         install = hub_deploy.load_installation(self.input)
@@ -1432,6 +1485,30 @@ class WindowTests(StageFixture):
             with self.subTest(key=key), self.assertRaisesRegex(hub_deploy.Refused, "digest"):
                 hub_deploy.verify_plan(altered)
         self.assertTrue((self.releases / ("d" * 40) / "bin/claude").exists())
+
+    def test_forward_manifest_uses_bound_rollback_wheel(self):
+        old = self.prepare_forward()
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        plan = hub_deploy.verify_saved_plan(self.plan)
+
+        self.assertEqual(self.execute()["outcome"], "ROLLED_BACK")
+        create = next(
+            call for call in self.calls if "release-manifest" in call and "create" in call
+        )
+        self.assertEqual(create[create.index("--rollback-artifact") + 1], plan["rollback_wheel"])
+
+    def test_schema59_plan_missing_rollback_refuses_before_stopping(self):
+        path = self.plan / "plan.json"
+        bound = json.loads(path.read_text())
+        bound["plan"]["state_schema"] = 59
+        path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(bound["plan"])) + b"\n")
+
+        with self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"):
+            self.execute()
+        self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
 
     def test_forward_backup_and_schema_selected_recovery(self):
         old = self.prepare_forward()

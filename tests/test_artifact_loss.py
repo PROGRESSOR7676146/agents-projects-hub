@@ -16,9 +16,13 @@ from unittest.mock import patch
 
 from hermes_codex_router import artifact_loss_cli, migrations
 from hermes_codex_router.artifact_loss_state import (
+    _AUTHORITY,
+    _GENESIS,
+    _REASON,
     ArtifactLossPreview,
     ArtifactLossState,
     ArtifactLossTarget,
+    _digest,
 )
 from hermes_codex_router.artifact_recovery_inventory import (
     ArtifactRecoveryInventoryError,
@@ -28,6 +32,8 @@ from hermes_codex_router.artifacts import artifact_spool_root, spool_staged_arti
 from hermes_codex_router.cli import main
 from hermes_codex_router.database_backup import backup_database
 from hermes_codex_router.delivery_receipts import DeliveryReceipts
+from hermes_codex_router.observed_delivery import archive_recovery_notice
+from hermes_codex_router.schema_artifact_losses import ARTIFACT_LOSS_SCHEMA_OBJECTS
 from hermes_codex_router.state import HubState, StateError
 from tests.schema_fixtures import project_historical_database
 
@@ -391,6 +397,254 @@ class ArtifactLossTests(unittest.TestCase):
                 (self.target.outbox_id, self.target.part_index),
             )
 
+    def test_exact_archive_tombstone_retains_declared_loss_for_inventory(self) -> None:
+        record = self._declare()
+        connection = self.state._connection
+        job_id = connection.execute(
+            "SELECT job_id FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()[0]
+        timestamp = "2026-11-20T00:00:00+00:00"
+
+        with self.state._immediate_transaction():
+            archive_recovery_notice(
+                connection,
+                job_id=job_id,
+                outbox_id=self.target.outbox_id,
+                timestamp=timestamp,
+            )
+            connection.execute(
+                "DELETE FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            )
+            connection.execute(
+                "DELETE FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+            )
+
+        self.assertEqual(
+            ArtifactLossState(connection, StateError).ledger_head(),
+            (record.sequence, record.commit_hash),
+        )
+        inventory = inspect_artifact_recovery_inventory(
+            self._snapshot("archived-declared-loss.db"), self.spool
+        )
+        self.assertTrue(inventory.ledger_valid)
+        self.assertEqual(inventory.coverage, "degraded_explicit_loss")
+        self.assertEqual(
+            [
+                (entry.outbox_id, entry.part_index, entry.availability)
+                for entry in inventory.entries
+            ],
+            [(self.target.outbox_id, self.target.part_index, "explicit_loss")],
+        )
+
+        target_path = Path(
+            connection.execute(
+                """SELECT source_file_path FROM artifact_loss_archive_tombstones
+                   WHERE outbox_id=? AND part_index=?""",
+                (self.target.outbox_id, self.target.part_index),
+            ).fetchone()[0]
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("fictional report\n", encoding="utf-8")
+        reappeared = inspect_artifact_recovery_inventory(
+            self._snapshot("archived-loss-reappeared.db"), self.spool
+        )
+        self.assertEqual(reappeared.entries[0].availability, "present_required")
+
+    def test_declared_loss_archive_tombstone_and_archive_are_immutable(self) -> None:
+        self._declare()
+        connection = self.state._connection
+        job_id = connection.execute(
+            "SELECT job_id FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()[0]
+        with self.state._immediate_transaction():
+            archive_recovery_notice(
+                connection,
+                job_id=job_id,
+                outbox_id=self.target.outbox_id,
+                timestamp="2026-11-20T00:00:00+00:00",
+            )
+            connection.execute(
+                "DELETE FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            )
+            connection.execute(
+                "DELETE FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+            )
+
+        for statement, params in (
+            (
+                "UPDATE artifact_loss_archive_tombstones SET archive_saved_at=? "
+                "WHERE outbox_id=? AND part_index=?",
+                ("changed", self.target.outbox_id, self.target.part_index),
+            ),
+            (
+                "DELETE FROM artifact_loss_archive_tombstones WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            ),
+            (
+                "UPDATE provider_recovery_notice_parts SET file_name='changed.md' WHERE job_id=? "
+                "AND part_index=?",
+                (job_id, self.target.part_index),
+            ),
+        ):
+            with self.subTest(statement=statement), self.assertRaises(sqlite3.IntegrityError):
+                with connection:
+                    connection.execute(statement, params)
+
+        connection.execute("DROP TRIGGER artifact_loss_archive_part_immutable")
+        try:
+            with connection:
+                connection.execute(
+                    """UPDATE provider_recovery_notice_parts SET file_name='corrupted.md'
+                       WHERE job_id=? AND part_index=?""",
+                    (job_id, self.target.part_index),
+                )
+        finally:
+            connection.execute(
+                ARTIFACT_LOSS_SCHEMA_OBJECTS[("trigger", "artifact_loss_archive_part_immutable")]
+            )
+        corrupted = inspect_artifact_recovery_inventory(
+            self._snapshot("corrupted-archived-loss.db"), self.spool
+        )
+        self.assertFalse(corrupted.ledger_valid)
+        self.assertEqual(corrupted.coverage, "incomplete")
+
+    def test_declared_loss_archive_rejects_a_mismatched_copy(self) -> None:
+        self._declare()
+        connection = self.state._connection
+        job_id = connection.execute(
+            "SELECT job_id FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()[0]
+        connection.execute(
+            """CREATE TRIGGER fixture_loss_archive_mismatch
+               AFTER INSERT ON provider_recovery_notice_parts
+               BEGIN
+                   UPDATE provider_recovery_notice_parts SET file_name='mismatch.md'
+                   WHERE job_id=NEW.job_id AND part_index=NEW.part_index;
+               END"""
+        )
+        try:
+            with self.assertRaisesRegex(RuntimeError, "lacks an exact copy"):
+                with self.state._immediate_transaction():
+                    archive_recovery_notice(
+                        connection,
+                        job_id=job_id,
+                        outbox_id=self.target.outbox_id,
+                        timestamp="2026-11-20T00:00:00+00:00",
+                    )
+        finally:
+            connection.execute("DROP TRIGGER fixture_loss_archive_mismatch")
+        self.assertIsNotNone(
+            connection.execute(
+                "SELECT 1 FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            ).fetchone()
+        )
+        self.assertIsNone(
+            connection.execute(
+                "SELECT 1 FROM artifact_loss_archive_tombstones WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            ).fetchone()
+        )
+
+    def test_archive_cannot_remove_an_outbox_until_every_declared_part_is_tombstoned(self) -> None:
+        extra = self._append_missing_document_part()
+        preview = self.state.preview_artifact_loss(
+            (self.target, extra), spool_root=self.spool, recovery_audit_sha256="a" * 64
+        )
+        self.state.declare_artifact_loss(
+            (self.target, extra),
+            spool_root=self.spool,
+            recovery_audit_sha256="a" * 64,
+            expected_snapshot=preview.snapshot,
+            operation_id=preview.operation_id,
+            acknowledge_irrecoverable_loss=True,
+            now=datetime(2026, 11, 20, tzinfo=timezone.utc),
+        )
+        connection = self.state._connection
+        job_id = connection.execute(
+            "SELECT job_id FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()[0]
+        with self.state._immediate_transaction():
+            archive_recovery_notice(
+                connection,
+                job_id=job_id,
+                outbox_id=self.target.outbox_id,
+                timestamp="2026-11-20T00:00:00+00:00",
+            )
+        self.assertEqual(
+            connection.execute(
+                "SELECT COUNT(*) FROM artifact_loss_archive_tombstones WHERE outbox_id=?",
+                (self.target.outbox_id,),
+            ).fetchone()[0],
+            2,
+        )
+        connection.execute("DROP TRIGGER artifact_loss_archive_tombstones_no_delete")
+        try:
+            with connection:
+                connection.execute(
+                    "DELETE FROM artifact_loss_archive_tombstones "
+                    "WHERE outbox_id=? AND part_index=?",
+                    (extra.outbox_id, extra.part_index),
+                )
+        finally:
+            connection.execute(
+                ARTIFACT_LOSS_SCHEMA_OBJECTS[
+                    ("trigger", "artifact_loss_archive_tombstones_no_delete")
+                ]
+            )
+        with self.assertRaises(sqlite3.IntegrityError), connection:
+            connection.execute(
+                "DELETE FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+            )
+
+    def test_source_tombstone_conflict_and_missing_tombstone_fail_closed(self) -> None:
+        self._declare()
+        connection = self.state._connection
+        job_id = connection.execute(
+            "SELECT job_id FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()[0]
+        with self.state._immediate_transaction():
+            archive_recovery_notice(
+                connection,
+                job_id=job_id,
+                outbox_id=self.target.outbox_id,
+                timestamp="2026-11-20T00:00:00+00:00",
+            )
+        with self.assertRaisesRegex(StateError, "conflicts with its archive tombstone"):
+            ArtifactLossState(connection, StateError).ledger_head()
+        conflict = inspect_artifact_recovery_inventory(
+            self._snapshot("source-tombstone-conflict.db"), self.spool
+        )
+        self.assertFalse(conflict.ledger_valid)
+        self.assertEqual(len(conflict.entries), 1)
+
+        connection.execute("DROP TRIGGER artifact_loss_archive_tombstones_no_delete")
+        with connection:
+            connection.execute(
+                "DELETE FROM artifact_loss_archive_tombstones WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            )
+        connection.execute(
+            ARTIFACT_LOSS_SCHEMA_OBJECTS[("trigger", "artifact_loss_archive_tombstones_no_delete")]
+        )
+        connection.execute("DROP TRIGGER artifact_loss_source_part_no_delete")
+        with connection:
+            connection.execute(
+                "DELETE FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            )
+        connection.execute(
+            ARTIFACT_LOSS_SCHEMA_OBJECTS[("trigger", "artifact_loss_source_part_no_delete")]
+        )
+        missing = inspect_artifact_recovery_inventory(
+            self._snapshot("missing-tombstone-source.db"), self.spool
+        )
+        self.assertFalse(missing.ledger_valid)
+        self.assertEqual(len(missing.entries), 1)
+        self.assertEqual(missing.entries[0].availability, "unresolved_missing")
+
     def test_loss_ledger_freezes_all_binding_sources_but_allows_late_receipts(self) -> None:
         self._declare()
         connection = self.state._connection
@@ -539,6 +793,105 @@ class ArtifactLossTests(unittest.TestCase):
         inventory = inspect_artifact_recovery_inventory(
             self._snapshot("orphan-loss-item.db"), self.spool
         )
+        self.assertFalse(inventory.ledger_valid)
+        self.assertEqual(inventory.coverage, "incomplete")
+        self.assertEqual(inventory.entries[0].availability, "unresolved_missing")
+
+    def test_schema59_rejects_tampered_guard_definitions_and_injected_complete_chain(self) -> None:
+        """Persisted no-op guards cannot make an injected record recovery evidence."""
+        connection = self.state._connection
+        part = connection.execute(
+            """SELECT file_sha256,file_size FROM telegram_outbox_parts
+               WHERE outbox_id=? AND part_index=?""",
+            (self.target.outbox_id, self.target.part_index),
+        ).fetchone()
+        assert part is not None
+        binding = DeliveryReceipts(connection, StateError)._binding(
+            "final", self.target.outbox_id, self.target.part_index
+        )
+        assert binding is not None
+        connection.execute("DROP TRIGGER artifact_loss_operations_append_only")
+        connection.execute(
+            """CREATE TRIGGER artifact_loss_operations_append_only
+               BEFORE INSERT ON artifact_loss_operations WHEN 0
+               BEGIN SELECT RAISE(ABORT, 'fixture'); END"""
+        )
+        connection.execute("DROP TRIGGER artifact_loss_items_insert_guard")
+        connection.execute(
+            """CREATE TRIGGER artifact_loss_items_insert_guard
+               BEFORE INSERT ON artifact_loss_items WHEN 0
+               BEGIN SELECT RAISE(ABORT, 'fixture'); END"""
+        )
+        operation_id = str(uuid.uuid4())
+        audit = "a" * 64
+        applied_at = "2026-11-19T00:00:00+00:00"
+        items = [
+            {
+                "outbox_id": self.target.outbox_id,
+                "part_index": self.target.part_index,
+                "source_binding_hash": binding,
+                "file_sha256": part["file_sha256"],
+                "file_size": part["file_size"],
+            }
+        ]
+        snapshot = _digest(
+            {
+                "version": 1,
+                "previous_commit_hash": _GENESIS,
+                "recovery_audit_sha256": audit,
+                "targets": items,
+            }
+        )
+        commit = _digest(
+            {
+                "version": 1,
+                "operation_id": operation_id,
+                "sequence": 1,
+                "previous_commit_hash": _GENESIS,
+                "snapshot_hash": snapshot,
+                "recovery_audit_sha256": audit,
+                "reason": _REASON,
+                "authority": _AUTHORITY,
+                "applied_at": applied_at,
+            }
+        )
+        with connection:
+            connection.execute(
+                """INSERT INTO artifact_loss_operations
+                   (operation_id,sequence,previous_commit_hash,snapshot_hash,recovery_audit_sha256,
+                    reason,authority,applied_at,commit_hash)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    operation_id,
+                    1,
+                    _GENESIS,
+                    snapshot,
+                    audit,
+                    _REASON,
+                    _AUTHORITY,
+                    applied_at,
+                    commit,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO artifact_loss_items
+                   (operation_id,outbox_id,part_index,source_binding_hash,file_sha256,file_size)
+                   VALUES(?,?,?,?,?,?)""",
+                (
+                    operation_id,
+                    self.target.outbox_id,
+                    self.target.part_index,
+                    binding,
+                    part["file_sha256"],
+                    part["file_size"],
+                ),
+            )
+
+        self.assertEqual(ArtifactLossState(connection, StateError).ledger_head(), (1, commit))
+        inventory = inspect_artifact_recovery_inventory(
+            self._snapshot("injected-complete-chain.db"), self.spool
+        )
+
         self.assertFalse(inventory.ledger_valid)
         self.assertEqual(inventory.coverage, "incomplete")
         self.assertEqual(inventory.entries[0].availability, "unresolved_missing")
