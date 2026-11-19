@@ -25,6 +25,7 @@ def _wheel(
     git_sha: str,
     schema_max: int = 21,
     clean: bool = True,
+    explicit_artifact_loss_declaration: bool | None = True,
 ) -> Path:
     build_info = "\n".join(
         (
@@ -46,6 +47,13 @@ def _wheel(
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("hermes_codex_router/_build_info.py", build_info)
         archive.writestr("hermes_codex_router/schema_compatibility.py", compatibility)
+        if schema_max >= 59 and type(explicit_artifact_loss_declaration) is bool:
+            archive.writestr(
+                "hermes_codex_router/artifact_capabilities.py",
+                "EXPLICIT_ARTIFACT_LOSS_DECLARATION = "
+                + repr(explicit_artifact_loss_declaration)
+                + "\n",
+            )
         archive.writestr(
             f"agents_projects_hub-{version}.dist-info/METADATA",
             f"Metadata-Version: 2.4\nName: agents-projects-hub\nVersion: {version}\n",
@@ -183,6 +191,67 @@ class DeploymentManifestTests(unittest.TestCase):
             create_deployment_manifest(
                 self.base / "permissions.json",
                 active_artifact=self.active,
+                rollback_artifact=self.rollback,
+                configuration=self.config,
+                state_backup=self.backup,
+            )
+
+    def test_schema59_manifest_requires_true_active_and_false_rollback_capabilities(self) -> None:
+        active = _wheel(
+            self.base / "active-schema59.whl",
+            version="0.7.1",
+            git_sha="c" * 40,
+            schema_max=59,
+            explicit_artifact_loss_declaration=True,
+        )
+        unsafe_rollback = _wheel(
+            self.base / "unsafe-rollback-schema59.whl",
+            version="0.7.2",
+            git_sha="d" * 40,
+            schema_max=59,
+            explicit_artifact_loss_declaration=True,
+        )
+        with self.assertRaisesRegex(
+            DeploymentManifestError,
+            "rollback schema-59 artifact must refuse artifact-loss declarations",
+        ):
+            create_deployment_manifest(
+                self.base / "unsafe-schema59.json",
+                active_artifact=active,
+                rollback_artifact=unsafe_rollback,
+                configuration=self.config,
+                state_backup=self.backup,
+            )
+
+        safe_rollback = _wheel(
+            self.base / "safe-rollback-schema59.whl",
+            version="0.7.3",
+            git_sha="e" * 40,
+            schema_max=59,
+            explicit_artifact_loss_declaration=False,
+        )
+        created = create_deployment_manifest(
+            self.base / "safe-schema59.json",
+            active_artifact=active,
+            rollback_artifact=safe_rollback,
+            configuration=self.config,
+            state_backup=self.backup,
+        )
+        self.assertTrue(created.active_artifact.explicit_artifact_loss_declaration)
+        self.assertFalse(created.rollback_artifact.explicit_artifact_loss_declaration)
+
+    def test_schema59_wheel_cannot_omit_its_declaration_capability(self) -> None:
+        wheel = _wheel(
+            self.base / "missing-capability-schema59.whl",
+            version="0.7.1",
+            git_sha="f" * 40,
+            schema_max=59,
+            explicit_artifact_loss_declaration=None,
+        )
+        with self.assertRaisesRegex(DeploymentManifestError, "declaration capability is missing"):
+            create_deployment_manifest(
+                self.base / "missing-capability.json",
+                active_artifact=wheel,
                 rollback_artifact=self.rollback,
                 configuration=self.config,
                 state_backup=self.backup,

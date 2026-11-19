@@ -88,7 +88,19 @@ def check_schema(
     if new_schema > live:
         if rollback is None:
             raise Refused("forward migration requires --rollback-release")
+    if rollback is not None and (new_schema > live or new_schema >= 59):
         need(rollback.get("schema_max") == new_schema, "rollback release schema mismatch")
+    if new_schema >= 59:
+        need(rollback is not None, "schema-59 release requires --rollback-release")
+        need(
+            new.get("explicit_artifact_loss_declaration") is True,
+            "candidate schema-59 release must permit artifact-loss declarations",
+        )
+        if rollback is not None:
+            need(
+                rollback.get("explicit_artifact_loss_declaration") is False,
+                "rollback schema-59 release must refuse artifact-loss declarations",
+            )
 
 
 def _live_schema(installation: dict[str, Any]) -> int:
@@ -341,6 +353,11 @@ def verify_assets(directory: Path, tag: str) -> tuple[dict[str, Any], Path]:
     sha = info.get("git_sha")
     need(isinstance(sha, str) and _SHA.fullmatch(sha) is not None, "invalid release revision")
     need(type(info.get("schema_max")) is int and info["schema_max"] >= 0, "missing release schema")
+    if info["schema_max"] >= 59:
+        need(
+            type(info.get("explicit_artifact_loss_declaration")) is bool,
+            "missing schema-59 declaration capability",
+        )
     assets = info.get("artifacts")
     need(isinstance(assets, list) and len(assets) == len(expected) - 1, "invalid artifact list")
     seen = set()
@@ -847,7 +864,7 @@ def prepare_stage(
     rollback_info = None
     rollback_dir = None
     rollback_wheel = None
-    if candidate["schema_max"] > live and rollback_release:
+    if (candidate["schema_max"] > live or candidate["schema_max"] >= 59) and rollback_release:
         rollback_dir = download_release(installation, rollback_release, runner)
         rollback_info, rollback_wheel = verify_assets(rollback_dir, rollback_release)
     check_schema(previous, candidate, live, rollback_info)
@@ -903,8 +920,11 @@ def _prepare_runtime(
         pin = _runtime_command(root, "pin", runner)
         _runtime_command(root, "verify", runner, pin["sha256"])
         info = _json_command(runner, [str(root / "venv/bin/agents-projects-hub"), "release-info"])
+        identity_keys = ("git_sha", "clean_tree", "package_version") + (
+            ("explicit_artifact_loss_declaration",) if candidate.get("schema_max", 0) >= 59 else ()
+        )
         need(
-            all(info.get(k) == candidate[k] for k in ("git_sha", "clean_tree", "package_version")),
+            all(info.get(k) == candidate[k] for k in identity_keys),
             "existing runtime identity mismatch",
         )
         need(
@@ -942,8 +962,11 @@ def _prepare_runtime(
         for cache in root.rglob("__pycache__"):
             shutil.rmtree(cache)
         info = _json_command(runner, [str(root / "venv/bin/agents-projects-hub"), "release-info"])
+        identity_keys = ("git_sha", "clean_tree", "package_version") + (
+            ("explicit_artifact_loss_declaration",) if candidate.get("schema_max", 0) >= 59 else ()
+        )
         need(
-            all(info.get(k) == candidate[k] for k in ("git_sha", "clean_tree", "package_version")),
+            all(info.get(k) == candidate[k] for k in identity_keys),
             "built runtime identity mismatch",
         )
         for cache in root.rglob("__pycache__"):
@@ -956,6 +979,7 @@ def _prepare_runtime(
         "tree_sha256": pin["sha256"],
         "schema_max": candidate["schema_max"],
         "package_version": candidate["package_version"],
+        "explicit_artifact_loss_declaration": candidate.get("explicit_artifact_loss_declaration"),
     }
 
 
@@ -2080,6 +2104,11 @@ def apply_window(
             "plan must be in the ops directory",
         )
         plan = verify_saved_plan(plan_dir)
+        if plan["state_schema"] >= 59:
+            need(
+                "rollback_runtime" in plan and isinstance(plan.get("rollback_wheel"), str),
+                "schema-59 plan requires a bound rollback artifact",
+            )
         need(
             expected_digest is None
             or json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == expected_digest,
@@ -2214,6 +2243,7 @@ def apply_window(
             _effect(window, "backup", backup_state, fault)
 
             def create_manifest() -> None:
+                rollback_wheel = plan.get("rollback_wheel", plan["old_wheel"])
                 runner(
                     [
                         _runtime_cli(plan["new_runtime"]),
@@ -2223,7 +2253,7 @@ def apply_window(
                         "--active-artifact",
                         plan["new_wheel"],
                         "--rollback-artifact",
-                        plan.get("rollback_wheel", plan["old_wheel"]),
+                        rollback_wheel,
                         "--config",
                         installation["hub_config"],
                         "--backup",

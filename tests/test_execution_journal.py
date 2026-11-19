@@ -544,12 +544,16 @@ class ExecutionJournalTests(unittest.TestCase):
             base = Path(directory)
             artifacts = []
             package = Path(migrations_module.__file__).resolve().parent
-            for version, sha in (("0.7.0", "a" * 40), ("0.6.0", "b" * 40)):
+            for version, sha, declaration in (
+                ("0.7.0", "a" * 40, True),
+                ("0.6.0", "b" * 40, False),
+            ):
                 wheel = _wheel(
                     base / f"agents_projects_hub-{version}-py3-none-any.whl",
                     version=version,
                     git_sha=sha,
                     schema_max=LATEST_SCHEMA_VERSION,
+                    explicit_artifact_loss_declaration=declaration,
                 )
                 with zipfile.ZipFile(wheel, "a") as archive:
                     for name in (
@@ -569,6 +573,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_uncertain_decisions.py",
                         "schema_delivery_certainty.py",
                         "schema_delivery_receipts.py",
+                        "schema_artifact_losses.py",
                         "schema_artifact_retirements.py",
                         "schema_delivery_holds.py",
                         "schema_delivery_control.py",

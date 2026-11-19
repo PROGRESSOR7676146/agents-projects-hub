@@ -8,7 +8,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import artifact_capabilities, delivery_control_cli, delivery_hold_cli, installed_backup_cli
+from . import (
+    artifact_capabilities,
+    artifact_loss_cli,
+    delivery_control_cli,
+    delivery_hold_cli,
+    installed_backup_cli,
+)
 from .acceptance_actor import (
     AcceptanceActorError,
     load_acceptance_actor_config,
@@ -189,6 +195,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("--no-backup", action="store_true")
     delivery_hold_cli.add_parser(commands)
     delivery_control_cli.add_parser(commands)
+    artifact_loss_cli.add_parser(commands)
 
     backup = commands.add_parser("backup", help="create an SQLite-consistent state backup")
     backup.add_argument("state", type=Path)
@@ -680,6 +687,7 @@ def _release_info_command(args: argparse.Namespace) -> int:
             "remote_delivery_hold_recovery": artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY,
             "remote_uncertain_decision": artifact_capabilities.REMOTE_UNCERTAIN_DECISION,
             "receipt_bound_artifact_cleanup": artifact_capabilities.RECEIPT_BOUND_ARTIFACT_CLEANUP,
+            "explicit_artifact_loss_declaration": artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION,
         }
     )
     return 0 if CURRENT_RELEASE.verified else 1
@@ -897,6 +905,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "migrate": _migrate_command,
     "delivery-hold": delivery_hold_cli.run,
     "delivery-control": delivery_control_cli.run,
+    "artifact-loss": artifact_loss_cli.run,
     "backup": _backup_command,
     "monitor": _monitor_command,
     "telegram-commands": _telegram_commands_command,

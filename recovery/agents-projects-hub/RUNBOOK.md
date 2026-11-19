@@ -1,6 +1,6 @@
 # Agents Projects Hub recovery capsule
 
-Maintained for Hub `0.11.26`, state schema `58`. This capsule is a bounded local
+Maintained for Hub `0.11.27`, state schema `59`. This capsule is a bounded local
 recovery guide, not authority to weaken policy, retry ambiguous work, expose
 private state, or perform a rollout.
 
@@ -38,7 +38,7 @@ ACTIVE_BIN doctor HUB_CONFIG
 ```
 
 Acceptance requires `release-info.ok=true`, `clean_tree=true`, an exact Git
-SHA, schema `58/58`, and `deployment_revision.status=converged`. A live process
+SHA, schema `59/59`, and `deployment_revision.status=converged`. A live process
 or package version alone is not deployment identity.
 
 ## Classify before repair
@@ -54,9 +54,12 @@ or package version alone is not deployment identity.
 - Mixed/unknown revision: stop promotion and use immutable manifest/rollback
   gates; do not reinstall from a dirty checkout.
 - Schema/integrity failure: stop database users and preserve evidence before a
-  reviewed restore. After a separately authorized schema-58 migration,
+  reviewed restore. After a separately authorized schema-59 migration,
   ordinary runtime rollback retains that additive state schema; do not open
-  schema 58 with an older executable.
+  schema 59 with an older executable.
+- An explicit artifact-loss record is degraded owner evidence, not a delivery
+  receipt or an update-ready backup. Preserve it, but do not use it to satisfy
+  a recovery-required activation gate; a reappeared artifact is required again.
 - Retained Codex origins: never delete origin records or change a provider
   thread ID to bypass a resume failure. Inline/embedded execution is unsupported
   while any origin remains, including archived bindings. Schema compatibility

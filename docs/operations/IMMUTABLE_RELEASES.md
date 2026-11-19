@@ -23,6 +23,12 @@ support the backed-up schema and its own target schema. The rollback wheel must
 also support that target schema, because ordinary runtime rollback retains the
 migrated database and all accepted queue/outbox records.
 
+For schema 59 and later, release inspection also binds the artifact-fixed
+`EXPLICIT_ARTIFACT_LOSS_DECLARATION` capability. The active artifact must permit
+new declarations; the distinct rollback artifact must refuse them while still
+being able to read the ledger. A release pair that leaves declarations enabled
+in rollback is rejected before staging or activation.
+
 ## Create and verify
 
 For the service restart order, native Codex/tlive boundary and autonomous
@@ -52,10 +58,12 @@ location and exact intended candidate revision in the local release checklist.
    Check the checkout's package/schema declarations against the candidate
    artifact and the separately retained compatible rollback artifact. This
    operation must not import new code against live state or migrate a database.
-5. Verify the owning [recovery capsule](RECOVERY_CAPSULES.md) separately. When
-   the release changes its guide, topology, schema or recovery commands,
-   publish and verify a fresh capsule from the clean owner revision through
-   that procedure. Matching old hashes alone do not establish freshness.
+5. Verify the owning [recovery capsule](RECOVERY_CAPSULES.md) separately with
+   the exact clean source SHA, package version and target schema. When the
+   release changes its guide, topology, schema or recovery commands, publish
+   and verify a fresh capsule from the clean owner revision through that
+   procedure. Matching old hashes or freshness alone do not establish release
+   compatibility.
 
 Keep the before/after revisions, clean-tree check and capsule verification
 privately with the release evidence. An outdated or unverified recovery

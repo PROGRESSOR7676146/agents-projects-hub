@@ -200,11 +200,10 @@ class HermesPluginTests(unittest.TestCase):
             asyncio.run(self.handler("TEXT")(update, None))
 
     def test_an_inaccessible_state_still_stops_bare_commands(self) -> None:
-        locked = self.state.parent / "locked"
-        locked.mkdir()
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o700)
-        with mock.patch.dict("os.environ", {"HERMES_PROJECT_HUB_STATE": str(locked / "s.db")}):
+        # chmod(0) is not a portable way to create an unreadable directory:
+        # privileged and capability-bearing test environments can still read it.
+        # Exercise the actual fail-closed filesystem error instead.
+        with mock.patch.object(Path, "resolve", side_effect=PermissionError("state unavailable")):
             with self.assertRaises(_Stop):
                 self.command(OTHER_CHAT)
 
@@ -236,14 +235,10 @@ class HubChatLookupTests(unittest.TestCase):
             self.assertFalse(is_hub_chat(state, 12345))
 
     def test_an_inaccessible_state_path_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            locked = Path(directory) / "locked"
-            locked.mkdir()
-            locked.chmod(0)
-            try:
-                self.assertTrue(is_hub_chat(locked / "state.db", HUB_CHAT))
-            finally:
-                locked.chmod(0o700)
+        # See the matching handler test: permissions on a test directory are
+        # not a stable way to simulate an inaccessible state across runners.
+        with mock.patch.object(Path, "resolve", side_effect=PermissionError("state unavailable")):
+            self.assertTrue(is_hub_chat(Path("/unavailable/state.db"), HUB_CHAT))
 
 
 if __name__ == "__main__":

@@ -40,7 +40,17 @@ def main() -> None:
     if dirty and not args.allow_dirty:
         raise SystemExit("refusing to publish a recovery capsule from a dirty tree")
     revision = git("rev-parse", "HEAD")
-    capsule_id = json.loads((SOURCE / "manifest.json").read_text())["capsule_id"]
+    manifest = json.loads((SOURCE / "manifest.json").read_text())
+    capsule_id = manifest["capsule_id"]
+    maintained_release = manifest.get("maintained_release")
+    state_schema = manifest.get("state_schema")
+    if (
+        not isinstance(maintained_release, str)
+        or not maintained_release
+        or type(state_schema) is not int
+        or state_schema < 1
+    ):
+        raise SystemExit("recovery capsule manifest has invalid release identity")
     root = args.destination / capsule_id
     version = root / "versions" / revision
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -55,6 +65,8 @@ def main() -> None:
             "capsule_id": capsule_id,
             "source_git_sha": revision,
             "source_clean": not dirty,
+            "maintained_release": maintained_release,
+            "state_schema": state_schema,
             "published_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "files": {name: sha256(staged / name) for name in ("manifest.json", "RUNBOOK.md")},
         }

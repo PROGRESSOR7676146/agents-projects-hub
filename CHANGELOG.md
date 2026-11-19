@@ -5,6 +5,15 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.27] - 2026-11-19
+
+- Add schema 59's append-only, local-owner record for an irrecoverably missing
+  document artifact. It distinguishes a declared degraded loss from a delivery
+  receipt and never treats that degraded record as an update-ready backup.
+- Expose a release-fixed declaration capability so a distinct schema-59
+  rollback artifact can retain ledger reading and inventory while refusing any
+  new loss declaration.
+
 ## [0.11.26] - 2026-11-19
 
 - Publish the distinct schema-58-compatible runtime rollback artifact for
