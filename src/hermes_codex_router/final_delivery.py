@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
+from . import artifact_capabilities
 from .artifacts import artifact_spool_root, remove_spooled_artifact, verify_spooled_artifact
 from .codex_failure import owner_resolution_action
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
@@ -185,10 +186,10 @@ def deliver_final_part(
         )
         return FinalDeliveryResult(error=error)
     # Cleanup is outside transport/receipt catches: a fault cannot retry an accepted part.
-    # Documents remain spooled through a multipart prefix. Once the terminal
-    # receipt transaction commits retirement proof, every proved document may
-    # be cleaned without leaving a missing unproven file.
-    if delivered.status == "delivered":
+    # The schema-58 rollback artifact still commits exact retirement evidence,
+    # but retains spool files.  A candidate that enables cleanup may remove
+    # only documents whose complete outbox proof committed first.
+    if artifact_capabilities.RECEIPT_BOUND_ARTIFACT_CLEANUP and delivered.status == "delivered":
         for delivered_part in delivery.get_outbox_parts(delivered.outbox_id):
             if (
                 delivered_part.part_type != "document"

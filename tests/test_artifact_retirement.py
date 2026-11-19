@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
-from hermes_codex_router import migrations
+from hermes_codex_router import artifact_capabilities, migrations
 from hermes_codex_router.artifacts import artifact_spool_root, remove_spooled_artifact
 from hermes_codex_router.observed_delivery import archive_recovery_notice
 from hermes_codex_router.state import HubState
@@ -38,6 +38,16 @@ class ArtifactRetirementTests(unittest.TestCase):
         self.fixture = fixtures.TelegramOutboxSenderTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
+        # The candidate artifact enables cleanup; the distinct schema-58
+        # rollback artifact tested below retains every spool file instead.
+        cleanup_capability = patch.object(
+            artifact_capabilities,
+            "RECEIPT_BOUND_ARTIFACT_CLEANUP",
+            True,
+            create=True,
+        )
+        cleanup_capability.start()
+        self.addCleanup(cleanup_capability.stop)
 
     def _document_part(self, state: HubState, job_id: str) -> tuple[str, Path, bytes]:
         outbox = state.get_telegram_outbox_for_job(job_id)
@@ -127,6 +137,24 @@ class ArtifactRetirementTests(unittest.TestCase):
             self.assertTrue(retired["binding_hash"])
             self.assertTrue(retired["delivered_at"])
             self.assertTrue(retired["retired_at"])
+        finally:
+            sender.close()
+
+    def test_rollback_artifact_keeps_receipted_document_after_retirement(self) -> None:
+        """A schema-compatible rollback never deletes a retained spool file."""
+        job_id = self.fixture.ready_outbox("opencode", 815)
+        sender = self.fixture.sender(opencode=ReceiptBot(), antigravity=fixtures.Bot())
+        try:
+            outbox_id, path, _ = self._document_part(sender.state, job_id)
+            with (
+                patch.object(artifact_capabilities, "RECEIPT_BOUND_ARTIFACT_CLEANUP", False),
+                patch("hermes_codex_router.final_delivery.remove_spooled_artifact") as removed,
+            ):
+                self.assertTrue(sender._deliver_one("opencode"))
+            removed.assert_not_called()
+            self.assertTrue(path.exists())
+            self.assertEqual(sender.state.get_telegram_outbox(outbox_id).status, "delivered")
+            self.assertEqual(len(self._retirements(sender.state._connection, outbox_id)), 1)
         finally:
             sender.close()
 

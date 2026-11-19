@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router import artifact_capabilities
 from hermes_codex_router.cli import main
 from hermes_codex_router.hub_config import (
     AgentDefinition,
@@ -1450,8 +1451,10 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.assertEqual(len(bots["antigravity"].sent), 1)
             self.assertEqual(len(bots["antigravity"].documents), 0)
 
-            # Deliver document part
-            self.assertTrue(sender.run_cycle())
+            # The candidate performs receipt-bound cleanup; the distinct
+            # schema-compatible rollback artifact retains the same spool file.
+            with patch.object(artifact_capabilities, "RECEIPT_BOUND_ARTIFACT_CLEANUP", True):
+                self.assertTrue(sender.run_cycle())
             self.assertEqual(len(bots["antigravity"].documents), 1)
             self.assertEqual(bots["antigravity"].documents[0][2], artifact.path)
             self.assertFalse(artifact.path.exists())

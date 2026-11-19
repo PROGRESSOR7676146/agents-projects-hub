@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router import artifact_capabilities
 from hermes_codex_router.artifacts import artifact_spool_root
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState, StateError
@@ -61,10 +62,13 @@ class DeliveryCertaintyTests(unittest.TestCase):
                 sender = self.fixture.sender(opencode=bot, antigravity=fixtures.Bot())
                 try:
                     path = self.document_part(sender.state, job_id)
-                    with patch(
-                        "hermes_codex_router.final_delivery.remove_spooled_artifact",
-                        side_effect=OSError("cleanup"),
-                    ) as cleanup:
+                    with (
+                        patch.object(artifact_capabilities, "RECEIPT_BOUND_ARTIFACT_CLEANUP", True),
+                        patch(
+                            "hermes_codex_router.final_delivery.remove_spooled_artifact",
+                            side_effect=OSError("cleanup"),
+                        ) as cleanup,
+                    ):
                         sender._deliver_one("opencode")
                         self.assertEqual(cleanup.call_count, 0 if unknown else 1)
                     outbox = sender.state.get_telegram_outbox_for_job(job_id)
@@ -85,9 +89,12 @@ class DeliveryCertaintyTests(unittest.TestCase):
             HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         ) as state:
             self.document_part(state, job_id)
-            with patch(
-                "hermes_codex_router.final_delivery.remove_spooled_artifact",
-                side_effect=OSError("cleanup"),
+            with (
+                patch.object(artifact_capabilities, "RECEIPT_BOUND_ARTIFACT_CLEANUP", True),
+                patch(
+                    "hermes_codex_router.final_delivery.remove_spooled_artifact",
+                    side_effect=OSError("cleanup"),
+                ),
             ):
                 self.assertTrue(service._deliver_embedded_outbox(state, "opencode"))
             self.assertEqual(state.get_telegram_outbox_for_job(job_id).status, "delivered")
