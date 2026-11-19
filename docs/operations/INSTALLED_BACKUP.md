@@ -24,6 +24,12 @@ It is not an encrypted application recovery set or a complete externally verifie
 archive. Each database is independently consistent; no cross-database transaction
 or filesystem-spool consistency is claimed.
 
+Schema 58 may retain a receipt-bound document-retirement row after Hub has
+removed a spool file. It is not a filesystem snapshot and does not make an
+uncaptured spool root recoverable. A foreign backup consumer must use its own
+reviewed compatibility adapter to validate that row against immutable Hub send
+evidence; legacy or incomplete receipt history remains a blocker.
+
 ## Private installation record
 
 The owning install procedure supplies a canonical regular mode-0600 JSON file

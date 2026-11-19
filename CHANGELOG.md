@@ -5,6 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.25] - 2026-11-19
+
+- Add schema 58's append-only, receipt-bound document-artifact retirement
+  ledger. It preserves exact terminal v1 delivery evidence after Hub removes
+  its private spool copy; legacy, incomplete, and unknown delivery remain
+  conservative blockers.
+
 ## [0.11.24] - 2026-11-18
 
 - Fewer dropped Claude turns: a message starting with `/` sent during a running
