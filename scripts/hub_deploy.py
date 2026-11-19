@@ -89,6 +89,16 @@ def check_schema(
         if rollback is None:
             raise Refused("forward migration requires --rollback-release")
         need(rollback.get("schema_max") == new_schema, "rollback release schema mismatch")
+    if new_schema >= 59:
+        need(
+            new.get("explicit_artifact_loss_declaration") is True,
+            "candidate schema-59 release must permit artifact-loss declarations",
+        )
+        if rollback is not None:
+            need(
+                rollback.get("explicit_artifact_loss_declaration") is False,
+                "rollback schema-59 release must refuse artifact-loss declarations",
+            )
 
 
 def _live_schema(installation: dict[str, Any]) -> int:
@@ -341,6 +351,11 @@ def verify_assets(directory: Path, tag: str) -> tuple[dict[str, Any], Path]:
     sha = info.get("git_sha")
     need(isinstance(sha, str) and _SHA.fullmatch(sha) is not None, "invalid release revision")
     need(type(info.get("schema_max")) is int and info["schema_max"] >= 0, "missing release schema")
+    if info["schema_max"] >= 59:
+        need(
+            type(info.get("explicit_artifact_loss_declaration")) is bool,
+            "missing schema-59 declaration capability",
+        )
     assets = info.get("artifacts")
     need(isinstance(assets, list) and len(assets) == len(expected) - 1, "invalid artifact list")
     seen = set()
@@ -903,8 +918,11 @@ def _prepare_runtime(
         pin = _runtime_command(root, "pin", runner)
         _runtime_command(root, "verify", runner, pin["sha256"])
         info = _json_command(runner, [str(root / "venv/bin/agents-projects-hub"), "release-info"])
+        identity_keys = ("git_sha", "clean_tree", "package_version") + (
+            ("explicit_artifact_loss_declaration",) if candidate.get("schema_max", 0) >= 59 else ()
+        )
         need(
-            all(info.get(k) == candidate[k] for k in ("git_sha", "clean_tree", "package_version")),
+            all(info.get(k) == candidate[k] for k in identity_keys),
             "existing runtime identity mismatch",
         )
         need(
@@ -942,8 +960,11 @@ def _prepare_runtime(
         for cache in root.rglob("__pycache__"):
             shutil.rmtree(cache)
         info = _json_command(runner, [str(root / "venv/bin/agents-projects-hub"), "release-info"])
+        identity_keys = ("git_sha", "clean_tree", "package_version") + (
+            ("explicit_artifact_loss_declaration",) if candidate.get("schema_max", 0) >= 59 else ()
+        )
         need(
-            all(info.get(k) == candidate[k] for k in ("git_sha", "clean_tree", "package_version")),
+            all(info.get(k) == candidate[k] for k in identity_keys),
             "built runtime identity mismatch",
         )
         for cache in root.rglob("__pycache__"):
@@ -956,6 +977,7 @@ def _prepare_runtime(
         "tree_sha256": pin["sha256"],
         "schema_max": candidate["schema_max"],
         "package_version": candidate["package_version"],
+        "explicit_artifact_loss_declaration": candidate.get("explicit_artifact_loss_declaration"),
     }
 
 

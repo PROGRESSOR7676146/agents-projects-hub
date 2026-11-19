@@ -275,6 +275,16 @@ class ArtifactLossState:
 
     def ledger_head(self) -> tuple[int, str]:
         """Return and validate the full append-only chain on the current connection."""
+        if (
+            self.db.execute(
+                """SELECT 1 FROM artifact_loss_items item
+                   LEFT JOIN artifact_loss_operations operation
+                     ON operation.operation_id=item.operation_id
+                   WHERE operation.operation_id IS NULL LIMIT 1"""
+            ).fetchone()
+            is not None
+        ):
+            raise self.error("artifact loss ledger has an orphaned item")
         previous = _GENESIS
         sequence = 0
         rows = self.db.execute(

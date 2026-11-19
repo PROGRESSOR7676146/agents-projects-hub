@@ -33,6 +33,7 @@ class ArtifactDescriptor:
     clean_tree: bool
     schema_min: int
     schema_max: int
+    explicit_artifact_loss_declaration: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +115,13 @@ def inspect_wheel(path: Path) -> ArtifactDescriptor:
                 archive.read("hermes_codex_router/schema_compatibility.py").decode("utf-8"),
                 names={"MIN_SUPPORTED_SCHEMA_VERSION", "MAX_SUPPORTED_SCHEMA_VERSION"},
             )
+            capability_source: str | None
+            try:
+                capability_source = archive.read(
+                    "hermes_codex_router/artifact_capabilities.py"
+                ).decode("utf-8")
+            except KeyError:
+                capability_source = None
             metadata_names = [
                 name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
             ]
@@ -159,6 +167,16 @@ def inspect_wheel(path: Path) -> ArtifactDescriptor:
         or schema_max < schema_min
     ):
         raise DeploymentManifestError("artifact schema compatibility range is invalid")
+    explicit_artifact_loss_declaration: bool | None = None
+    if schema_max >= 59:
+        if capability_source is None:
+            raise DeploymentManifestError("schema-59 artifact declaration capability is missing")
+        capability = _literal_assignments(
+            capability_source, names={"EXPLICIT_ARTIFACT_LOSS_DECLARATION"}
+        )["EXPLICIT_ARTIFACT_LOSS_DECLARATION"]
+        if type(capability) is not bool:
+            raise DeploymentManifestError("artifact declaration capability is invalid")
+        explicit_artifact_loss_declaration = capability
     return ArtifactDescriptor(
         str(artifact),
         _digest(artifact),
@@ -168,6 +186,7 @@ def inspect_wheel(path: Path) -> ArtifactDescriptor:
         clean_tree,
         schema_min,
         schema_max,
+        explicit_artifact_loss_declaration,
     )
 
 
@@ -209,6 +228,15 @@ def _validate_compatibility(manifest: DeploymentManifest) -> None:
         raise DeploymentManifestError("active artifact cannot open its target schema")
     if not _supports(rollback, target_schema):
         raise DeploymentManifestError("rollback artifact cannot open the target schema")
+    if target_schema >= 59:
+        if active.explicit_artifact_loss_declaration is not True:
+            raise DeploymentManifestError(
+                "active schema-59 artifact must permit artifact-loss declarations"
+            )
+        if rollback.explicit_artifact_loss_declaration is not False:
+            raise DeploymentManifestError(
+                "rollback schema-59 artifact must refuse artifact-loss declarations"
+            )
 
 
 def create_deployment_manifest(
@@ -263,25 +291,31 @@ def _exact_keys(value: dict[str, Any], expected: set[str], *, label: str) -> Non
 def _parse_artifact(value: object, *, label: str) -> ArtifactDescriptor:
     if not isinstance(value, dict):
         raise DeploymentManifestError(f"{label} must be an object")
-    _exact_keys(
-        value,
-        {
-            "path",
-            "sha256",
-            "package_version",
-            "git_sha",
-            "built_at",
-            "clean_tree",
-            "schema_min",
-            "schema_max",
-        },
-        label=label,
-    )
+    required = {
+        "path",
+        "sha256",
+        "package_version",
+        "git_sha",
+        "built_at",
+        "clean_tree",
+        "schema_min",
+        "schema_max",
+    }
+    optional = "explicit_artifact_loss_declaration"
+    if set(value) not in (required, required | {optional}):
+        raise DeploymentManifestError(f"{label} fields are invalid")
+    fields = dict(value)
+    fields.setdefault(optional, None)
     try:
-        descriptor = ArtifactDescriptor(**value)
+        descriptor = ArtifactDescriptor(**fields)
     except TypeError as exc:
         raise DeploymentManifestError(f"{label} fields are invalid") from exc
-    if not isinstance(descriptor.path, str) or not isinstance(descriptor.sha256, str):
+    if (
+        not isinstance(descriptor.path, str)
+        or not isinstance(descriptor.sha256, str)
+        or descriptor.explicit_artifact_loss_declaration is not None
+        and type(descriptor.explicit_artifact_loss_declaration) is not bool
+    ):
         raise DeploymentManifestError(f"{label} fields are invalid")
     return descriptor
 

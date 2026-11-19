@@ -141,6 +141,30 @@ class EvidenceTests(unittest.TestCase):
             ):
                 hub_deploy.check_schema({"schema_max": old}, {"schema_max": new}, live, rollback)
 
+    def test_schema59_rollback_release_cannot_keep_loss_declaration_enabled(self):
+        previous = {"schema_max": 58}
+        candidate = {"schema_max": 59, "explicit_artifact_loss_declaration": True}
+        with self.assertRaisesRegex(hub_deploy.Refused, "rollback schema-59 release"):
+            hub_deploy.check_schema(
+                previous,
+                candidate,
+                58,
+                {"schema_max": 59, "explicit_artifact_loss_declaration": True},
+            )
+        hub_deploy.check_schema(
+            previous,
+            candidate,
+            58,
+            {"schema_max": 59, "explicit_artifact_loss_declaration": False},
+        )
+        with self.assertRaisesRegex(hub_deploy.Refused, "candidate schema-59 release"):
+            hub_deploy.check_schema(
+                previous,
+                {"schema_max": 59, "explicit_artifact_loss_declaration": False},
+                58,
+                {"schema_max": 59, "explicit_artifact_loss_declaration": False},
+            )
+
     def test_plan_digest_detects_any_change(self):
         plan = {"schema_version": 1, "files": [{"before": "a", "after": "b"}]}
         bound = hub_deploy.bind_plan(plan)

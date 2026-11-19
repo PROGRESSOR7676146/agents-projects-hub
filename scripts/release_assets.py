@@ -84,6 +84,7 @@ def seal_assets(root: Path, output: Path, revision: str) -> dict[str, Any]:
         "built_at": descriptor.built_at,
         "schema_min": descriptor.schema_min,
         "schema_max": descriptor.schema_max,
+        "explicit_artifact_loss_declaration": descriptor.explicit_artifact_loss_declaration,
         "artifacts": assets,
     }
     (output / "release-info.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -152,7 +153,16 @@ def main() -> None:
     report = build_assets(ROOT, args.output)
     print(
         json.dumps(
-            {key: report[key] for key in ("package_version", "git_sha", "clean_tree", "schema_max")}
+            {
+                key: report[key]
+                for key in (
+                    "package_version",
+                    "git_sha",
+                    "clean_tree",
+                    "schema_max",
+                    "explicit_artifact_loss_declaration",
+                )
+            }
         )
     )
 

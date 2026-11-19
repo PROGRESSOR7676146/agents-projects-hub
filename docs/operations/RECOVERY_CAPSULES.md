@@ -25,6 +25,19 @@ Stop on a missing, stale, dirty, tampered, or escaping generation. The capsule
 is procedure only—not an approval, executable recovery artifact, secret store,
 state backup, or evidence of live acceptance.
 
+The generic command proves only the published capsule's own hashes and
+freshness. Before using it as evidence for a particular release or schema,
+bind all three expected identities; partial identity checks fail closed:
+
+```bash
+scripts/verify-recovery-capsule.py agents-projects-hub \
+  --expected-source-git-sha EXACT_CLEAN_GIT_SHA \
+  --expected-package-version X.Y.Z \
+  --expected-state-schema N
+```
+
+That still proves neither an installed runtime nor live acceptance.
+
 The owner must republish within 30 days and whenever service topology,
 release/schema, restore commands, or safety boundaries change. Installer
 publication plus peer-side daily auditing provides the normal exchange loop;

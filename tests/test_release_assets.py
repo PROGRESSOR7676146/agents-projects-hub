@@ -30,7 +30,8 @@ class ReleaseAssetsTests(unittest.TestCase):
             self.output / "agents_projects_hub-0.7.1-py3-none-any.whl",
             version="0.7.1",
             git_sha="a" * 40,
-            schema_max=41,
+            schema_max=59,
+            explicit_artifact_loss_declaration=True,
         )
         self.archive = self.output / "agents_projects_hub-0.7.1.tar.gz"
         import tarfile
@@ -44,7 +45,8 @@ class ReleaseAssetsTests(unittest.TestCase):
     def test_sealed_assets_bind_clean_wheel_and_exact_locks_without_local_paths(self) -> None:
         report = seal_assets(self.root, self.output, "a" * 40)
         self.assertEqual(report["git_sha"], "a" * 40)
-        self.assertEqual(report["schema_max"], 41)
+        self.assertEqual(report["schema_max"], 59)
+        self.assertTrue(report["explicit_artifact_loss_declaration"])
         self.assertNotIn(str(self.base), json.dumps(report))
         for name in ("requirements-release.lock", "requirements-build.lock", "uv.lock"):
             self.assertEqual((self.output / name).read_bytes(), (self.root / name).read_bytes())

@@ -20,7 +20,7 @@ from typing import Literal
 
 from .artifact_loss_state import ArtifactLossState
 from .delivery_receipts import DeliveryReceipts
-from .schema_artifact_losses import ARTIFACT_LOSS_TABLES, ARTIFACT_LOSS_TRIGGER_NAMES
+from .schema_artifact_losses import ARTIFACT_LOSS_TABLES, has_complete_artifact_loss_schema
 
 _HEX = re.compile(r"[0-9a-f]{64}")
 _GENESIS = "0" * 64
@@ -300,8 +300,10 @@ def _explicit_loss(
     if not _valid_sha(binding):
         return False
     item = connection.execute(
-        """SELECT source_binding_hash,file_sha256,file_size FROM artifact_loss_items
-           WHERE outbox_id=? AND part_index=?""",
+        """SELECT item.source_binding_hash,item.file_sha256,item.file_size
+           FROM artifact_loss_items item
+           JOIN artifact_loss_operations operation USING(operation_id)
+           WHERE item.outbox_id=? AND item.part_index=?""",
         (row["outbox_id"], row["part_index"]),
     ).fetchone()
     return item is not None and (
@@ -318,16 +320,7 @@ def _ledger_status(
         if any(_table_exists(connection, table) for table in ARTIFACT_LOSS_TABLES):
             return None, None, False
         return None, None, True
-    if not all(_table_exists(connection, table) for table in ARTIFACT_LOSS_TABLES):
-        return None, None, False
-    triggers = {
-        row[0]
-        for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (?,?,?,?,?,?,?)",
-            tuple(ARTIFACT_LOSS_TRIGGER_NAMES),
-        )
-    }
-    if triggers != ARTIFACT_LOSS_TRIGGER_NAMES:
+    if not has_complete_artifact_loss_schema(connection):
         return None, None, False
     try:
         sequence, head = ArtifactLossState(connection, ArtifactRecoveryInventoryError).ledger_head()
@@ -359,6 +352,11 @@ def inspect_artifact_recovery_inventory(
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA query_only=ON")
         connection.execute("BEGIN")
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            raise ArtifactRecoveryInventoryError(
+                "artifact recovery snapshot integrity check failed"
+            )
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if not _MIN_RECEIPT_SCHEMA <= schema_version <= _MAX_SCHEMA:
             raise ArtifactRecoveryInventoryError("artifact recovery schema is unsupported")

@@ -15,7 +15,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router import artifact_loss_cli, migrations
-from hermes_codex_router.artifact_loss_state import ArtifactLossPreview, ArtifactLossTarget
+from hermes_codex_router.artifact_loss_state import (
+    ArtifactLossPreview,
+    ArtifactLossState,
+    ArtifactLossTarget,
+)
 from hermes_codex_router.artifact_recovery_inventory import (
     ArtifactRecoveryInventoryError,
     inspect_artifact_recovery_inventory,
@@ -187,6 +191,21 @@ class ArtifactLossTests(unittest.TestCase):
         """A schema-compatible rollback may inspect history but cannot extend it."""
         record = self._declare()
         snapshot = self._snapshot("rollback-inventory.db")
+        other = self._append_missing_document_part()
+        preview = self.state.preview_artifact_loss(
+            (other,), spool_root=self.spool, recovery_audit_sha256="a" * 64
+        )
+        selection = self.root / "rollback-targets.json"
+        selection.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "targets": [{"outbox_id": other.outbox_id, "part_index": other.part_index}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        selection.chmod(0o600)
         with patch(
             "hermes_codex_router.artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION",
             False,
@@ -195,6 +214,48 @@ class ArtifactLossTests(unittest.TestCase):
                 self.state.preview_artifact_loss(
                     (self.target,), spool_root=self.spool, recovery_audit_sha256="a" * 64
                 )
+            with self.assertRaisesRegex(StateError, "does not permit artifact-loss declarations"):
+                self.state.declare_artifact_loss(
+                    (other,),
+                    spool_root=self.spool,
+                    recovery_audit_sha256="a" * 64,
+                    expected_snapshot=preview.snapshot,
+                    operation_id=preview.operation_id,
+                    acknowledge_irrecoverable_loss=True,
+                )
+            with self.assertRaisesRegex(StateError, "does not permit artifact-loss declarations"):
+                self.state.declare_artifact_loss(
+                    (self.target,),
+                    spool_root=self.spool,
+                    recovery_audit_sha256="a" * 64,
+                    expected_snapshot=record.snapshot,
+                    operation_id=record.operation_id,
+                    acknowledge_irrecoverable_loss=True,
+                )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    main(
+                        [
+                            "artifact-loss",
+                            "apply",
+                            str(self.state_path),
+                            "--spool-root",
+                            str(self.spool),
+                            "--targets",
+                            str(selection),
+                            "--recovery-audit-sha256",
+                            "a" * 64,
+                            "--snapshot",
+                            preview.snapshot,
+                            "--operation-id",
+                            preview.operation_id,
+                            "--acknowledge-irrecoverable-loss",
+                        ]
+                    ),
+                    2,
+                )
+            self.assertIn("does not permit artifact-loss declarations", output.getvalue())
 
             inventory = inspect_artifact_recovery_inventory(snapshot, self.spool)
         self.assertEqual(inventory.coverage, "degraded_explicit_loss")
@@ -329,6 +390,158 @@ class ArtifactLossTests(unittest.TestCase):
                    WHERE outbox_id=? AND part_index=?""",
                 (self.target.outbox_id, self.target.part_index),
             )
+
+    def test_loss_ledger_freezes_all_binding_sources_but_allows_late_receipts(self) -> None:
+        self._declare()
+        connection = self.state._connection
+        job_id = connection.execute(
+            "SELECT job_id FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()[0]
+        topic_id = connection.execute(
+            "SELECT topic_id FROM provider_jobs WHERE job_id=?", (job_id,)
+        ).fetchone()[0]
+
+        for statement, params in (
+            (
+                "UPDATE telegram_outbox_parts SET telegram_html='changed' "
+                "WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            ),
+            (
+                "UPDATE telegram_outbox SET telegram_html='changed' WHERE outbox_id=?",
+                (self.target.outbox_id,),
+            ),
+            ("UPDATE provider_jobs SET agent_id='other' WHERE job_id=?", (job_id,)),
+            ("UPDATE topics SET project_id='other' WHERE topic_id=?", (topic_id,)),
+        ):
+            with (
+                self.subTest(statement=statement),
+                self.assertRaises(sqlite3.IntegrityError),
+                connection,
+            ):
+                connection.execute(statement, params)
+
+        connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            for statement, params in (
+                (
+                    "DELETE FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+                    (self.target.outbox_id, self.target.part_index),
+                ),
+                ("DELETE FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)),
+                ("DELETE FROM provider_jobs WHERE job_id=?", (job_id,)),
+                ("DELETE FROM topics WHERE topic_id=?", (topic_id,)),
+            ):
+                with (
+                    self.subTest(statement=statement),
+                    self.assertRaises(sqlite3.IntegrityError),
+                    connection,
+                ):
+                    connection.execute(statement, params)
+        finally:
+            connection.execute("PRAGMA foreign_keys=ON")
+
+        with connection:
+            connection.execute(
+                """UPDATE telegram_outbox_parts SET telegram_message_id=?,delivered_at=?,
+                   receipt_validation_version=1 WHERE outbox_id=? AND part_index=?""",
+                (900, "2026-11-19T00:00:00+00:00", self.target.outbox_id, self.target.part_index),
+            )
+            connection.execute(
+                "UPDATE telegram_outbox SET status='delivered',delivered_at=? WHERE outbox_id=?",
+                ("2026-11-19T00:00:00+00:00", self.target.outbox_id),
+            )
+
+        part = connection.execute(
+            "SELECT * FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+            (self.target.outbox_id, self.target.part_index),
+        ).fetchone()
+        outbox = connection.execute(
+            "SELECT * FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+        ).fetchone()
+        assert part is not None and outbox is not None
+        connection.execute("DROP TRIGGER artifact_loss_source_part_no_delete")
+        with connection:
+            connection.execute(
+                "DELETE FROM telegram_outbox_parts WHERE outbox_id=? AND part_index=?",
+                (self.target.outbox_id, self.target.part_index),
+            )
+        part_columns = tuple(part.keys())
+        with self.assertRaises(sqlite3.IntegrityError), connection:
+            connection.execute(
+                "INSERT INTO telegram_outbox_parts ("
+                + ",".join(part_columns)
+                + ") VALUES ("
+                + ",".join("?" for _ in part_columns)
+                + ")",
+                tuple(part[column] for column in part_columns),
+            )
+
+        connection.execute("DROP TRIGGER artifact_loss_source_outbox_no_delete")
+        with connection:
+            connection.execute(
+                "DELETE FROM telegram_outbox WHERE outbox_id=?", (self.target.outbox_id,)
+            )
+        outbox_columns = tuple(outbox.keys())
+        with self.assertRaises(sqlite3.IntegrityError), connection:
+            connection.execute(
+                "INSERT INTO telegram_outbox ("
+                + ",".join(outbox_columns)
+                + ") VALUES ("
+                + ",".join("?" for _ in outbox_columns)
+                + ")",
+                tuple(outbox[column] for column in outbox_columns),
+            )
+
+    def test_orphan_loss_item_is_not_explicit_loss_even_with_fk_disabled(self) -> None:
+        """A partial/bypassed write cannot turn a missing document into declared loss."""
+        connection = self.state._connection
+        part = connection.execute(
+            """SELECT file_sha256,file_size FROM telegram_outbox_parts
+               WHERE outbox_id=? AND part_index=?""",
+            (self.target.outbox_id, self.target.part_index),
+        ).fetchone()
+        assert part is not None
+        binding = DeliveryReceipts(connection, StateError)._binding(
+            "final", self.target.outbox_id, self.target.part_index
+        )
+        assert binding is not None
+        connection.execute("DROP TRIGGER artifact_loss_items_insert_guard")
+        # Preserve the historical trigger name while modelling a prior partial
+        # schema.  `ledger_head()` must reject the orphan itself, not trust a
+        # trigger's presence or SQLite foreign-key setting.
+        connection.execute(
+            """CREATE TRIGGER artifact_loss_items_insert_guard
+               BEFORE INSERT ON artifact_loss_items WHEN 0
+               BEGIN SELECT RAISE(ABORT, 'fixture'); END"""
+        )
+        connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            with connection:
+                connection.execute(
+                    """INSERT INTO artifact_loss_items
+                       (operation_id,outbox_id,part_index,source_binding_hash,file_sha256,file_size)
+                       VALUES(?,?,?,?,?,?)""",
+                    (
+                        str(uuid.uuid4()),
+                        self.target.outbox_id,
+                        self.target.part_index,
+                        binding,
+                        part["file_sha256"],
+                        part["file_size"],
+                    ),
+                )
+        finally:
+            connection.execute("PRAGMA foreign_keys=ON")
+
+        with self.assertRaisesRegex(StateError, "orphaned item"):
+            ArtifactLossState(connection, StateError).ledger_head()
+        inventory = inspect_artifact_recovery_inventory(
+            self._snapshot("orphan-loss-item.db"), self.spool
+        )
+        self.assertFalse(inventory.ledger_valid)
+        self.assertEqual(inventory.coverage, "incomplete")
+        self.assertEqual(inventory.entries[0].availability, "unresolved_missing")
 
     def test_reappeared_file_and_invalid_ledger_never_skip_a_required_artifact(self) -> None:
         record = self._declare()

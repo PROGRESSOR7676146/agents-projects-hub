@@ -196,7 +196,18 @@ def remove_artifact_losses_schema(connection: sqlite3.Connection) -> None:
         "artifact_loss_items_insert_guard",
         "artifact_loss_items_no_update",
         "artifact_loss_items_no_delete",
+        "artifact_loss_source_part_no_replace",
         "artifact_loss_source_part_identity_immutable",
+        "artifact_loss_source_outbox_no_replace",
+        "artifact_loss_source_outbox_binding_immutable",
+        "artifact_loss_source_job_no_replace",
+        "artifact_loss_source_job_binding_immutable",
+        "artifact_loss_source_topic_no_replace",
+        "artifact_loss_source_topic_binding_immutable",
+        "artifact_loss_source_part_no_delete",
+        "artifact_loss_source_outbox_no_delete",
+        "artifact_loss_source_job_no_delete",
+        "artifact_loss_source_topic_no_delete",
     ):
         connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     for table in tables:
