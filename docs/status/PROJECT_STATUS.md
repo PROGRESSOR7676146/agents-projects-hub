@@ -1,7 +1,7 @@
 # Project status
 
 Status: active alpha
-Release: v0.11.26
+Release: v0.11.27
 
 Source checkpoint: [0.8.0](../operations/RELEASE_0_8_0.md); earlier entries
 are historical. The PR/tag own combined source gates; live acceptance is separate.
@@ -24,7 +24,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
 | Final/progress send certainty (schema 43) | Included in 0.8 source gates | Pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
 | Receipt-bound document retirement (schema 58) | Published source artifacts v0.11.25 plus schema-compatible rollback v0.11.26: append-only proof for terminal v1 document delivery; rollback retains spool files | Pending compatible consumer and installation readback | [REQ-QUEUE-005](../product/DELIVERY_AND_RECEIPTS.md), [ADR 0108](../decisions/0108-receipt-bound-document-artifact-retirement.md) |
-| Explicit document-loss attestation (schema 59) | Local-only source candidate: immutable owner attestation and closed-snapshot inventory distinguish degraded loss from receipt proof | Pending exact-source review, compatible consumer, installation readback and recovery acceptance | [REQ-QUEUE-005](../product/DELIVERY_AND_RECEIPTS.md), [ADR 0109](../decisions/0109-explicit-artifact-loss-attestation.md) |
+| Explicit document-loss attestation (schema 59) | Source candidate v0.11.27: immutable owner attestation and closed-snapshot inventory distinguish degraded loss from receipt proof | Pending exact-source review, schema-compatible rollback, compatible consumer, installation readback and recovery acceptance | [REQ-QUEUE-005](../product/DELIVERY_AND_RECEIPTS.md), [ADR 0109](../decisions/0109-explicit-artifact-loss-attestation.md) |
 | Exact delivery control (schema 47) | Explicit consent and consumers included in 0.8 source gates | Activation pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0063](../decisions/0063-delivery-control-reconciliation.md) |
 | Queue snapshots and accepted Codex activity (schema 37) | Implemented slice; focused offline validation, final canonical evidence and required review pending | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | tlive card/server lifecycle | Source candidate | Pending | [ADR 0073](../decisions/0073-tlive-approval-evidence-and-server-custody.md) |
