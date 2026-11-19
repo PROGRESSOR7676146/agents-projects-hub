@@ -183,6 +183,23 @@ class ArtifactLossTests(unittest.TestCase):
         self.assertEqual(inventory.coverage, "degraded_explicit_loss")
         self.assertEqual(inventory.entries[0].availability, "explicit_loss")
 
+    def test_rollback_artifact_capability_refuses_new_loss_declarations(self) -> None:
+        """A schema-compatible rollback may inspect history but cannot extend it."""
+        record = self._declare()
+        snapshot = self._snapshot("rollback-inventory.db")
+        with patch(
+            "hermes_codex_router.artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION",
+            False,
+        ):
+            with self.assertRaisesRegex(StateError, "does not permit artifact-loss declarations"):
+                self.state.preview_artifact_loss(
+                    (self.target,), spool_root=self.spool, recovery_audit_sha256="a" * 64
+                )
+
+            inventory = inspect_artifact_recovery_inventory(snapshot, self.spool)
+        self.assertEqual(inventory.coverage, "degraded_explicit_loss")
+        self.assertEqual(inventory.ledger_sequence, record.sequence)
+
     def test_exact_retry_rejects_a_different_target_list(self) -> None:
         """An operation id is bound to its exact declared document set."""
         record = self._declare()

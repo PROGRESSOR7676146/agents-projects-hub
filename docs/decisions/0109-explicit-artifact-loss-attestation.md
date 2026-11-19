@@ -62,6 +62,8 @@ would be a separate trust-boundary decision.
   original receipt; concurrent previews serialize through the current head.
 - Schema 59 is additive.  Runtime rollback needs an artifact that reads schema
   59; restoring an old state database after newer work is not a rollback path.
+  Its fixed release capability retains the reader and inventory but refuses a
+  new loss declaration, so rollback cannot extend the owner-attested history.
 
 ## Verification and rollout
 

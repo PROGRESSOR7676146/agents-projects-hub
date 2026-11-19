@@ -687,6 +687,7 @@ def _release_info_command(args: argparse.Namespace) -> int:
             "remote_delivery_hold_recovery": artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY,
             "remote_uncertain_decision": artifact_capabilities.REMOTE_UNCERTAIN_DECISION,
             "receipt_bound_artifact_cleanup": artifact_capabilities.RECEIPT_BOUND_ARTIFACT_CLEANUP,
+            "explicit_artifact_loss_declaration": artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION,
         }
     )
     return 0 if CURRENT_RELEASE.verified else 1

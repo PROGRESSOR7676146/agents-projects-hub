@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from . import artifact_capabilities
 from .delivery_receipts import DeliveryReceipts
 
 _HEX = re.compile(r"[0-9a-f]{64}")
@@ -111,6 +112,10 @@ class ArtifactLossState:
     def _require_transaction(self) -> None:
         if not self.db.in_transaction:
             raise self.error("artifact loss operation requires a state-owned transaction")
+
+    def _require_declaration_capability(self) -> None:
+        if not artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION:
+            raise self.error("this release does not permit artifact-loss declarations")
 
     def _require_audit(self, digest: str) -> str:
         if not _valid_sha(digest):
@@ -336,6 +341,7 @@ class ArtifactLossState:
         operation_id: str | None = None,
     ) -> ArtifactLossPreview:
         self._require_transaction()
+        self._require_declaration_capability()
         audit = self._require_audit(recovery_audit_sha256)
         try:
             identifier = (
@@ -379,6 +385,7 @@ class ArtifactLossState:
         applied_at: str,
     ) -> ArtifactLossRecord:
         self._require_transaction()
+        self._require_declaration_capability()
         if acknowledge_irrecoverable_loss is not True:
             raise self.error("explicit acknowledgement of irrecoverable artifact loss is required")
         if not _valid_sha(expected_snapshot):

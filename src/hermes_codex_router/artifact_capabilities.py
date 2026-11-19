@@ -9,3 +9,8 @@ REMOTE_UNCERTAIN_DECISION = True
 # continuing to record exact retirement evidence.  It can therefore reopen a
 # migrated database without repeating the candidate's local cleanup behavior.
 RECEIPT_BOUND_ARTIFACT_CLEANUP = False
+
+# ADR 0109: the schema-59-compatible rollback artifact keeps the immutable
+# ledger reader but sets this false.  It can therefore recover an already
+# migrated state without extending the owner-attested loss history.
+EXPLICIT_ARTIFACT_LOSS_DECLARATION = True
