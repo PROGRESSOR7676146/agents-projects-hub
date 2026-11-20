@@ -132,15 +132,33 @@ Owner requests of 2026-11-18, taken up after the 0.11.24 deployment, in order:
    with one owner «Обновить» button ([ADR 0110](../decisions/0110-read-only-topic-status-panel.md),
    [REQ-UX-010](../product/IDENTITY_AND_INTERACTION.md)); later deliveries add
    pages, Stop, pin and the model selector.
-2. Unconfirmed-delivery notice: offer the owner a Telegram decision in plain
+2. Reliability at scale (owner, 2026-11-20), right after the first panel
+   delivery: repeat for Codex the reliability work recently done for Claude
+   (diagnose every recent indeterminate, interrupted or unconfirmed Codex turn
+   from durable evidence, fix the causes, keep diagnostic shapes), then run
+   large-scale automated testing of both providers (long turns, mid-turn input,
+   stop and restart races, delivery faults, concurrent topics) and fix what the
+   tests find. Findings and fixes follow the usual test-first and review rules;
+   live probes stay owner-invoked.
+3. Unconfirmed-delivery notice: offer the owner a Telegram decision in plain
    Russian instead of a local command, tracked in
    [owner-step defects](OWNER_STEP_DEFECTS.md).
-3. Fresh-session handoff: when a session is ready to close, the agent or the
+4. Fresh-session handoff: when a session is ready to close, the agent or the
    Hub opens a new session and passes the handoff into it, so long sessions do
    not keep re-reading their whole history. The Hub side stays model-free and
    owner-initiated, for example a «Новая сессия с handoff» button that resets the
    session and submits the bounded handoff as the first input. Needs an owning
    requirement, an ADR and an Astra consult before code.
+5. One verified update path for provider CLIs (owner, 2026-11-20), after the
+   reliability work: store each native CLI build once per digest outside the
+   sealed Hub release, keep a small atomic "active selection" record with the
+   previous choice, promote a candidate only after digest and model-free
+   protocol checks (plan/promote/rollback/status with receipts and exit codes),
+   declare CLI compatibility per Hub release, keep deployment independent of
+   caches, and let the owner's host update tool call this command as one step.
+   Supersedes the update part of ADR 0048 through a new ADR; the backup and
+   monitor read the selection record. Code may be written early; installation
+   waits for a verified host backup.
 
 ### Fixed progress checkpoints for this goal
 
