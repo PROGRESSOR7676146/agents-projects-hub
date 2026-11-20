@@ -88,11 +88,12 @@ class TopicPanelStore:
             instance = 1 if row is None else int(row["instance"]) + 1
             self._connection.execute(
                 """INSERT INTO topic_panels(topic_id,chat_id,thread_id,instance,enabled,
-                       message_id,confirmed_digest,confirmed_at,next_due_at,
-                       refresh_requested_at,unavailable_reason,updated_at)
-                   VALUES(?,?,?,?,1,NULL,NULL,NULL,?,NULL,NULL,?)
+                       message_id,confirmed_digest,confirmed_at,confirmed_operation_id,
+                       next_due_at,refresh_requested_at,unavailable_reason,updated_at)
+                   VALUES(?,?,?,?,1,NULL,NULL,NULL,NULL,?,NULL,NULL,?)
                    ON CONFLICT(topic_id) DO UPDATE SET instance=excluded.instance,enabled=1,
                        message_id=NULL,confirmed_digest=NULL,confirmed_at=NULL,
+                       confirmed_operation_id=NULL,
                        next_due_at=excluded.next_due_at,refresh_requested_at=NULL,
                        unavailable_reason=NULL,updated_at=excluded.updated_at""",
                 (topic.topic_id, topic.chat_id, topic.thread_id, instance, at, at),
@@ -214,13 +215,27 @@ class TopicPanelStore:
         return cursor.rowcount == 1
 
     def postpone(self, panel: PanelRecord, *, next_due_at: datetime, now: datetime) -> None:
-        """Back off one instance after a local snapshot failure; no HTTP happened."""
+        """Back off after a local snapshot failure; a newer press stays due."""
         with self._state._immediate_transaction():
             self._connection.execute(
                 """UPDATE topic_panels SET next_due_at=?,updated_at=?
-                   WHERE topic_id=? AND instance=?""",
-                (panel_time(next_due_at), panel_time(now), panel.topic_id, panel.instance),
+                   WHERE topic_id=? AND instance=? AND refresh_requested_at IS ?""",
+                (
+                    panel_time(next_due_at),
+                    panel_time(now),
+                    panel.topic_id,
+                    panel.instance,
+                    panel.refresh_requested_at,
+                ),
             )
+
+    def paused(self, *, now: datetime) -> bool:
+        """Whether a bot-wide Telegram rate-limit pause still covers panel requests."""
+        row = self._connection.execute(
+            "SELECT 1 FROM topic_panel_pause WHERE singleton=1 AND paused_until>?",
+            (panel_time(now),),
+        ).fetchone()
+        return row is not None
 
     def begin(
         self,
@@ -300,13 +315,14 @@ class TopicPanelStore:
                 return False
             self._connection.execute(
                 f"""UPDATE topic_panels SET message_id=?,confirmed_digest=?,confirmed_at=?,
-                        {_SERVED_REFRESH},updated_at=?
+                        confirmed_operation_id=?,{_SERVED_REFRESH},updated_at=?
                     WHERE topic_id=? AND instance=? AND enabled=1
                       AND unavailable_reason IS NULL AND message_id IS ?""",
                 (
                     receipt_message_id,
                     operation.body_digest,
                     at,
+                    operation.operation_id,
                     operation.served_refresh,
                     panel_time(next_due_at),
                     operation.served_refresh,
@@ -325,12 +341,26 @@ class TopicPanelStore:
         error_code: str,
         now: datetime,
         retry_at: datetime | None,
+        pause_until: datetime | None = None,
     ) -> bool:
-        """Record a proven non-effect; retry later or stop this instance."""
+        """Record a proven non-effect; retry later or stop this instance.
+
+        ``pause_until`` records a bot-wide rate-limit pause in the same
+        transaction, so neither a restart nor a new press shortens it.
+        """
         at = panel_time(now)
         with self._state._immediate_transaction():
             if not self._settle(operation, "rejected", None, error_code, at):
                 return False
+            if pause_until is not None:
+                self._connection.execute(
+                    """INSERT INTO topic_panel_pause(singleton,paused_until,updated_at)
+                       VALUES(1,?,?)
+                       ON CONFLICT(singleton) DO UPDATE SET
+                           paused_until=MAX(paused_until,excluded.paused_until),
+                           updated_at=excluded.updated_at""",
+                    (panel_time(pause_until), at),
+                )
             if retry_at is None:
                 self._stop_instance(
                     operation.topic_id,
@@ -352,16 +382,6 @@ class TopicPanelStore:
                     ),
                 )
         return True
-
-    def defer_all(self, *, until: datetime, now: datetime) -> None:
-        """Keep a bot-wide rate-limit pause across sender restarts for every panel."""
-        at, deadline = panel_time(now), panel_time(until)
-        with self._state._immediate_transaction():
-            self._connection.execute(
-                """UPDATE topic_panels SET next_due_at=?,updated_at=?
-                   WHERE enabled=1 AND next_due_at<?""",
-                (deadline, at, deadline),
-            )
 
     def mark_unknown(self, operation: PanelOperation, *, error_code: str, now: datetime) -> bool:
         """The request may have applied: keep evidence and stop this instance."""
@@ -407,8 +427,11 @@ class TopicPanelStore:
                  AND operation_id NOT IN (
                      SELECT operation_id FROM topic_panel_operations
                      WHERE topic_id=? AND state IN ('confirmed','rejected')
-                     ORDER BY send_started_at DESC,operation_id DESC LIMIT ?)""",
-            (operation.topic_id, operation.topic_id, PANEL_SETTLED_RETENTION),
+                     ORDER BY send_started_at DESC,operation_id DESC LIMIT ?)
+                 AND operation_id NOT IN (
+                     SELECT confirmed_operation_id FROM topic_panels
+                     WHERE topic_id=? AND confirmed_operation_id IS NOT NULL)""",
+            (operation.topic_id, operation.topic_id, PANEL_SETTLED_RETENTION, operation.topic_id),
         )
         return True
 

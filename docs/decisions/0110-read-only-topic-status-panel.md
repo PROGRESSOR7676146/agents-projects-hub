@@ -91,15 +91,18 @@ Stages 2 and 3, design reviewed by GPT Astra (2026-11-20):
 - The sender commits each create or edit as `sending` before HTTP. A send whose
   lease expires becomes `unknown` and stops the instance until the next
   `/panel`; nothing is resent. Each unknown needs a new owner `/panel`, so
-  unknown evidence grows only with owner commands and is never deleted; at most
-  20 settled operations per topic are kept.
+  unknown evidence grows only with owner commands and is never deleted. At most
+  20 settled operations per topic are kept, plus the last confirmed version.
 - Checks run every 10 seconds while the topic has work and every minute when
   idle, at most one panel request per second overall. An unchanged body causes
   no request; the footer shows when the shown version was prepared.
 - «Обновить» is handled after authorization and callback deduplication. It
   makes the exact current panel due at once; a press while a request is pending
   adds nothing, and a newer press is never cleared by an older check.
-- "Message is not modified" confirms only the exact edit. 429 pauses all panel
-  requests for `retry_after`; 401, network and 5xx failures count as shared
+- `/panel` is served only by the central Hub ingress; a command addressed to
+  another bot keeps its previous routing.
+- "Message is not modified" confirms only the exact edit. 429 records a durable
+  pause for all panel requests, counted from the response; neither a restart
+  nor a new press shortens it. 401, network and 5xx failures count as shared
   transport faults; other 4xx rejections stop the instance without touching
   shared health.

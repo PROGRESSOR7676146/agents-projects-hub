@@ -381,7 +381,7 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         self.assertEqual(len(self.api.creates), 2)
         self.assertEqual(self.panel()["message_id"], 501)
 
-    def test_rate_limit_pause_covers_every_panel_and_survives_a_sender_restart(self) -> None:
+    def test_rate_limit_pause_survives_restart_new_panel_and_refresh(self) -> None:
         other = self.state.observe_topic(
             project_id="example-project",
             chat_id=CHAT,
@@ -391,8 +391,16 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         )
         self.store.open(self.topic, now=self.now)
         self.store.open(other, now=self.now)
+        self.assertTrue(self.cycle())
+        self.assertTrue(self.cycle())
+        shown = self.db.execute(
+            "SELECT message_id,instance FROM topic_panels WHERE topic_id=?", (other.topic_id,)
+        ).fetchone()
+        self.store.open(self.topic, now=self.now)
         self.api.errors.append(rejection(429, retry_after=30))
         self.assertTrue(self.cycle())
+        self.assertEqual(self.operations()[-1]["error_code"], "api_429")
+        self.assertEqual(self.api.requests, 3)
         clock = Clock()
         restarted = TopicPanelSender(
             self.state,
@@ -403,13 +411,64 @@ class TopicPanelLifecycleTests(unittest.TestCase):
             record_event=lambda *event: self.events.append(event),
             clock=clock,
         )
-        self.now += timedelta(seconds=20)
-        self.assertFalse(restarted.deliver_one(now=self.now))
-        self.assertEqual(self.api.requests, 1)
-        self.now += timedelta(seconds=15)
-        clock.value += 15
+        # Neither a restart, a new /panel nor a refresh shortens the pause.
+        self.now += timedelta(seconds=10)
+        self.store.open(self.topic, now=self.now)
+        self.assertEqual(
+            self.store.request_refresh(
+                chat_id=CHAT,
+                thread_id=8,
+                message_id=int(shown["message_id"]),
+                instance=int(shown["instance"]),
+                now=self.now,
+            ),
+            "accepted",
+        )
+        for _ in range(3):
+            self.now += timedelta(seconds=5)
+            clock.value += 5
+            self.assertFalse(restarted.deliver_one(now=self.now))
+        self.assertEqual(self.api.requests, 3)
+        self.now += timedelta(seconds=10)
+        clock.value += 10
         self.assertTrue(restarted.deliver_one(now=self.now))
-        self.assertEqual(len(self.api.creates), 2)
+        self.assertEqual(self.api.requests, 4)
+
+    def test_retention_never_prunes_the_last_confirmed_version(self) -> None:
+        self.open_and_create()
+        confirmed = self.operations()[0]["operation_id"]
+        for _ in range(PANEL_SETTLED_RETENTION + 5):
+            self.now += timedelta(seconds=1)
+            panel = self.store.due(now=self.now + timedelta(days=1))[0]
+            operation = self.store.begin(
+                panel,
+                payload_html="Fictional edit",
+                reply_markup={"inline_keyboard": []},
+                body_digest="a" * 64,
+                now=self.now,
+            )
+            assert operation is not None
+            self.store.reject(operation, error_code="not_sent", now=self.now, retry_at=self.now)
+        identities = [row["operation_id"] for row in self.operations()]
+        self.assertIn(confirmed, identities)
+        self.assertEqual(len(identities), PANEL_SETTLED_RETENTION + 1)
+        self.assertEqual(self.panel()["confirmed_operation_id"], confirmed)
+
+    def test_snapshot_backoff_keeps_a_newer_press_due(self) -> None:
+        message_id = self.open_and_create()
+        panel = self.store.due(now=self.now + timedelta(days=1))[0]
+        self.assertEqual(
+            self.store.request_refresh(
+                chat_id=CHAT,
+                thread_id=7,
+                message_id=message_id,
+                instance=panel.instance,
+                now=self.now,
+            ),
+            "accepted",
+        )
+        self.store.postpone(panel, next_due_at=self.now + timedelta(minutes=1), now=self.now)
+        self.assertEqual(self.panel()["next_due_at"], self.panel()["refresh_requested_at"])
 
     def test_permanent_rejection_stops_the_panel_without_touching_health(self) -> None:
         self.open_and_create()

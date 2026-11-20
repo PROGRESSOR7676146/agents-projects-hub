@@ -69,7 +69,6 @@ class TopicPanelSender:
         self._record_event = record_event
         self._clock = clock
         self._next_scan = 0.0
-        self._paused_until = 0.0
 
     def deliver_one(self, *, now: datetime | None = None) -> bool:
         """Return True after one panel HTTP attempt; never more than one."""
@@ -78,9 +77,11 @@ class TopicPanelSender:
         if recovered:
             self._record_event("warning", "topic_panel_send_unknown", f"lease_expired={recovered}")
         monotonic = self._clock()
-        if monotonic < self._paused_until or monotonic < self._next_scan:
+        if monotonic < self._next_scan:
             return False
         self._next_scan = monotonic + PANEL_SCAN_SECONDS
+        if self.store.paused(now=current):
+            return False
         for panel in self.store.due(now=current):
             try:
                 snapshot = self._snapshot(panel.topic_id, current)
@@ -127,6 +128,7 @@ class TopicPanelSender:
             self._connection.rollback()
 
     def _send(self, operation: PanelOperation, *, next_due: datetime, now: datetime) -> None:
+        started = self._clock()
         try:
             if operation.kind == "create":
                 message_id = self._api.send_html(
@@ -159,7 +161,9 @@ class TopicPanelSender:
                     )
                 message_id = target
         except TelegramError as error:
-            self._settle_error(operation, error, next_due=next_due, now=now)
+            # A server pause counts from the response, not from the request start.
+            received = now + timedelta(seconds=max(0.0, self._clock() - started))
+            self._settle_error(operation, error, next_due=next_due, now=now, received=received)
             return
         except Exception as error:
             survived("topic_panel_sender.send", error)
@@ -176,6 +180,7 @@ class TopicPanelSender:
         *,
         next_due: datetime,
         now: datetime,
+        received: datetime,
     ) -> None:
         status = error.status_code
         rejected = error.failure_class == "api_rejection" and status is not None
@@ -195,14 +200,10 @@ class TopicPanelSender:
             return
         if rejected and status == 429:
             delay = error.retry_after if error.retry_after else PANEL_DEFAULT_RETRY_AFTER
-            self._paused_until = self._clock() + delay
+            until = received + timedelta(seconds=delay)
             self.store.reject(
-                operation,
-                error_code="api_429",
-                now=now,
-                retry_at=now + timedelta(seconds=delay),
+                operation, error_code="api_429", now=now, retry_at=until, pause_until=until
             )
-            self.store.defer_all(until=now + timedelta(seconds=delay), now=now)
             self._transport_failure(error)
             return
         if rejected and status == 401:

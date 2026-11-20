@@ -1,7 +1,8 @@
 """Schema 60: read-only topic status panel state and send evidence (ADR 0110).
 
 ``topic_panels`` holds the current panel of a topic; ``topic_panel_operations``
-holds one immutable request per Telegram create/edit attempt and its outcome.
+holds one immutable request per Telegram create/edit attempt and its outcome;
+``topic_panel_pause`` keeps a bot-wide Telegram rate-limit pause for panels.
 Panel rows are UI state only: they never authorize provider, queue, delivery or
 stop effects. A settled operation never changes again, and an operation whose
 outcome is unknown is never deleted, so a late receipt cannot rewrite evidence.
@@ -9,7 +10,7 @@ outcome is unknown is never deleted, so a late receipt cannot rewrite evidence.
 
 from __future__ import annotations
 
-TOPIC_PANEL_TABLES = ("topic_panel_operations", "topic_panels")
+TOPIC_PANEL_TABLES = ("topic_panel_pause", "topic_panel_operations", "topic_panels")
 TOPIC_PANEL_TRIGGERS = (
     "topic_panel_operations_request_immutable",
     "topic_panel_operations_settled_immutable",
@@ -26,6 +27,8 @@ CREATE TABLE IF NOT EXISTS topic_panels (
     message_id INTEGER CHECK(message_id IS NULL OR message_id > 0),
     confirmed_digest TEXT CHECK(confirmed_digest IS NULL OR length(confirmed_digest)=64),
     confirmed_at TEXT,
+    -- The operation whose payload is the last confirmed version; never pruned.
+    confirmed_operation_id TEXT,
     next_due_at TEXT NOT NULL,
     refresh_requested_at TEXT,
     unavailable_reason TEXT CHECK(
@@ -65,6 +68,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS topic_panel_operations_open
     ON topic_panel_operations(topic_id) WHERE state='sending';
 CREATE INDEX IF NOT EXISTS topic_panel_operations_history
     ON topic_panel_operations(topic_id,send_started_at);
+CREATE TABLE IF NOT EXISTS topic_panel_pause (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    paused_until TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TRIGGER IF NOT EXISTS topic_panel_operations_request_immutable
 BEFORE UPDATE OF operation_id,topic_id,instance,kind,chat_id,thread_id,target_message_id,
     payload_html,reply_markup,body_digest,lease_token,lease_expires_at,send_started_at
