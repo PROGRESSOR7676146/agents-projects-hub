@@ -63,6 +63,7 @@ class TelegramError(RuntimeError):
         status_code: int | None = None,
         retry_after: int | None = None,
         private_chat_unavailable: bool = False,
+        message_not_modified: bool = False,
     ) -> None:
         super().__init__(message)
         self.operation = operation if operation in self._OPERATIONS else "unknown"
@@ -78,6 +79,12 @@ class TelegramError(RuntimeError):
             private_chat_unavailable is True
             and self.failure_class == "api_rejection"
             and self.status_code in (400, 403)
+        )
+        # A proven edit rejection: the message already shows exactly this request.
+        self.message_not_modified = (
+            message_not_modified is True
+            and self.failure_class == "api_rejection"
+            and self.status_code == 400
         )
         self.retry_after = (
             retry_after
@@ -173,6 +180,16 @@ def _private_chat_unavailable(document: object, status: int | None) -> bool:
     }
 
 
+def _message_not_modified(document: object, status: int | None) -> bool:
+    """Keep only a boolean from Telegram's exact unchanged-edit description."""
+    if not isinstance(document, dict) or status != 400:
+        return False
+    description = document.get("description")
+    return isinstance(description, str) and description.startswith(
+        "Bad Request: message is not modified"
+    )
+
+
 def _api_result(method: str, document: object) -> Any:
     if isinstance(document, dict) and document.get("ok") is True:
         return document.get("result")
@@ -184,6 +201,7 @@ def _api_result(method: str, document: object) -> Any:
         status_code=status,
         retry_after=_retry_after(document),
         private_chat_unavailable=_private_chat_unavailable(document, status),
+        message_not_modified=_message_not_modified(document, status),
     )
 
 
@@ -194,6 +212,7 @@ def _transport_error(
     status_code: int | None = None
     retry_after: int | None = None
     private_chat_unavailable = False
+    message_not_modified = False
     not_sent = (
         native_send_proof
         and isinstance(exc, urllib.error.URLError)
@@ -216,6 +235,9 @@ def _transport_error(
             else "api_http"
         )
         private_chat_unavailable = failure_class == "api_rejection" and _private_chat_unavailable(
+            document, status_code
+        )
+        message_not_modified = failure_class == "api_rejection" and _message_not_modified(
             document, status_code
         )
     elif isinstance(exc, urllib.error.URLError):
@@ -246,6 +268,7 @@ def _transport_error(
         status_code=status_code,
         retry_after=retry_after,
         private_chat_unavailable=private_chat_unavailable,
+        message_not_modified=message_not_modified,
     )
 
 

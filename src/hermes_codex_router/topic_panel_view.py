@@ -190,3 +190,27 @@ def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = No
 def panel_body_digest(body: str) -> str:
     """Return the SHA-256 hex digest of the UTF-8 rendered body."""
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+PANEL_REFRESH_PREFIX = "pn:r:"
+
+
+def render_panel_message(
+    body: str, *, prepared_at: datetime, timezone: ZoneInfo | None = None
+) -> str:
+    """Append when this changed version was prepared; it is outside the body digest."""
+    if prepared_at.tzinfo is None or prepared_at.utcoffset() is None:
+        raise ValueError("Panel timestamps must be timezone-aware")
+    local = prepared_at.astimezone(timezone if timezone is not None else ZoneInfo(PANEL_TIMEZONE))
+    return f"{body}\n\n<i>Последнее изменение: {local:%d.%m %H:%M}</i>"
+
+
+def panel_keyboard(instance: int) -> dict[str, object]:
+    """The single owner-only read-only control, bound to one panel instance."""
+    if instance < 1:
+        raise ValueError("panel instance must be positive")
+    return {
+        "inline_keyboard": [
+            [{"text": "Обновить", "callback_data": f"{PANEL_REFRESH_PREFIX}{instance}"}]
+        ]
+    }

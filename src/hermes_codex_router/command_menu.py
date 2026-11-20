@@ -25,6 +25,14 @@ GROUP_COMMANDS: tuple[tuple[str, str], ...] = (
     ("stop", "Emergency stop active work"),
 )
 
+PANEL_COMMAND: tuple[str, str] = ("panel", "Status panel for this topic")
+
+
+def group_commands(config: HubConfig) -> tuple[tuple[str, str], ...]:
+    """Project Hub menu; `panel` appears only while the topic panel is enabled."""
+    return GROUP_COMMANDS + ((PANEL_COMMAND,) if config.topic_panel else ())
+
+
 DIRECT_HUB_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "Open Hub controls"),
     ("projects", "List or create projects"),
@@ -96,7 +104,7 @@ def configure_public_commands(
         hub_matches = hub_matches and direct_matches
         for chat_id in project_chat_ids:
             scope = _scope("chat", chat_id=chat_id)
-            expected = _desired(GROUP_COMMANDS)
+            expected = _desired(group_commands(config))
             current = api.call("getMyCommands", scope=scope)
             scope_matches = current == expected
             if sync and not scope_matches:
@@ -164,7 +172,7 @@ def configure_public_commands(
         "ok": bool(identity_matches) and all(identity_matches) and not issues,
         "sync": sync,
         "commands": [item[0] for item in PUBLIC_COMMANDS],
-        "group_commands": [item[0] for item in GROUP_COMMANDS],
+        "group_commands": [item[0] for item in group_commands(config)],
         "bots": bots,
         "project_group_errors": [
             {"chat_id": item.chat_id, "error_code": item.error_code} for item in issues

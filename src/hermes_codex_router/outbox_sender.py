@@ -12,7 +12,7 @@ from typing import Any, Protocol, cast
 
 from .blocker_notice_sender import deliver_root_blocker_notice
 from .claude_activity import ClaudeActivityState
-from .command_menu import GROUP_COMMANDS
+from .command_menu import group_commands
 from .delivery_retry import delivery_retry_delay
 from .diagnostic_log import survived
 from .final_delivery import FinalDeliveryResult, deliver_final_part
@@ -26,6 +26,7 @@ from .state import HubState, StateError
 from .task_activity import TaskActivityState
 from .task_notice_sender import deliver_task_notice
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
+from .topic_panel_sender import TopicPanelSender, panel_agent_names
 
 
 class TelegramOutboxSenderError(RuntimeError):
@@ -162,6 +163,18 @@ class TelegramOutboxSender:
         self._chat_action_due: dict[tuple[str, int, int], float] = {}
         self._chat_action_failures: dict[tuple[str, int, int], tuple[str, str, int | None]] = {}
         self._final_deliveries_since_command_scope = 0
+        self.panels = (
+            TopicPanelSender(
+                self.state,
+                cast(Any, self.telegram_bots["hub"]),
+                agent_names=panel_agent_names(config.agents),
+                transport_success=self._record_transport_success,
+                transport_failure=self._record_transport_failure,
+                record_event=self._record_event,
+            )
+            if config.topic_panel
+            else None
+        )
         self._publish_health()
 
     def close(self) -> None:
@@ -309,7 +322,7 @@ class TelegramOutboxSender:
             expected = (
                 [
                     {"command": command, "description": description}
-                    for command, description in GROUP_COMMANDS
+                    for command, description in group_commands(self.config)
                 ]
                 if task.bot_identity == "hub"
                 else []
@@ -402,6 +415,8 @@ class TelegramOutboxSender:
                 return True
         if self.config.hub_bot is not None and self._deliver_connect_one():
             return True
+        if self.panels is not None and self.panels.deliver_one(now=now):
+            return True  # Low-priority status panel, after every mandatory delivery.
         # Final results and durable progress have priority over advisory chat actions.
         self._refresh_chat_actions()
         return False

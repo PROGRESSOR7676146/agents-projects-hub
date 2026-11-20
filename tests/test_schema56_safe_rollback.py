@@ -352,9 +352,9 @@ class Schema56SafeRollbackTests(unittest.TestCase):
 
         result = migrations.migrate_database(legacy)
 
-        self.assertEqual((result.previous_version, result.current_version), (55, 59))
+        self.assertEqual((result.previous_version, result.current_version), (55, 60))
         with closing(HubState.open_existing(legacy)) as reopened:
-            self.assertEqual(reopened.schema_version, 59)
+            self.assertEqual(reopened.schema_version, 60)
             self.assertEqual(
                 reopened.get_telegram_outbox(self.outbox.outbox_id).status,
                 "unknown",
@@ -364,12 +364,12 @@ class Schema56SafeRollbackTests(unittest.TestCase):
                 "outstanding",
             )
         with closing(HubState.open_existing(legacy)) as restarted:
-            self.assertEqual(restarted.schema_version, 59)
+            self.assertEqual(restarted.schema_version, 60)
 
-    def test_future_schema60_state_is_a_concrete_compatibility_blocker(self) -> None:
+    def test_future_schema61_state_is_a_concrete_compatibility_blocker(self) -> None:
         """A result-inspection schema increment needs its own compatible rollback."""
         with self.state._connection:
-            self.state._connection.execute("PRAGMA user_version = 60")
+            self.state._connection.execute("PRAGMA user_version = 61")
 
         with self.assertRaisesRegex(StateError, "state_schema_unsupported"):
             HubState.open_existing(self.hub.service.config.state_path)

@@ -176,7 +176,7 @@ Return is lease-only; other providers retain summaries pending acceptance.
 ### REQ-CMD-005
 
 Default: `/status /model /accounts /new /local /return /stop`.
-Group Hub: `/menu /connect /stop` (+ `/panel` when REQ-UX-010 is enabled; accepted, not implemented); provider scoped menus empty (no username-suffix
+Group Hub: `/menu /connect /stop` (+ `/panel` while REQ-UX-010 is enabled); provider scoped menus empty (no username-suffix
 duplicates). Provider DM: supported commands only. Hub private:
 `/start /projects /connect /cancel`. Legacy maintenance remains local, not mobile.
 Deterministic local synchronization checks all scopes.
