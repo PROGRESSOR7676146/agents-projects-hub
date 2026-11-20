@@ -1,7 +1,7 @@
 # Project status
 
 Status: active alpha
-Release: v0.11.27
+Release: v0.11.28
 
 Source checkpoint: [0.8.0](../operations/RELEASE_0_8_0.md); earlier entries
 are historical. The PR/tag own combined source gates; live acceptance is separate.
@@ -31,7 +31,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | Codex server start with historical uncertainty | Offline start/refusal coverage; uncertainty and fences retained | Pending installation and restart | [REQ-OPS-005](../product/PERSISTENCE_AND_RECOVERY.md), [start procedure](../operations/TLIVE_RELIABILITY.md) |
 | Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Telegram decision for uncertain Claude work (schema 57) | Implemented offline; `REMOTE_UNCERTAIN_DECISION` enabled from v0.11.23 (v0.11.22 ships it off as rollback) | Pending installation and Telegram acceptance of both buttons | [REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0107](../decisions/0107-telegram-decision-for-uncertain-claude-work.md) |
-| Topic status panel, read-only first delivery | Source implemented with schema 60 behind the default-off `topic_panel` flag: `/panel`, `/panel off`, owner «Обновить», low-priority sender edits with per-operation evidence | Pending release with a schema-60-compatible rollback, installation, owner enabling and live topic acceptance | [REQ-UX-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0110](../decisions/0110-read-only-topic-status-panel.md) |
+| Topic status panel, read-only first delivery | Source candidate v0.11.28, schema 60, behind the default-off `topic_panel` flag: `/panel`, `/panel off`, owner «Обновить», low-priority sender edits with per-operation evidence | Pending release with a schema-60-compatible rollback, installation, owner enabling and live topic acceptance | [REQ-UX-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0110](../decisions/0110-read-only-topic-status-panel.md) |
 | Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
 | Codex ingress-loss precautions (schema 52) | Live observer and existing maintenance integration under exact-source validation; native offline witness passed | Pending | [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0064](../decisions/0064-codex-control-loss.md) |
