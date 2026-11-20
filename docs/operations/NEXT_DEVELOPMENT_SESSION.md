@@ -128,7 +128,10 @@ Owner requests of 2026-11-18, taken up after the 0.11.24 deployment, in order:
    reasoning summaries and a separate silence ping; the panel is where the owner
    sees at a glance whether work is fine, whether there is recent activity and
    when to intervene. It ships default-off; enabling it and live acceptance
-   stay with the owner.
+   stay with the owner. First delivery, by owner choice on 2026-11-20: read-only
+   with one owner «Обновить» button ([ADR 0110](../decisions/0110-read-only-topic-status-panel.md),
+   [REQ-UX-010](../product/IDENTITY_AND_INTERACTION.md)); later deliveries add
+   pages, Stop, pin and the model selector.
 2. Unconfirmed-delivery notice: offer the owner a Telegram decision in plain
    Russian instead of a local command, tracked in
    [owner-step defects](OWNER_STEP_DEFECTS.md).

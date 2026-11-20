@@ -117,6 +117,32 @@ input; selected/pasted quotations are context, not Reply addressing.
   MUST remain deterministic.
 - **REQ-UX-008 (Accepted):** Hub owns actual Telegram effects and delivery confirmation; providers
   own meaning, execution and visible wording.
+- **REQ-UX-010 (Accepted, ADR 0110; default-off, not implemented):** With the Hub bot, external
+  queue/outbox and a local opt-in, a configured owner MAY open one status panel per registered
+  project topic with `/panel`; `/panel off` stops updates and a repeated `/panel` replaces it. Hub
+  edits that one message instead of sending status messages.
+  - The snapshot MUST use only durable Hub evidence, without model calls, transcripts or invented
+    progress: a headline by fixed priority (owner-needed durable blocker, stop requested, local
+    writer, executing or queued, idle), the job's agent and model, time since start, queue and held
+    counts, and the last observed event by kind with its time.
+  - Agent activity, interim delivery and process observation MUST stay distinct; process liveness
+    MUST NOT count as activity. Silence MAY be shown as an observation, never as a stop or by itself
+    as a reason to intervene; "needs owner" MUST come only from a durable blocker with a supported
+    action.
+  - The only control is an owner-only read-only «Обновить» callback bound to the exact Hub bot,
+    chat, topic, message and current panel instance; a stale or foreign press MUST change nothing
+    and say the panel is outdated. Panel commands and callbacks are handled before routing and MUST
+    NOT become prompts.
+  - Panel sends and edits MUST rank below every mandatory delivery and notice, happen only when the
+    displayed content changes, respect Telegram cooldowns and keep per-operation evidence. Unknown
+    creates or edits MUST NOT be retried automatically, and a late receipt MUST NOT revive a
+    replaced or disabled panel. An unknown edit may have applied: the last confirmed payload stays
+    separate and neither version is claimed as shown.
+  - Panel-only outcomes MUST NOT change jobs, queues, holds or provider health, or raise
+    provider-delivery overdue alerts; a genuine shared Telegram transport failure still follows the
+    existing sender-health rules.
+  - The panel is group-visible: it MUST show only allowed status fields, never prompts, tool
+    arguments, paths, raw errors or approval text.
 - **REQ-UX-009 (Implemented for Hub-owned durable queue ingress):** Every supported material MUST
   reach the selected project's exact root/session/turn as verified content, or both provider input
   and visible result MUST explain its absence.
