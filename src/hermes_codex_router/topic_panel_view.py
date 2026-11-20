@@ -52,6 +52,17 @@ class PanelSnapshot:
     last_result_at: datetime | None = None
 
 
+MAX_IDENTITY_CHARACTERS = 80
+
+
+def _one_line(value: str | None) -> str:
+    """Collapse untrusted identity text to one bounded, escaped line."""
+    if not value:
+        return ""
+    collapsed = " ".join(value.split())[:MAX_IDENTITY_CHARACTERS]
+    return html.escape(collapsed, quote=False)
+
+
 def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = None) -> str:
     """Render durable topic evidence as a bounded Telegram HTML body."""
     timestamps = (
@@ -83,11 +94,9 @@ def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = No
         "idle": "⚪ Нет активных задач",
     }
     headline = headlines[snapshot.headline]
-    if snapshot.headline in ("executing", "preparing") and snapshot.agent:
-        with_agent = f"{headline} · {html.escape(snapshot.agent, quote=False)}"
-        # A single oversized line cannot be shortened without cutting dynamic HTML.
-        if len(with_agent) <= MAX_PANEL_CHARACTERS:
-            headline = with_agent
+    agent = _one_line(snapshot.agent)
+    if agent and snapshot.headline not in ("idle", "local_writer"):
+        headline = f"{headline} · {agent}"
     lines = [headline]
 
     if snapshot.headline == "needs_owner":
@@ -102,13 +111,9 @@ def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = No
                 lines.append(reason_text[reason])
                 seen.add(reason)
 
-    if snapshot.model and snapshot.headline in (
-        "executing",
-        "preparing",
-        "needs_owner",
-        "stop_requested",
-    ):
-        lines.append(f"Модель: {html.escape(snapshot.model, quote=False)}")
+    model = _one_line(snapshot.model)
+    if model and snapshot.headline not in ("idle", "local_writer"):
+        lines.append(f"Модель: {model}")
 
     if snapshot.started_at is not None:
         lines.append(f"Запущено в {format_time(snapshot.started_at)}")

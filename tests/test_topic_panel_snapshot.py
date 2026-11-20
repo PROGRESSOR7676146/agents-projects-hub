@@ -100,6 +100,30 @@ class TopicPanelSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.activity_at, datetime.fromisoformat(seen))
         self.assertIn("Последнее событие: сообщение агента", render_panel_body(snapshot))
 
+    def test_queued_and_stopping_states_keep_job_identity(self) -> None:
+        self.enqueue()
+        snapshot = self.read()
+        self.assertEqual((snapshot.agent, snapshot.model), ("Claude", "example-model"))
+        self.assertIn("⏳ В очереди · Claude", render_panel_body(snapshot))
+        self.lease()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO provider_stop_requests(request_id,topic_id,chat_id,message_id,"
+                "target_agent_id,status,cancelled_queued_count,created_at) "
+                "VALUES(?,?,?,?,?,'pending',0,?)",
+                (
+                    str(uuid.uuid4()),
+                    self.topic.topic_id,
+                    self.topic.chat_id,
+                    98,
+                    "claude",
+                    self.now.isoformat(),
+                ),
+            )
+        body = render_panel_body(self.read())
+        self.assertIn("🟠 Остановка запрошена · Claude", body)
+        self.assertIn("Модель: example-model", body)
+
     def test_pending_hold_counts_separately_from_queue(self) -> None:
         cause_id, _ = self.execute()
         held = self.enqueue()
@@ -257,17 +281,16 @@ class TopicPanelSnapshotTests(unittest.TestCase):
         self.assertIsNone(snapshot.activity_at)
 
     def test_claude_permission_wait_requires_pending_unexpired_request(self) -> None:
-        job_id, _ = self.execute()
-        future = (self.now + timedelta(minutes=5)).isoformat()
-        expired = (self.now - timedelta(minutes=5)).isoformat()
+        job_id, token = self.execute()
+        # The permission journal stores expiry as integer epoch milliseconds.
+        future = int((self.now + timedelta(minutes=5)).timestamp() * 1000)
+        expired = int((self.now - timedelta(minutes=5)).timestamp() * 1000)
         with self.db:
             self.db.execute(
                 "INSERT INTO claude_permission_launches("
                 "launch_epoch,job_id,binding_digest,status,created_at) VALUES(?,?,?,'active',?)",
                 ("example-launch", job_id, "a" * 64, self.now.isoformat()),
             )
-            # SQLite accepts ISO text in this INTEGER-affinity column; the reader compares
-            # expires_at to an ISO timestamp rather than to an integer epoch.
             self.db.execute(
                 "INSERT INTO claude_permission_requests("
                 "request_nonce,launch_epoch,payload_digest,event_digest,expires_at,status) "
@@ -277,8 +300,27 @@ class TopicPanelSnapshotTests(unittest.TestCase):
         snapshot = self.read()
         self.assertEqual(snapshot.headline, "needs_owner")
         self.assertEqual(snapshot.owner_reasons, ("approval",))
-        self.assertEqual(snapshot.activity_kind, "approval")
+        # No durable request time exists: the wait is a reason, never an event time.
+        self.assertIsNone(snapshot.activity_kind)
         self.assertIsNone(snapshot.activity_at)
+        body = render_panel_body(snapshot)
+        self.assertIn("🔴 Нужно ваше решение · Claude", body)
+        self.assertIn("Модель: example-model", body)
+
+        # An earlier visible message keeps its own kind and time under the wait.
+        message_at = self.now - timedelta(minutes=7)
+        ExecutionJournal(self.state).prepare_claude_session(job_id, token, self.root)
+        with self.db:
+            self.db.execute(
+                "INSERT INTO provider_visible_items(job_id,item_id,phase,visible_text,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (job_id, "example-earlier", "commentary", "Example", message_at.isoformat()),
+            )
+        snapshot = self.read()
+        self.assertEqual((snapshot.activity_kind, snapshot.activity_at), ("message", message_at))
+        self.assertNotIn("ожидание разрешения", render_panel_body(snapshot))
+        with self.db:
+            self.db.execute("DELETE FROM provider_visible_items WHERE job_id=?", (job_id,))
 
         for status, expires_at in (("pending", expired), ("allow", future)):
             with self.subTest(status=status, expires_at=expires_at):

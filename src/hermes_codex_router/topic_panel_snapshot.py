@@ -62,15 +62,16 @@ def _activity(
                JOIN claude_permission_launches launch USING(launch_epoch)
                WHERE launch.job_id=? AND request.status='pending' AND request.expires_at>?
                LIMIT 1""",
-            (job_id, now.isoformat()),
+            # The permission journal stores expiry as integer epoch milliseconds.
+            (job_id, int(now.timestamp() * 1000)),
         ).fetchone()
         is not None
     )
     visible = latest_claude_visible(connection, job_id)
     visible_at = _time(visible[1]) if visible is not None else None
-    if waiting:
-        return "approval", visible_at, True
-    return ("message" if visible_at is not None else None), visible_at, False
+    # A Claude permission request has no durable creation time: the wait is an
+    # owner reason only and never relabels the last visible message's time.
+    return ("message" if visible_at is not None else None), visible_at, waiting
 
 
 def read_panel_snapshot(
@@ -113,9 +114,22 @@ def read_panel_snapshot(
     agent = model = None
     started_at = activity_at = interim_at = None
     kind: ActivityKind | None = None
+    identity = (
+        job
+        if job is not None
+        else connection.execute(
+            """SELECT agent_id,model FROM provider_jobs j WHERE j.topic_id=?
+           AND j.status IN ('queued','retry_wait')
+           AND NOT EXISTS (SELECT 1 FROM provider_job_holds h
+                           WHERE h.job_id=j.job_id AND h.decision='pending')
+           ORDER BY j.topic_sequence LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+    )
+    if identity is not None:
+        agent = agent_names.get(str(identity["agent_id"]), str(identity["agent_id"]))
+        model = str(identity["model"]) if identity["model"] else None
     if job is not None:
-        agent = agent_names.get(str(job["agent_id"]), str(job["agent_id"]))
-        model = str(job["model"]) if job["model"] else None
         if job["status"] == "executing":
             started_at = _time(job["provider_started_at"])
             kind, activity_at, waiting = _activity(connection, job, now)

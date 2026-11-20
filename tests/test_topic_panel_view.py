@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -23,12 +24,12 @@ OBSERVED = datetime(2026, 11, 20, 11, 32, tzinfo=UTC)
 class RenderPanelBodyTests(unittest.TestCase):
     def test_every_headline(self) -> None:
         cases: tuple[tuple[Headline, str], ...] = (
-            ("needs_owner", "🔴 Нужно ваше решение"),
-            ("stop_requested", "🟠 Остановка запрошена"),
+            ("needs_owner", "🔴 Нужно ваше решение · Агент"),
+            ("stop_requested", "🟠 Остановка запрошена · Агент"),
             ("local_writer", "🟡 Управление в локальном терминале"),
             ("executing", "🟢 Выполняется · Агент"),
             ("preparing", "🟢 Подготовка запуска · Агент"),
-            ("queued", "⏳ В очереди"),
+            ("queued", "⏳ В очереди · Агент"),
             ("idle", "⚪ Нет активных задач"),
         )
         for headline, expected in cases:
@@ -69,12 +70,7 @@ class RenderPanelBodyTests(unittest.TestCase):
         for headline in headlines:
             with self.subTest(headline=headline):
                 body = render_panel_body(PanelSnapshot(OBSERVED, headline, model="модель"))
-                expected = headline in (
-                    "needs_owner",
-                    "stop_requested",
-                    "executing",
-                    "preparing",
-                )
+                expected = headline not in ("idle", "local_writer")
                 self.assertEqual("Модель: модель" in body, expected)
         self.assertNotIn(
             "Модель:", render_panel_body(PanelSnapshot(OBSERVED, "executing", model=""))
@@ -217,18 +213,27 @@ class RenderPanelBodyTests(unittest.TestCase):
         self.assertTrue(body)
         self.assertLessEqual(len(body.splitlines()), MAX_PANEL_LINES)
         self.assertLessEqual(len(body), MAX_PANEL_CHARACTERS)
-        self.assertEqual(
-            body.splitlines(),
-            [
-                "🔴 Нужно ваше решение",
-                "Исход задачи неизвестен — решение в уведомлении выше",
-                "Доставка ответа не подтверждена — тема ждёт решения",
-                "Агент ждёт разрешения",
-            ],
-        )
+        model_line = next(line for line in body.splitlines() if line.startswith("Модель: "))
+        # Identity text is collapsed to 80 characters before escaping.
+        self.assertEqual(model_line, "Модель: " + html.escape("<b>&" * 20, quote=False))
 
         huge_agent = PanelSnapshot(OBSERVED, "executing", agent="<" * MAX_PANEL_CHARACTERS)
-        self.assertEqual(render_panel_body(huge_agent), "🟢 Выполняется")
+        self.assertEqual(render_panel_body(huge_agent), "🟢 Выполняется · " + "&lt;" * 80)
+
+    def test_multiline_identity_stays_one_line(self) -> None:
+        snapshot = PanelSnapshot(
+            OBSERVED,
+            "executing",
+            agent="Агент\n" * 11,
+            model="модель\n\nвторая",
+            started_at=OBSERVED,
+            queued=1,
+            held=1,
+        )
+        lines = render_panel_body(snapshot).splitlines()
+        self.assertEqual(lines[0], "🟢 Выполняется · " + " ".join(["Агент"] * 11))
+        self.assertEqual(lines[1], "Модель: модель вторая")
+        self.assertLessEqual(len(lines), MAX_PANEL_LINES)
 
     def test_digest_stability_without_threshold_crossing(self) -> None:
         snapshot = PanelSnapshot(OBSERVED, "executing", started_at=OBSERVED - timedelta(minutes=2))
