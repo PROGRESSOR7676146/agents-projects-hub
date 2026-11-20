@@ -108,6 +108,7 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         base = Path(directory.name)
         root = base / "example-project"
         root.mkdir()
+        self.topic_root = root
         self.state = HubState.open(base / "state.db", codex_permission_profile=None)
         self.addCleanup(self.state.close)
         self.db = self.state._connection
@@ -379,6 +380,36 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         self.assertTrue(self.cycle(seconds=15))
         self.assertEqual(len(self.api.creates), 2)
         self.assertEqual(self.panel()["message_id"], 501)
+
+    def test_rate_limit_pause_covers_every_panel_and_survives_a_sender_restart(self) -> None:
+        other = self.state.observe_topic(
+            project_id="example-project",
+            chat_id=CHAT,
+            thread_id=8,
+            title="Second fictional topic",
+            execution_root=self.topic_root,
+        )
+        self.store.open(self.topic, now=self.now)
+        self.store.open(other, now=self.now)
+        self.api.errors.append(rejection(429, retry_after=30))
+        self.assertTrue(self.cycle())
+        clock = Clock()
+        restarted = TopicPanelSender(
+            self.state,
+            self.api,
+            agent_names=NAMES,
+            transport_success=self._success,
+            transport_failure=self.failures.append,
+            record_event=lambda *event: self.events.append(event),
+            clock=clock,
+        )
+        self.now += timedelta(seconds=20)
+        self.assertFalse(restarted.deliver_one(now=self.now))
+        self.assertEqual(self.api.requests, 1)
+        self.now += timedelta(seconds=15)
+        clock.value += 15
+        self.assertTrue(restarted.deliver_one(now=self.now))
+        self.assertEqual(len(self.api.creates), 2)
 
     def test_permanent_rejection_stops_the_panel_without_touching_health(self) -> None:
         self.open_and_create()

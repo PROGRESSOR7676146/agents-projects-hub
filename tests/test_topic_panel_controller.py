@@ -120,6 +120,7 @@ class TopicPanelControllerTests(unittest.TestCase):
         service.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(service.state.close)
         service.agent = self.config.agents[0]
+        service.ingress_identity = "hub"
         self.telegram = FakeTelegram()
         service.telegram = cast(Any, self.telegram)
         service.usernames = {"codex": "project_codex_bot"}
@@ -215,6 +216,23 @@ class TopicPanelControllerTests(unittest.TestCase):
         forwarded = replace(command, is_forwarded=True)
         self.assertIsNone(try_handle_topic_panel_command(self.service, forwarded))
         self.assertIsNone(self.panel())
+
+    def test_only_hub_ingress_serves_and_another_bot_keeps_its_command(self) -> None:
+        from hermes_codex_router.telegram import parse_topic_message
+
+        command = parse_topic_message(message_update(1, "/panel"))
+        foreign = parse_topic_message(message_update(2, "/panel@project_codex_bot"))
+        assert command is not None and foreign is not None
+        self.assertIsNone(try_handle_topic_panel_command(self.service, foreign))
+        self.service.ingress_identity = "codex"
+        self.assertFalse(try_handle_topic_panel_command(self.service, command))
+        # Neither claimed the update: the Hub ingress still serves it once.
+        self.assertFalse(self.state.message_already_observed(CHAT, 1))
+        self.assertFalse(self.state.message_already_observed(CHAT, 2))
+        self.assertIsNone(self.panel())
+        self.service.ingress_identity = "hub"
+        self.assertTrue(try_handle_topic_panel_command(self.service, command))
+        self.assertEqual(self.panel()["instance"], 1)
 
     def test_refresh_press_is_bound_to_the_exact_current_panel(self) -> None:
         message_id, instance = self.created_panel()

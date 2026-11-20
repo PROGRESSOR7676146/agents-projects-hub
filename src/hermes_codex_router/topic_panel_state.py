@@ -353,6 +353,16 @@ class TopicPanelStore:
                 )
         return True
 
+    def defer_all(self, *, until: datetime, now: datetime) -> None:
+        """Keep a bot-wide rate-limit pause across sender restarts for every panel."""
+        at, deadline = panel_time(now), panel_time(until)
+        with self._state._immediate_transaction():
+            self._connection.execute(
+                """UPDATE topic_panels SET next_due_at=?,updated_at=?
+                   WHERE enabled=1 AND next_due_at<?""",
+                (deadline, at, deadline),
+            )
+
     def mark_unknown(self, operation: PanelOperation, *, error_code: str, now: datetime) -> bool:
         """The request may have applied: keep evidence and stop this instance."""
         at = panel_time(now)

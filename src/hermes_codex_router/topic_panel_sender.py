@@ -202,6 +202,7 @@ class TopicPanelSender:
                 now=now,
                 retry_at=now + timedelta(seconds=delay),
             )
+            self.store.defer_all(until=now + timedelta(seconds=delay), now=now)
             self._transport_failure(error)
             return
         if rejected and status == 401:
