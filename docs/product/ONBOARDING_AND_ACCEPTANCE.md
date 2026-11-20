@@ -132,6 +132,7 @@ Release acceptance requires automated evidence; marked live checks remain separa
 | Onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only provisioning. |
 | Project editing | Implemented offline; live Telegram acceptance pending | Safe local changes only. |
 | Compact controls | Implemented | Scoped supported menus. |
+| Topic status panel | Accepted (ADR 0110), default-off, not implemented | Read-only snapshot plus owner refresh. |
 | Saved Codex connect | Implemented; live Telegram acceptance pending | One exact-thread workflow. |
 | Summary-free Codex return | Implemented | Lease only. |
 | Codex rotation events | Retired | No pool integration. |
