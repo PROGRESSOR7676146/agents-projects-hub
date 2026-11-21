@@ -43,7 +43,7 @@ class ReleaseIdentityTests(unittest.TestCase):
         self.assertFalse(rendered["clean_tree"])
         self.assertIs(rendered["remote_delivery_hold_recovery"], True)
         self.assertIs(rendered["receipt_bound_artifact_cleanup"], False)
-        self.assertIs(rendered["explicit_artifact_loss_declaration"], True)
+        self.assertIs(rendered["explicit_artifact_loss_declaration"], False)
         output = io.StringIO()
         with (
             patch("hermes_codex_router.artifact_capabilities.REMOTE_DELIVERY_HOLD_RECOVERY", False),

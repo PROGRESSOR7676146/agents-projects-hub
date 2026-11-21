@@ -12,5 +12,6 @@ RECEIPT_BOUND_ARTIFACT_CLEANUP = False
 
 # ADR 0109: the schema-59-compatible rollback artifact keeps the immutable
 # ledger reader but sets this false.  It can therefore recover an already
-# migrated state without extending the owner-attested loss history.
-EXPLICIT_ARTIFACT_LOSS_DECLARATION = True
+# migrated state without extending the owner-attested loss history.  0.11.28
+# is the schema-60 rollback artifact for 0.11.29 and ships both flags off.
+EXPLICIT_ARTIFACT_LOSS_DECLARATION = False
