@@ -95,6 +95,8 @@ SITES = frozenset(
         "worker_claude_activity.retire",
         "outbox_sender.claude_activity",
         "outbox_sender.delivery_wait_notices",
+        "topic_panel_sender.snapshot",
+        "topic_panel_sender.send",
         "external_worker.client_close",
         "external_worker.shutdown",
         "external_worker.failure_notice_record",

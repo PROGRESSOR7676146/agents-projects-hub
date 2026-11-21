@@ -5,6 +5,14 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.28] - 2026-11-20
+
+- Add the read-only topic status panel (ADR 0110), default-off behind the
+  local `topic_panel` flag: the owner's `/panel` and `/panel off`, one
+  owner-only «Обновить» button, and low-priority sender edits made only when
+  the shown status changes. Schema 60 keeps the panel state and one immutable
+  record per Telegram create or edit; an unknown send is never repeated.
+
 ## [0.11.27] - 2026-11-19
 
 - Add schema 59's append-only, local-owner record for an irrecoverably missing

@@ -74,7 +74,7 @@ class TelegramDeliveryHoldMigrationTests(unittest.TestCase):
             before = snapshot(old)
             old_objects = objects(old)
         result = migrations.migrate_database(self.path)
-        self.assertEqual((result.previous_version, result.current_version), (55, 59))
+        self.assertEqual((result.previous_version, result.current_version), (55, 60))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
         with closing(sqlite3.connect(result.backup_path)) as backup:

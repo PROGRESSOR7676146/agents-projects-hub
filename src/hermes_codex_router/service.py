@@ -146,6 +146,11 @@ from .telegram_turn_provenance import group_ingress_identity
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
+from .topic_panel_controller import (
+    PANEL_CALLBACK_PREFIX,
+    handle_topic_panel_callback,
+    try_handle_topic_panel_command,
+)
 from .topic_titles import observe_topic_rename
 from .turn_observation import TurnObservation, owning_read_client
 from .worker_execution import (
@@ -1885,6 +1890,8 @@ class ProjectHubService:
             return self._handle_project_onboarding_callback(callback)
         if callback.data.startswith("pe:"):
             return self._handle_project_edit_callback(callback)
+        if callback.data.startswith(PANEL_CALLBACK_PREFIX):
+            return handle_topic_panel_callback(self, callback)
         try:
             binding = self._project_binding_for_chat(callback.chat_id)
         except KeyError:
@@ -2735,6 +2742,8 @@ class ProjectHubService:
         if not self.config.is_authorized(message.sender_id, message.chat_id, message.thread_id):
             return False
         if (handled := try_handle_telegram_delivery_hold_command(self, message)) is not None:
+            return handled
+        if (handled := try_handle_topic_panel_command(self, message)) is not None:
             return handled
         from .assessment_inputs import is_assessment_command
         from .controller_assessment import ControllerAssessmentOrchestrator

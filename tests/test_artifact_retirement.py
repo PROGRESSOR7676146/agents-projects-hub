@@ -231,7 +231,7 @@ class ArtifactRetirementTests(unittest.TestCase):
             self.fixture.config.state_path, "artifact-legacy-prefix-schema57.db"
         )
         result = migrations.migrate_database(historical)
-        self.assertEqual((result.previous_version, result.current_version), (57, 59))
+        self.assertEqual((result.previous_version, result.current_version), (57, 60))
         with closing(sqlite3.connect(historical)) as database:
             self.assertEqual(self._retirements(database, outbox.outbox_id), [])
 
@@ -399,7 +399,7 @@ class ArtifactRetirementTests(unittest.TestCase):
 
         historical = self._project_schema57(self.fixture.config.state_path, "artifact-schema57.db")
         result = migrations.migrate_database(historical)
-        self.assertEqual((result.previous_version, result.current_version), (57, 59))
+        self.assertEqual((result.previous_version, result.current_version), (57, 60))
         with closing(sqlite3.connect(historical)) as database:
             self.assertEqual(len(self._retirements(database, exact_outbox)), 1)
             self.assertEqual(self._retirements(database, legacy_outbox), [])
@@ -432,7 +432,7 @@ class ArtifactRetirementTests(unittest.TestCase):
             database.execute(str(trigger[0]))
 
         result = migrations.migrate_database(historical)
-        self.assertEqual((result.previous_version, result.current_version), (57, 59))
+        self.assertEqual((result.previous_version, result.current_version), (57, 60))
         with closing(sqlite3.connect(historical)) as database:
             self.assertEqual(self._retirements(database, outbox_id), [])
 

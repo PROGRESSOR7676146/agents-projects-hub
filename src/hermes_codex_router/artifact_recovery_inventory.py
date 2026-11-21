@@ -27,7 +27,9 @@ _GENESIS = "0" * 64
 # Schema 54 introduced the immutable final-send attempt/receipt evidence this
 # reader needs for every permitted missing-document classification.
 _MIN_RECEIPT_SCHEMA = 54
-_MAX_SCHEMA = 59
+# Schema 60 adds only topic panel UI tables (ADR 0110); outbox and receipt
+# evidence are unchanged. Review this bound for every later schema.
+_MAX_SCHEMA = 60
 
 Availability = Literal[
     "present_required",

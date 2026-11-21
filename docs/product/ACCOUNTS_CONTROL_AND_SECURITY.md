@@ -78,8 +78,8 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#accounts-control-and-secur
   status/model/accounts/new/local/return/stop, project Hub menus are menu/connect/stop, and private
   Hub menus are start/projects/connect/cancel. Provider group menus stay empty; local
   synchronization checks every scope.
-  - Accepted with REQ-UX-010 (ADR 0110), not implemented: project Hub menus add `panel` only while
-    the topic panel is enabled.
+  - With REQ-UX-010 (ADR 0110), project Hub menus add `panel` only while the topic panel is
+    enabled; an already synchronized group shows it after the next menu synchronization.
 - **REQ-CMD-006 (Implemented):** Buttons MUST mark the active choice; account/quota summaries MUST
   use portable status symbols.
 - **REQ-CMD-007 (Implemented for queued project-group providers):** Stop controls MUST bypass

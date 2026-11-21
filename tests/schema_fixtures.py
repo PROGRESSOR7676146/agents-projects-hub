@@ -11,6 +11,7 @@ from hermes_codex_router.schema_codex_permissions import (
     PROFILE_TABLES,
     ensure_codex_permission_columns,
 )
+from hermes_codex_router.schema_topic_panels import TOPIC_PANEL_TABLES, TOPIC_PANEL_TRIGGERS
 
 
 def project_historical_database(source: Path, target: Path, version: int) -> None:
@@ -137,6 +138,7 @@ def legacy_selection_columns(path: Path):
 
 def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema54 proof from fictional historical fixtures."""
+    remove_topic_panels_schema(connection)
     remove_artifact_losses_schema(connection)
     remove_artifact_retirements_schema(connection)
     remove_delivery_hold_telegram_schema(connection)
@@ -179,6 +181,19 @@ def remove_artifact_retirements_schema(connection: sqlite3.Connection) -> None:
     ):
         connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     connection.execute(f"DROP TABLE {table}")
+
+
+def remove_topic_panels_schema(connection: sqlite3.Connection) -> None:
+    """Remove only empty schema60 panel state from fictional historical fixtures."""
+    existing = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    for trigger in TOPIC_PANEL_TRIGGERS:
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    for table in TOPIC_PANEL_TABLES:
+        if table in existing:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            connection.execute(f"DROP TABLE {table}")
 
 
 def remove_artifact_losses_schema(connection: sqlite3.Connection) -> None:
