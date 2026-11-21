@@ -5,13 +5,18 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
-## [0.11.28] - 2026-11-20
+## [0.11.28] - 2026-11-21
 
 - Add the read-only topic status panel (ADR 0110), default-off behind the
   local `topic_panel` flag: the owner's `/panel` and `/panel off`, one
   owner-only «Обновить» button, and low-priority sender edits made only when
   the shown status changes. Schema 60 keeps the panel state and one immutable
   record per Telegram create or edit; an unknown send is never repeated.
+- This artifact is the schema-60-compatible runtime rollback for 0.11.29, not
+  an install target: it refuses new document-loss declarations and retains
+  spool files. Switching to it does not turn the panel off; the `topic_panel`
+  flag does. 0.11.27 is a historical source release, neither an install nor a
+  rollback target.
 
 ## [0.11.27] - 2026-11-19
 

@@ -40,6 +40,15 @@ from tests.schema_fixtures import project_historical_database
 
 class ArtifactLossTests(unittest.TestCase):
     def setUp(self) -> None:
+        # These tests exercise the install-target artifact, which permits new
+        # declarations; the distinct schema-compatible rollback artifact refuses
+        # them and is covered by the explicit refusal test below.
+        declaration_capability = patch(
+            "hermes_codex_router.artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION",
+            True,
+        )
+        declaration_capability.start()
+        self.addCleanup(declaration_capability.stop)
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.root = Path(self.tempdir.name)
