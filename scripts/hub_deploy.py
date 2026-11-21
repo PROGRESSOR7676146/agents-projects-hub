@@ -2112,16 +2112,18 @@ def apply_window(
         )
         plan = verify_saved_plan(plan_dir)
         missing_rollback = "schema-59 plan requires a bound rollback artifact"
-        # Without a bound rollback release, a schema-59 plan must keep its
-        # schema; its previous runtime is then rechecked below as the rollback.
+        # Without a bound rollback release, a schema-59 plan must explicitly
+        # keep its schema and carry no separate rollback fields; its previous
+        # runtime is then rechecked below as the rollback.
         previous_rollback = plan["state_schema"] >= 59 and "rollback_runtime" not in plan
-        if plan["state_schema"] >= 59:
+        if previous_rollback:
             need(
-                isinstance(plan.get("rollback_wheel"), str)
-                if not previous_rollback
-                else plan.get("state_schema_before", plan["state_schema"]) == plan["state_schema"],
+                plan.get("state_schema_before") == plan["state_schema"]
+                and not any(key.startswith("rollback_") for key in plan),
                 missing_rollback,
             )
+        elif plan["state_schema"] >= 59:
+            need(isinstance(plan.get("rollback_wheel"), str), missing_rollback)
         need(
             expected_digest is None
             or json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == expected_digest,
@@ -2258,7 +2260,10 @@ def apply_window(
             _effect(window, "backup", backup_state, fault)
 
             def create_manifest() -> None:
-                rollback_wheel = plan.get("rollback_wheel", plan["old_wheel"])
+                # The artifact of the runtime that recovery restores at the target schema.
+                rollback_wheel = plan[
+                    "rollback_wheel" if "rollback_runtime" in plan else "old_wheel"
+                ]
                 runner(
                     [
                         _runtime_cli(plan["new_runtime"]),

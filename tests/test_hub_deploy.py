@@ -1590,6 +1590,47 @@ class WindowTests(StageFixture):
                     self.execute()
                 self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
 
+    def test_schema59_same_schema_plan_shape_is_unambiguous(self):
+        self.prepare_same_schema_60(old_capability=False)
+        path = self.plan / "plan.json"
+        original = path.read_bytes()
+        bound = json.loads(original)["plan"]
+        for change in (
+            lambda plan: plan.pop("state_schema_before"),
+            lambda plan: plan.update(state_schema_before=59),
+            lambda plan: plan.update(rollback_wheel=plan["old_wheel"]),
+            lambda plan: plan.update(rollback_config=plan["candidate_config"]),
+        ):
+            altered = copy.deepcopy(bound)
+            change(altered)
+            path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(altered)) + b"\n")
+            with self.subTest(keys=sorted(set(altered) ^ set(bound))):
+                with self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"):
+                    self.execute()
+                self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
+        path.write_bytes(original)
+
+    def test_schema59_same_schema_failure_restores_the_previous_runtime(self):
+        self.prepare_same_schema_60(old_capability=False)
+        original = self.manager.start
+
+        def fail_once(unit):
+            if unit == "worker.service":
+                self.manager.start = original
+                raise hub_deploy.Refused("failure after start")
+            original(unit)
+
+        self.manager.start = fail_once
+        result = self.execute()
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        rows = hub_deploy._journal_rows(self.ops / result["id"] / "journal.jsonl")
+        target = next(r for r in rows if r["phase"] == "rollback_target")
+        self.assertEqual((target["target"], target["git_sha"]), ("old_runtime", self.old_sha))
+        status = self.require_status()
+        self.assertEqual(
+            (status["rollback_target"], status["rollback_git_sha"]), ("previous", self.old_sha)
+        )
+
     def test_forward_backup_and_schema_selected_recovery(self):
         old = self.prepare_forward()
         new = hub_deploy.prepare_stage(
