@@ -158,6 +158,27 @@ class ArtifactRetirementTests(unittest.TestCase):
         finally:
             sender.close()
 
+    def test_install_target_never_sweeps_an_outbox_the_rollback_completed(self) -> None:
+        """Delivering a fresh outbox never removes files of an earlier delivered one."""
+        retained_job = self.fixture.ready_outbox("opencode", 816)
+        sender = self.fixture.sender(opencode=ReceiptBot(), antigravity=fixtures.Bot())
+        try:
+            retained_outbox, retained_path, _ = self._document_part(sender.state, retained_job)
+            with patch.object(artifact_capabilities, "RECEIPT_BOUND_ARTIFACT_CLEANUP", False):
+                self.assertTrue(sender._deliver_one("opencode"))
+            self.assertTrue(retained_path.exists())
+            fresh_job = self.fixture.ready_outbox("opencode", 817)
+            fresh_outbox, fresh_path, _ = self._document_part(sender.state, fresh_job)
+            self.assertTrue(sender._deliver_one("opencode"))
+            self.assertFalse(sender._deliver_one("opencode"))
+            self.assertFalse(fresh_path.exists())
+            self.assertTrue(retained_path.exists())
+            for outbox_id in (retained_outbox, fresh_outbox):
+                self.assertEqual(sender.state.get_telegram_outbox(outbox_id).status, "delivered")
+                self.assertEqual(len(self._retirements(sender.state._connection, outbox_id)), 1)
+        finally:
+            sender.close()
+
     def test_unknown_or_partially_delivered_document_has_no_tombstone(self) -> None:
         unknown_job = self.fixture.ready_outbox("opencode", 802)
         unknown_bot = ReceiptBot()
