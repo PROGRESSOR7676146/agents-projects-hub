@@ -5,6 +5,14 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.29] - 2026-11-21
+
+- Install target for the topic panel release, with the same code as 0.11.28,
+  its schema-60-compatible rollback. It permits owner document-loss
+  declarations and restores the deployed spool cleanup: a delivered document's
+  private copy is removed only after its terminal receipt proof commits. The
+  `topic_panel` flag stays off by default.
+
 ## [0.11.28] - 2026-11-21
 
 - Add the read-only topic status panel (ADR 0110), default-off behind the
