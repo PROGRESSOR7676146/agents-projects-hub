@@ -631,6 +631,13 @@ class StageTests(StageFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "previous release"):
             hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner, rollback_release="v1.0.0")
 
+    def test_supplied_rollback_release_is_never_treated_as_absent(self):
+        install = hub_deploy.load_installation(self.input)
+        old = hub_deploy.discover_installation(install, self.runner, lambda *_: True, lambda _: 0)
+        with self.assertRaisesRegex(hub_deploy.Refused, "empty --rollback-release"):
+            hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner, rollback_release="")
+        self.assertFalse(any(call[0] == "uv" for call in self.calls))
+
     def test_discovery_refuses_conflicting_pin_and_config(self):
         install = hub_deploy.load_installation(self.input)
         self.old = self.releases / self.old_sha
@@ -1540,6 +1547,39 @@ class WindowTests(StageFixture):
         )
         self.assertEqual(create[create.index("--rollback-artifact") + 1], plan["rollback_wheel"])
 
+    def test_plan_binds_wheel_digests_verified_at_stage(self):
+        install = self.install
+        old = hub_deploy.discover_installation(install, self.runner, lambda *_: True, lambda _: 0)
+        for role in ("old_wheel", "new_wheel"):
+            with self.subTest(role=role):
+                prepared = hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner)
+                wheel = Path(prepared[role])
+                original = wheel.read_bytes()
+                # Replaced after verification and before the plan binds it.
+                wheel.write_bytes(original + b"replaced")
+                with self.assertRaisesRegex(hub_deploy.Refused, "release artifact changed"):
+                    hub_deploy.create_plan(install, old, prepared, self.runner)
+                wheel.write_bytes(original)
+
+    def test_forward_plan_without_bound_rollback_runtime_refuses_before_stopping(self):
+        old = self.prepare_forward()
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        path = self.plan / "plan.json"
+        bound = json.loads(path.read_text())["plan"]
+        for key in ("rollback_runtime", "rollback_wheel"):
+            altered = copy.deepcopy(bound)
+            altered.pop(key)
+            path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(altered)) + b"\n")
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"),
+            ):
+                self.execute()
+            self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
+
     def test_schema59_plan_missing_rollback_refuses_before_stopping(self):
         path = self.plan / "plan.json"
         bound = json.loads(path.read_text())
@@ -1635,6 +1675,25 @@ class WindowTests(StageFixture):
                     self.execute()
                 self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
         path.write_bytes(original)
+
+    def test_schema59_manifest_refusal_restores_the_previous_runtime(self):
+        # A candidate whose manifest validator predates the same-schema rule
+        # refuses a permitting previous release after services stop.
+        self.prepare_same_schema_60(old_capability=True)
+
+        def refuse(point):
+            if point == "before:manifest-create":
+                raise hub_deploy.Refused("rollback schema-59 artifact must refuse declarations")
+
+        result = self.execute(fault=refuse)
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        rows = hub_deploy._journal_rows(self.ops / result["id"] / "journal.jsonl")
+        index = next(i for i, r in enumerate(rows) if r["phase"] == "rollback_target")
+        self.assertEqual(
+            (rows[index]["target"], rows[index]["git_sha"]), ("old_runtime", self.old_sha)
+        )
+        # No new-runtime service started before recovery chose the target.
+        self.assertFalse(any(r.get("effect", "").startswith("start:") for r in rows[:index]))
 
     def test_schema59_same_schema_failure_restores_the_previous_runtime(self):
         self.prepare_same_schema_60(old_capability=False)

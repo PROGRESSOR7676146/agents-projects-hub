@@ -118,6 +118,20 @@ def check_schema(
             )
 
 
+def _wheel_digest(info: dict[str, Any], wheel: Path) -> str:
+    """The wheel digest that verify_assets checked against the release."""
+    digests = [a["sha256"] for a in info["artifacts"] if a["name"] == wheel.name]
+    need(len(digests) == 1, "missing verified wheel digest")
+    return digests[0]
+
+
+def _bound_digest(path: str, verified: str) -> str:
+    need(
+        hashlib.sha256(Path(path).read_bytes()).hexdigest() == verified, "release artifact changed"
+    )
+    return verified
+
+
 def _live_schema(installation: dict[str, Any]) -> int:
     with closing(
         sqlite3.connect(Path(installation["state_db"]).as_uri() + "?mode=ro", uri=True)
@@ -869,7 +883,7 @@ def prepare_stage(
     candidate, wheel = verify_assets(candidate_dir, tag)
     old_tag = lookup(installation, old["git_sha"], runner)
     old_dir = download_release(installation, old_tag, runner)
-    previous, _ = verify_assets(old_dir, old_tag)
+    previous, old_wheel = verify_assets(old_dir, old_tag)
     need(
         previous["git_sha"] == old["git_sha"]
         and previous["package_version"] == old["package_version"],
@@ -879,8 +893,9 @@ def prepare_stage(
     rollback_info = None
     rollback_dir = None
     rollback_wheel = None
-    need(not (rollback_release and candidate["schema_max"] == live), SAME_SCHEMA_ROLLBACK)
-    if rollback_release:
+    if rollback_release is not None:
+        need(bool(rollback_release), "empty --rollback-release")
+        need(candidate["schema_max"] != live, SAME_SCHEMA_ROLLBACK)
         rollback_dir = download_release(installation, rollback_release, runner)
         rollback_info, rollback_wheel = verify_assets(rollback_dir, rollback_release)
     check_schema(previous, candidate, live, rollback_info)
@@ -893,8 +908,10 @@ def prepare_stage(
     prepared.update(
         {
             "state_schema_before": live,
-            "old_wheel": str(next(old_dir.glob("*.whl"))),
+            "old_wheel": str(old_wheel),
             "new_wheel": str(wheel),
+            "old_wheel_sha256": _wheel_digest(previous, old_wheel),
+            "new_wheel_sha256": _wheel_digest(candidate, wheel),
             "candidate_assets": str(candidate_dir),
             "old_assets": str(old_dir),
         }
@@ -910,6 +927,8 @@ def prepare_stage(
             {
                 "old_wheel": prepared["old_wheel"],
                 "new_wheel": str(rollback_wheel),
+                "old_wheel_sha256": prepared["old_wheel_sha256"],
+                "new_wheel_sha256": _wheel_digest(rollback_info, rollback_wheel),
                 "candidate_assets": str(rollback_dir),
                 "state_schema_before": live,
                 "tag": rollback_release,
@@ -1206,8 +1225,8 @@ def create_plan(
             "state_schema_before": new.get("state_schema_before", new["schema_max"]),
             "old_wheel": new["old_wheel"],
             "new_wheel": new["new_wheel"],
-            "old_wheel_sha256": hashlib.sha256(Path(new["old_wheel"]).read_bytes()).hexdigest(),
-            "new_wheel_sha256": hashlib.sha256(Path(new["new_wheel"]).read_bytes()).hexdigest(),
+            "old_wheel_sha256": _bound_digest(new["old_wheel"], new["old_wheel_sha256"]),
+            "new_wheel_sha256": _bound_digest(new["new_wheel"], new["new_wheel_sha256"]),
             "old_runtime": old_runtime,
             "new_runtime": {k: new[k] for k in ("root", "git_sha", "tree_sha256")},
             "restart_order": installation["restart_order"],
@@ -1279,9 +1298,9 @@ def _add_rollback_plan(
             k: target[k] for k in ("root", "git_sha", "tree_sha256", "tag", "package_version")
         }
         plan["rollback_wheel"] = target["new_wheel"]
-        plan["rollback_wheel_sha256"] = hashlib.sha256(
-            Path(target["new_wheel"]).read_bytes()
-        ).hexdigest()
+        plan["rollback_wheel_sha256"] = _bound_digest(
+            target["new_wheel"], target["new_wheel_sha256"]
+        )
     finally:
         shutil.rmtree(other_dir)
 
@@ -2130,6 +2149,11 @@ def apply_window(
         same_schema = plan.get("state_schema_before", plan["state_schema"]) == plan["state_schema"]
         if same_schema:
             need(not any(key.startswith("rollback_") for key in plan), SAME_SCHEMA_ROLLBACK)
+        else:
+            need(
+                "rollback_runtime" in plan and isinstance(plan.get("rollback_wheel"), str),
+                "forward migration plan requires a bound rollback artifact",
+            )
         # A schema-59 same-schema plan must state both schemas and the previous
         # runtime's planned capability; that runtime is rechecked below.
         previous_rollback = plan["state_schema"] >= 59 and same_schema
@@ -2139,8 +2163,6 @@ def apply_window(
                 and type(plan["old_runtime"].get(DECLARATION)) is bool,
                 missing_rollback,
             )
-        elif plan["state_schema"] >= 59:
-            need(isinstance(plan.get("rollback_wheel"), str), missing_rollback)
         need(
             expected_digest is None
             or json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == expected_digest,

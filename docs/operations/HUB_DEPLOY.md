@@ -119,7 +119,11 @@ A same-schema plan always rolls back to the installed previous release:
 plan with separate rollback fields. From schema 59 the candidate must permit
 artifact-loss declarations. A migration's rollback release must refuse them; a
 same-schema previous release keeps its own verified capability, which the plan
-binds and `apply` rechecks before any service stops.
+binds and `apply` rechecks before any service stops. The candidate's own code
+creates the in-window release manifest. A candidate released before this rule
+still requires a refusing rollback, so over a permitting previous release its
+window fails after services stop, before any file change or new-runtime start,
+and recovery restarts the previous release.
 The backup is completed before the first new-runtime service starts; workers
 may migrate the database before the controller starts. The live database must
 still have the old schema before the backup and the target schema after start. It requires network access and writes
