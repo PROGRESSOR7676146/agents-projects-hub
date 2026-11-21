@@ -20,6 +20,7 @@ from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from hermes_codex_router.topic_panel_controller import (
+    PANEL_DISABLED,
     PANEL_REFRESHING,
     PANEL_STALE,
     PANEL_USAGE,
@@ -205,14 +206,21 @@ class TopicPanelControllerTests(unittest.TestCase):
             self.assertEqual(self.telegram.sent[-1][2], "Панель доступна только в теме проекта.")
         self.assertIsNone(self.panel())
 
-    def test_disabled_flag_and_forwards_keep_previous_behavior(self) -> None:
+    def test_disabled_flag_still_reserves_panel_commands(self) -> None:
+        self.assertTrue(self.handle(message_update(1, "/panel")))
+        self.service.config = replace(self.config, topic_panel=False)
+        self.assertTrue(self.handle(message_update(2, "/panel")))
+        self.assertEqual(self.telegram.sent[-1][2], PANEL_DISABLED)
+        self.assertEqual(self.panel()["instance"], 1)
+        self.assertTrue(self.handle(message_update(3, "/panel off")))
+        self.assertEqual(self.panel()["enabled"], 0)
+        self.assertEqual(self.jobs(), 0)
+
+    def test_forwarded_command_stays_a_quote(self) -> None:
         from hermes_codex_router.telegram import parse_topic_message
 
         command = parse_topic_message(message_update(1, "/panel"))
         assert command is not None
-        self.service.config = replace(self.config, topic_panel=False)
-        self.assertIsNone(try_handle_topic_panel_command(self.service, command))
-        self.service.config = self.config
         forwarded = replace(command, is_forwarded=True)
         self.assertIsNone(try_handle_topic_panel_command(self.service, forwarded))
         self.assertIsNone(self.panel())

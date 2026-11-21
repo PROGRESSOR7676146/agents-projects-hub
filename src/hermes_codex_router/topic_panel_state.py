@@ -229,6 +229,13 @@ class TopicPanelStore:
                 ),
             )
 
+    def stop(self, panel: PanelRecord, *, reason: str, now: datetime) -> None:
+        """Stop this instance without HTTP, e.g. when its group is no longer registered."""
+        with self._state._immediate_transaction():
+            self._stop_instance(
+                panel.topic_id, panel.instance, panel.message_id, reason, panel_time(now)
+            )
+
     def paused(self, *, now: datetime) -> bool:
         """Whether a bot-wide Telegram rate-limit pause still covers panel requests."""
         row = self._connection.execute(
@@ -263,13 +270,18 @@ class TopicPanelStore:
             served_refresh=panel.refresh_requested_at,
         )
         with self._state._immediate_transaction():
+            # Recheck everything the caller observed: another sender may have
+            # confirmed a newer version or recorded a rate-limit pause meanwhile.
             current = self._connection.execute(
                 """SELECT 1 FROM topic_panels p
                    WHERE topic_id=? AND instance=? AND enabled=1
                      AND unavailable_reason IS NULL AND message_id IS ?
+                     AND confirmed_digest IS ? AND next_due_at<=?
                      AND NOT EXISTS (SELECT 1 FROM topic_panel_operations o
-                                     WHERE o.topic_id=p.topic_id AND o.state='sending')""",
-                (panel.topic_id, panel.instance, panel.message_id),
+                                     WHERE o.topic_id=p.topic_id AND o.state='sending')
+                     AND NOT EXISTS (SELECT 1 FROM topic_panel_pause
+                                     WHERE singleton=1 AND paused_until>?)""",
+                (panel.topic_id, panel.instance, panel.message_id, panel.confirmed_digest, at, at),
             ).fetchone()
             if current is None:
                 return None
@@ -430,8 +442,16 @@ class TopicPanelStore:
                      ORDER BY send_started_at DESC,operation_id DESC LIMIT ?)
                  AND operation_id NOT IN (
                      SELECT confirmed_operation_id FROM topic_panels
-                     WHERE topic_id=? AND confirmed_operation_id IS NOT NULL)""",
-            (operation.topic_id, operation.topic_id, PANEL_SETTLED_RETENTION, operation.topic_id),
+                     WHERE topic_id=? AND confirmed_operation_id IS NOT NULL)
+                 AND operation_id<>?""",
+            (
+                operation.topic_id,
+                operation.topic_id,
+                PANEL_SETTLED_RETENTION,
+                operation.topic_id,
+                # A wall-clock step back must not prune the operation being settled.
+                operation.operation_id,
+            ),
         )
         return True
 

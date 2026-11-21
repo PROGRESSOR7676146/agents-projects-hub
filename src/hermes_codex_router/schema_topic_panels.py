@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS topic_panels (
 CREATE INDEX IF NOT EXISTS topic_panels_due
     ON topic_panels(next_due_at) WHERE enabled=1 AND unavailable_reason IS NULL;
 CREATE TABLE IF NOT EXISTS topic_panel_operations (
-    operation_id TEXT PRIMARY KEY CHECK(length(operation_id)=32),
+    operation_id TEXT NOT NULL PRIMARY KEY CHECK(length(operation_id)=32),
     topic_id INTEGER NOT NULL REFERENCES topic_panels(topic_id),
     instance INTEGER NOT NULL CHECK(instance >= 1),
     kind TEXT NOT NULL CHECK(kind IN ('create','edit')),
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS topic_panel_operations (
     completed_at TEXT,
     CHECK(
         (kind='create' AND target_message_id IS NULL)
-        OR (kind='edit' AND target_message_id > 0)
+        OR (kind='edit' AND target_message_id IS NOT NULL AND target_message_id > 0)
     ),
     CHECK((state='sending') = (completed_at IS NULL)),
     CHECK(state<>'confirmed' OR receipt_message_id IS NOT NULL)

@@ -135,13 +135,21 @@ class TopicPanelLifecycleTests(unittest.TestCase):
             transport_success=self._success,
             transport_failure=self.failures.append,
             record_event=lambda *event: self.events.append(event),
+            chat_registered=self._registered,
             clock=self.clock,
         )
         self.now = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
         self.message_id = 0
+        self.registered = {CHAT}
+        self.before_send: Any = None
 
     def _success(self) -> None:
         self.successes += 1
+
+    def _registered(self, chat_id: int) -> bool:
+        if self.before_send is not None:
+            self.before_send()
+        return chat_id in self.registered
 
     def cycle(self, *, seconds: float = 2.0) -> bool:
         """Advance both clocks past the scan interval, then run one sender step."""
@@ -409,6 +417,7 @@ class TopicPanelLifecycleTests(unittest.TestCase):
             transport_success=self._success,
             transport_failure=self.failures.append,
             record_event=lambda *event: self.events.append(event),
+            chat_registered=self._registered,
             clock=clock,
         )
         # Neither a restart, a new /panel nor a refresh shortens the pause.
@@ -437,18 +446,19 @@ class TopicPanelLifecycleTests(unittest.TestCase):
     def test_retention_never_prunes_the_last_confirmed_version(self) -> None:
         self.open_and_create()
         confirmed = self.operations()[0]["operation_id"]
+        at = self.now + timedelta(days=1)
         for _ in range(PANEL_SETTLED_RETENTION + 5):
-            self.now += timedelta(seconds=1)
-            panel = self.store.due(now=self.now + timedelta(days=1))[0]
+            at += timedelta(seconds=1)
+            panel = self.store.due(now=at)[0]
             operation = self.store.begin(
                 panel,
                 payload_html="Fictional edit",
                 reply_markup={"inline_keyboard": []},
                 body_digest="a" * 64,
-                now=self.now,
+                now=at,
             )
             assert operation is not None
-            self.store.reject(operation, error_code="not_sent", now=self.now, retry_at=self.now)
+            self.store.reject(operation, error_code="not_sent", now=at, retry_at=at)
         identities = [row["operation_id"] for row in self.operations()]
         self.assertIn(confirmed, identities)
         self.assertEqual(len(identities), PANEL_SETTLED_RETENTION + 1)
@@ -469,6 +479,104 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         )
         self.store.postpone(panel, next_due_at=self.now + timedelta(minutes=1), now=self.now)
         self.assertEqual(self.panel()["next_due_at"], self.panel()["refresh_requested_at"])
+
+    def test_rate_limit_pause_counts_the_whole_cycle_before_the_response(self) -> None:
+        self.store.open(self.topic, now=self.now)
+        self.api.errors.append(rejection(429, retry_after=5))
+
+        def slow_preparation() -> None:
+            self.clock.value += 6  # Rendering and locking took six seconds.
+
+        self.before_send = slow_preparation
+        self.assertTrue(self.cycle())
+        self.before_send = None
+        start = self.now
+        self.now = start + timedelta(seconds=9)
+        self.clock.value += 9
+        self.assertFalse(self.sender.deliver_one(now=self.now))
+        self.assertEqual(self.api.requests, 1)
+        self.now = start + timedelta(seconds=12)
+        self.clock.value += 3
+        self.assertTrue(self.sender.deliver_one(now=self.now))
+
+    def test_send_claim_rechecks_the_shown_version_and_the_pause(self) -> None:
+        self.open_and_create()
+        self.enqueue()
+        stale = self.store.due(now=self.now + timedelta(days=1))[0]
+        self.assertTrue(self.cycle(seconds=PANEL_IDLE_SECONDS + 1))  # Another sender edits.
+        self.assertIsNone(
+            self.store.begin(
+                stale,
+                payload_html="Older snapshot",
+                reply_markup={"inline_keyboard": []},
+                body_digest="b" * 64,
+                now=self.now + timedelta(days=1),
+            )
+        )
+        current = self.store.due(now=self.now + timedelta(days=1))[0]
+        self.db.execute(
+            "INSERT INTO topic_panel_pause VALUES(1,?,?)",
+            ((self.now + timedelta(days=2)).isoformat(), self.now.isoformat()),
+        )
+        self.db.commit()
+        self.assertIsNone(
+            self.store.begin(
+                current,
+                payload_html="Fictional",
+                reply_markup={"inline_keyboard": []},
+                body_digest="b" * 64,
+                now=self.now + timedelta(days=1),
+            )
+        )
+        self.assertEqual(len(self.api.edits), 1)
+
+    def test_unregistered_group_stops_the_panel_without_http(self) -> None:
+        self.store.open(self.topic, now=self.now)
+        self.registered.clear()
+        self.assertFalse(self.cycle())
+        self.assertEqual(self.api.requests, 0)
+        self.assertEqual(self.panel()["unavailable_reason"], "project_unbound")
+        self.assertIn("topic_panel_project_unbound", [event[1] for event in self.events])
+
+    def test_backward_clock_step_never_prunes_the_confirmed_version(self) -> None:
+        self.open_and_create()
+        earlier = self.now - timedelta(hours=1)
+        at = self.now + timedelta(days=1)
+        for _ in range(PANEL_SETTLED_RETENTION + 2):
+            at += timedelta(seconds=1)
+            panel = self.store.due(now=at)[0]
+            operation = self.store.begin(
+                panel,
+                payload_html="Fictional edit",
+                reply_markup={"inline_keyboard": []},
+                body_digest="a" * 64,
+                now=at,
+            )
+            assert operation is not None
+            self.store.reject(
+                operation, error_code="not_sent", now=at, retry_at=earlier - timedelta(seconds=1)
+            )
+        # The wall clock steps back an hour; the next confirmed edit is the oldest row.
+        self.enqueue()
+        self.clock.value += 2
+        self.assertTrue(self.sender.deliver_one(now=earlier))
+        self.assertEqual(self.operations()[0]["state"], "confirmed")
+        pinned = self.panel()["confirmed_operation_id"]
+        self.assertIn(pinned, [row["operation_id"] for row in self.operations()])
+
+    def test_operation_evidence_rejects_null_identity_and_edit_target(self) -> None:
+        self.open_and_create()
+        row = dict(self.operations()[0])
+        for changes in ({"operation_id": None}, {"kind": "edit", "target_message_id": None}):
+            candidate = {**row, "operation_id": "c" * 32, "state": "rejected", **changes}
+            columns = ",".join(candidate)
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute(
+                    f"INSERT INTO topic_panel_operations({columns}) VALUES "
+                    f"({','.join('?' for _ in candidate)})",
+                    tuple(candidate.values()),
+                )
+        self.db.rollback()
 
     def test_permanent_rejection_stops_the_panel_without_touching_health(self) -> None:
         self.open_and_create()
