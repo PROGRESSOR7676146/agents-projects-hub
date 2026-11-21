@@ -13,9 +13,9 @@ and releases use semantic versioning while the public API is still evolving.
   the shown status changes. Schema 60 keeps the panel state and one immutable
   record per Telegram create or edit; an unknown send is never repeated.
 - This artifact is the schema-60-compatible runtime rollback for 0.11.29, not
-  an install target: it refuses new document-loss declarations and retains
-  spool files. Switching to it does not turn the panel off; the `topic_panel`
-  flag does. 0.11.27 is a historical source release, neither an install nor a
+  an install target: it refuses new document-loss declarations and turns off
+  the receipt-bound spool cleanup after final delivery. Switching to it does
+  not turn the panel off; the `topic_panel` flag does. 0.11.27 is a historical source release, neither an install nor a
   rollback target.
 
 ## [0.11.27] - 2026-11-19
