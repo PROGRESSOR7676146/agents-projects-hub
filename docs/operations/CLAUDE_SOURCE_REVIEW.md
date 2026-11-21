@@ -14,9 +14,13 @@ It amends the 2026-10-26 Opus-only decision.
 
 | Author's active model | Reviewer, effort `high` |
 | --- | --- |
-| Codex or another non-Claude model | **Claude Opus 5.5** through native Claude CPA HTTP |
-| Claude | **GPT-6.1 Sol** (`gpt-6.1-sol`) through CPA HTTP |
-| Claude, exceptionally important change | **GPT Astra** (`gpt-6-astra`) through CPA HTTP |
+| Codex or another non-Claude model | Newest **Claude Opus** through native Claude CPA HTTP |
+| Claude | Newest **GPT Sol** (`gpt-6.2-sol` on 2026-11-21) through CPA HTTP |
+| Claude, exceptionally important change | Newest **GPT Astra** (`gpt-6.2-astra` on 2026-11-21) through CPA HTTP |
+
+Owner decision, 2026-11-21: always use the newest available version of the
+family in the table. Resolve it from CPA's `/v1/models` at review time; the
+versions named above only record the state on that date.
 
 Exceptionally important means a change to security or trust boundaries,
 authority, state migrations, release or deployment contracts, or a new or
@@ -24,8 +28,8 @@ amended ADR, or any change the owner marks as such. A Claude-led session also
 consults Astra on architectural and other important decisions before committing
 to them; a consultation is advice, not review approval, and the owner decides.
 
-Argon is not a reviewer, and the paired-review policy stays superseded. Do not
-substitute a different model version for the one in the table.
+Argon is not a reviewer, and the paired-review policy stays superseded. Never
+substitute an older version or a different family.
 
 A PASS permits publication only after author verification of the findings and
 the usual exact-candidate gates. An unavailable reviewer, negative review,
