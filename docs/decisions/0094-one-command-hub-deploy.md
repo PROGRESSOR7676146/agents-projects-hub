@@ -56,6 +56,25 @@ schema requires an owner decision and no service is started. Status shows the
 currently applicable target; the journal records the choice. A database backup
 is never restored automatically.
 
+## Amendment: same-schema rollback is the previous release
+
+Owner decision, 2026-11-21: a same-schema deployment rolls back to the release
+installed before the window and to no other release. `--rollback-release` is
+refused for it, and `apply` refuses a saved same-schema plan with any separate
+rollback fields. The plan, the release manifest and recovery therefore name the
+same rollback; before this, a named third release could be validated by the
+manifest while recovery restored the previous runtime.
+
+From schema 59 the previous release keeps its own verified, artifact-fixed
+artifact-loss declaration capability, permitting or refusing. Rollback then
+restores exactly the authority that was in effect before the window; it does
+not append a declaration, but the owner may later make one through the explicit
+acknowledged command. The plan binds that capability from the verified release
+metadata, and `apply` rechecks it against the installed runtime before any
+service stops. A forward migration still needs the distinct named rollback
+release that refuses new declarations (ADR 0109). Refusing a permitting
+previous release instead would block every later same-schema upgrade from it.
+
 ## Deferred and status
 
 Migration to symlinks and `stack.py` and the separate Codex server start

@@ -114,10 +114,16 @@ or verifies an inactive sealed candidate. A forward migration also requires
 `schema_max` as the candidate and is prepared and validated in the same way.
 A candidate below the live schema, or an old release whose schema differs from
 live state, is refused. The plan binds both schemas and the rollback identity.
-From schema 59 the candidate must permit artifact-loss declarations and its
-rollback must refuse them. A same-schema plan then needs that rollback release
-too, unless the installed release itself refuses declarations: it stays the
-rollback, and `apply` rechecks its capability before any service stops.
+A same-schema plan always rolls back to the installed previous release:
+`--rollback-release` is refused for it, and `apply` refuses a saved same-schema
+plan with separate rollback fields. From schema 59 the candidate must permit
+artifact-loss declarations. A migration's rollback release must refuse them; a
+same-schema previous release keeps its own verified capability, which the plan
+binds and `apply` rechecks before any service stops. The candidate's own code
+creates the in-window release manifest. A candidate released before this rule
+still requires a refusing rollback, so over a permitting previous release its
+window fails after services stop, before any file change or new-runtime start,
+and recovery restarts the previous release.
 The backup is completed before the first new-runtime service starts; workers
 may migrate the database before the controller starts. The live database must
 still have the old schema before the backup and the target schema after start. It requires network access and writes

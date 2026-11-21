@@ -233,7 +233,15 @@ def _validate_compatibility(manifest: DeploymentManifest) -> None:
             raise DeploymentManifestError(
                 "active schema-59 artifact must permit artifact-loss declarations"
             )
-        if rollback.explicit_artifact_loss_declaration is not False:
+        if backup_schema == target_schema:
+            # Without a migration the rollback is the previously installed
+            # release with its own capability (ADR 0094). Equal schemas do not
+            # prove that identity; the deployment workflow binds it.
+            if type(rollback.explicit_artifact_loss_declaration) is not bool:
+                raise DeploymentManifestError(
+                    "rollback schema-59 artifact declaration capability is missing"
+                )
+        elif rollback.explicit_artifact_loss_declaration is not False:
             raise DeploymentManifestError(
                 "rollback schema-59 artifact must refuse artifact-loss declarations"
             )

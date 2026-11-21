@@ -76,6 +76,9 @@ be a separate trust-boundary decision.
   59; restoring an old state database after newer work is not a rollback path.
   Its fixed release capability retains the reader and inventory but refuses a
   new loss declaration, so rollback cannot extend the owner-attested history.
+  This binds the distinct rollback release of a migration. A same-schema
+  deployment rolls back to the previously installed release with its own
+  capability (ADR 0094 amendment, 2026-11-21).
 
 ## Verification and rollout
 

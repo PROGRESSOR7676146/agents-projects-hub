@@ -130,6 +130,7 @@ class EvidenceTests(unittest.TestCase):
         hub_deploy.check_schema({"schema_max": 7}, {"schema_max": 8}, 7, {"schema_max": 8})
         for old, new, live, rollback, message in [
             (7, 8, 7, None, "--rollback-release"),
+            (7, 7, 7, {"schema_max": 7}, "previous release"),
             (7, 8, 7, {"schema_max": 9}, "rollback release schema"),
             (7, 6, 7, None, "downgrade"),
             (7, 7, 8, None, "old release schema"),
@@ -165,37 +166,33 @@ class EvidenceTests(unittest.TestCase):
                 {"schema_max": 59, "explicit_artifact_loss_declaration": False},
             )
 
-        same_schema = {"schema_max": 59, "explicit_artifact_loss_declaration": True}
-        with self.assertRaisesRegex(hub_deploy.Refused, "--rollback-release"):
-            hub_deploy.check_schema(same_schema, same_schema, 59)
-        hub_deploy.check_schema(
-            same_schema,
-            same_schema,
-            59,
-            {"schema_max": 59, "explicit_artifact_loss_declaration": False},
-        )
-        with self.assertRaisesRegex(hub_deploy.Refused, "rollback release schema"):
-            hub_deploy.check_schema(
-                same_schema,
-                same_schema,
-                59,
-                {"schema_max": 60, "explicit_artifact_loss_declaration": False},
-            )
-
-    def test_schema59_same_schema_previous_refusing_release_is_the_rollback(self):
+    def test_schema59_same_schema_rollback_is_the_previous_release(self):
         candidate = {"schema_max": 60, "explicit_artifact_loss_declaration": True}
         refusing = {"schema_max": 60, "explicit_artifact_loss_declaration": False}
+        # The previous release is the rollback with its own verified capability.
         hub_deploy.check_schema(refusing, candidate, 60)
+        hub_deploy.check_schema(candidate, candidate, 60)
         for previous in (
             {"schema_max": 60},
             {"schema_max": 60, "explicit_artifact_loss_declaration": None},
-            {"schema_max": 60, "explicit_artifact_loss_declaration": True},
         ):
             with (
                 self.subTest(previous=previous),
-                self.assertRaisesRegex(hub_deploy.Refused, "--rollback-release"),
+                self.assertRaisesRegex(hub_deploy.Refused, "previous release declaration"),
             ):
                 hub_deploy.check_schema(previous, candidate, 60)
+        # A, B and a distinct named C: the manifest would bind C while recovery
+        # restores A, so a same-schema plan never names a rollback release.
+        for previous in (refusing, candidate):
+            for rollback in (
+                refusing,
+                {"schema_max": 61, "explicit_artifact_loss_declaration": False},
+            ):
+                with (
+                    self.subTest(previous=previous, rollback=rollback),
+                    self.assertRaisesRegex(hub_deploy.Refused, "previous release"),
+                ):
+                    hub_deploy.check_schema(previous, candidate, 60, rollback)
         # A forward migration still needs the named rollback release.
         with self.assertRaisesRegex(hub_deploy.Refused, "--rollback-release"):
             hub_deploy.check_schema(
@@ -582,7 +579,7 @@ class StageTests(StageFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "schema"):
             hub_deploy.prepare_stage(install, found, "v2.0.0", self.runner)
 
-    def test_schema59_same_schema_requires_false_capability_rollback_before_stage(self):
+    def test_schema59_same_schema_from_permitting_release_rolls_back_to_it(self):
         for tag, sha, capability in (
             ("v1.0.0", self.old_sha, True),
             ("v2.0.0", self.new_sha, True),
@@ -602,16 +599,15 @@ class StageTests(StageFixture):
         install = hub_deploy.load_installation(self.input)
         old = hub_deploy.discover_installation(install, self.runner, lambda *_: True, lambda _: 0)
 
-        with self.assertRaisesRegex(hub_deploy.Refused, "--rollback-release"):
-            hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner)
+        # A distinct refusing C is not accepted: the previous release is the rollback.
+        with self.assertRaisesRegex(hub_deploy.Refused, "previous release"):
+            hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner, rollback_release="v3.0.0")
         self.assertFalse((self.releases / self.new_sha).exists())
         self.assertFalse(any(call[0] == "uv" for call in self.calls))
 
-        prepared = hub_deploy.prepare_stage(
-            install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
-        )
-        self.assertFalse(prepared["rollback"]["explicit_artifact_loss_declaration"])
-        self.assertTrue(Path(prepared["rollback"]["new_wheel"]).is_file())
+        prepared = hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner)
+        self.assertNotIn("rollback", prepared)
+        self.assertIs(prepared["old_explicit_artifact_loss_declaration"], True)
 
     def test_schema59_same_schema_from_refusing_release_keeps_previous_rollback(self):
         for tag, sha, capability in (
@@ -630,9 +626,17 @@ class StageTests(StageFixture):
         prepared = hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner)
         self.assertNotIn("rollback", prepared)
         self.assertEqual(prepared["state_schema_before"], 60)
-        # The installed release cannot also be named as a distinct rollback.
-        with self.assertRaisesRegex(hub_deploy.Refused, "must be distinct"):
+        self.assertIs(prepared["old_explicit_artifact_loss_declaration"], False)
+        # Not even the installed release itself is named as the rollback.
+        with self.assertRaisesRegex(hub_deploy.Refused, "previous release"):
             hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner, rollback_release="v1.0.0")
+
+    def test_supplied_rollback_release_is_never_treated_as_absent(self):
+        install = hub_deploy.load_installation(self.input)
+        old = hub_deploy.discover_installation(install, self.runner, lambda *_: True, lambda _: 0)
+        with self.assertRaisesRegex(hub_deploy.Refused, "empty --rollback-release"):
+            hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner, rollback_release="")
+        self.assertFalse(any(call[0] == "uv" for call in self.calls))
 
     def test_discovery_refuses_conflicting_pin_and_config(self):
         install = hub_deploy.load_installation(self.input)
@@ -1543,6 +1547,39 @@ class WindowTests(StageFixture):
         )
         self.assertEqual(create[create.index("--rollback-artifact") + 1], plan["rollback_wheel"])
 
+    def test_plan_binds_wheel_digests_verified_at_stage(self):
+        install = self.install
+        old = hub_deploy.discover_installation(install, self.runner, lambda *_: True, lambda _: 0)
+        for role in ("old_wheel", "new_wheel"):
+            with self.subTest(role=role):
+                prepared = hub_deploy.prepare_stage(install, old, "v2.0.0", self.runner)
+                wheel = Path(prepared[role])
+                original = wheel.read_bytes()
+                # Replaced after verification and before the plan binds it.
+                wheel.write_bytes(original + b"replaced")
+                with self.assertRaisesRegex(hub_deploy.Refused, "release artifact changed"):
+                    hub_deploy.create_plan(install, old, prepared, self.runner)
+                wheel.write_bytes(original)
+
+    def test_forward_plan_without_bound_rollback_runtime_refuses_before_stopping(self):
+        old = self.prepare_forward()
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, rollback_release="v3.0.0"
+        )
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        path = self.plan / "plan.json"
+        bound = json.loads(path.read_text())["plan"]
+        for key in ("rollback_runtime", "rollback_wheel"):
+            altered = copy.deepcopy(bound)
+            altered.pop(key)
+            path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(altered)) + b"\n")
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"),
+            ):
+                self.execute()
+            self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
+
     def test_schema59_plan_missing_rollback_refuses_before_stopping(self):
         path = self.plan / "plan.json"
         bound = json.loads(path.read_text())
@@ -1550,6 +1587,17 @@ class WindowTests(StageFixture):
         path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(bound["plan"])) + b"\n")
 
         with self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"):
+            self.execute()
+        self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
+
+    def test_same_schema_plan_with_rollback_fields_refuses_before_stopping(self):
+        path = self.plan / "plan.json"
+        bound = json.loads(path.read_text())["plan"]
+        self.assertEqual(bound["state_schema_before"], bound["state_schema"])
+        bound["rollback_wheel"] = bound["old_wheel"]
+        path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(bound)) + b"\n")
+
+        with self.assertRaisesRegex(hub_deploy.Refused, "previous release"):
             self.execute()
         self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
 
@@ -1568,11 +1616,12 @@ class WindowTests(StageFixture):
         new = hub_deploy.prepare_stage(self.install, old, "v2.0.0", self.runner)
         self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
 
-    def test_schema59_same_schema_plan_rolls_back_to_refusing_previous_runtime(self):
-        self.prepare_same_schema_60(old_capability=False)
+    def assert_same_schema_rolls_back_to_previous(self, old_capability):
+        self.prepare_same_schema_60(old_capability=old_capability)
         plan = hub_deploy.verify_saved_plan(self.plan)
         self.assertNotIn("rollback_runtime", plan)
         self.assertEqual((plan["state_schema_before"], plan["state_schema"]), (60, 60))
+        self.assertIs(plan["old_runtime"]["explicit_artifact_loss_declaration"], old_capability)
 
         self.assertEqual(self.execute()["outcome"], "ACCEPTED")
         create = next(
@@ -1580,13 +1629,19 @@ class WindowTests(StageFixture):
         )
         self.assertEqual(create[create.index("--rollback-artifact") + 1], plan["old_wheel"])
 
+    def test_schema59_same_schema_plan_rolls_back_to_refusing_previous_runtime(self):
+        self.assert_same_schema_rolls_back_to_previous(False)
+
+    def test_schema59_same_schema_plan_rolls_back_to_permitting_previous_runtime(self):
+        # Rollback restores the authority that was in effect before the window.
+        self.assert_same_schema_rolls_back_to_previous(True)
+
     def test_schema59_same_schema_plan_rechecks_previous_runtime_capability(self):
-        self.prepare_same_schema_60(old_capability=False)
-        # The installed previous runtime must still refuse declarations at apply time.
-        for capability in (True, None):
-            with self.subTest(capability=capability):
-                self.release_infos[self.old_sha]["explicit_artifact_loss_declaration"] = capability
-                with self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"):
+        for planned, live in ((False, True), (False, None), (True, False), (True, None)):
+            with self.subTest(planned=planned, live=live):
+                self.prepare_same_schema_60(old_capability=planned)
+                self.release_infos[self.old_sha]["explicit_artifact_loss_declaration"] = live
+                with self.assertRaisesRegex(hub_deploy.Refused, "previous runtime declaration"):
                     self.execute()
                 self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
 
@@ -1595,20 +1650,50 @@ class WindowTests(StageFixture):
         path = self.plan / "plan.json"
         original = path.read_bytes()
         bound = json.loads(original)["plan"]
-        for change in (
-            lambda plan: plan.pop("state_schema_before"),
-            lambda plan: plan.update(state_schema_before=59),
-            lambda plan: plan.update(rollback_wheel=plan["old_wheel"]),
-            lambda plan: plan.update(rollback_config=plan["candidate_config"]),
+        for message, change in (
+            ("bound rollback artifact", lambda plan: plan.pop("state_schema_before")),
+            ("bound rollback artifact", lambda plan: plan.update(state_schema_before=59)),
+            (
+                "bound rollback artifact",
+                lambda plan: plan["old_runtime"].pop("explicit_artifact_loss_declaration"),
+            ),
+            ("previous release", lambda plan: plan.update(rollback_wheel=plan["old_wheel"])),
+            (
+                "previous release",
+                lambda plan: plan.update(rollback_config=plan["candidate_config"]),
+            ),
+            (
+                "previous release",
+                lambda plan: plan.update(rollback_runtime=copy.deepcopy(plan["old_runtime"])),
+            ),
         ):
             altered = copy.deepcopy(bound)
             change(altered)
             path.write_bytes(hub_deploy.canonical_document(hub_deploy.bind_plan(altered)) + b"\n")
-            with self.subTest(keys=sorted(set(altered) ^ set(bound))):
-                with self.assertRaisesRegex(hub_deploy.Refused, "bound rollback artifact"):
+            with self.subTest(message=message, keys=sorted(set(altered) ^ set(bound))):
+                with self.assertRaisesRegex(hub_deploy.Refused, message):
                     self.execute()
                 self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
         path.write_bytes(original)
+
+    def test_schema59_manifest_refusal_restores_the_previous_runtime(self):
+        # A candidate whose manifest validator predates the same-schema rule
+        # refuses a permitting previous release after services stop.
+        self.prepare_same_schema_60(old_capability=True)
+
+        def refuse(point):
+            if point == "before:manifest-create":
+                raise hub_deploy.Refused("rollback schema-59 artifact must refuse declarations")
+
+        result = self.execute(fault=refuse)
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        rows = hub_deploy._journal_rows(self.ops / result["id"] / "journal.jsonl")
+        index = next(i for i, r in enumerate(rows) if r["phase"] == "rollback_target")
+        self.assertEqual(
+            (rows[index]["target"], rows[index]["git_sha"]), ("old_runtime", self.old_sha)
+        )
+        # No new-runtime service started before recovery chose the target.
+        self.assertFalse(any(r.get("effect", "").startswith("start:") for r in rows[:index]))
 
     def test_schema59_same_schema_failure_restores_the_previous_runtime(self):
         self.prepare_same_schema_60(old_capability=False)

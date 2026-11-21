@@ -49,6 +49,14 @@ def need(condition: object, message: str) -> None:
         raise Refused(message)
 
 
+# Owner decision 2026-11-21 (ADR 0094): a same-schema plan rolls back to the
+# release installed before the window and never names another one.
+SAME_SCHEMA_ROLLBACK = (
+    "a same-schema plan rolls back to the previous release; no --rollback-release"
+)
+DECLARATION = "explicit_artifact_loss_declaration"
+
+
 def canonical_document(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -85,29 +93,43 @@ def check_schema(
         raise Refused("missing schema evidence")
     need(old_schema == live, "old release schema mismatch")
     need(new_schema >= live, "candidate schema downgrade refused")
-    if new_schema > live:
-        if rollback is None:
-            raise Refused("forward migration requires --rollback-release")
-    if rollback is not None and (new_schema > live or new_schema >= 59):
+    if new_schema == live:
+        need(rollback is None, SAME_SCHEMA_ROLLBACK)
+    elif rollback is None:
+        raise Refused("forward migration requires --rollback-release")
+    else:
         need(rollback.get("schema_max") == new_schema, "rollback release schema mismatch")
     if new_schema >= 59:
-        # A same-schema release keeps the previous runtime as its rollback
-        # target (ADR 0094). A previous release that refuses declarations is
-        # already the false-capability rollback artifact for that schema.
         need(
-            rollback is not None
-            or (new_schema == live and old.get("explicit_artifact_loss_declaration") is False),
-            "schema-59 release requires --rollback-release",
-        )
-        need(
-            new.get("explicit_artifact_loss_declaration") is True,
+            new.get(DECLARATION) is True,
             "candidate schema-59 release must permit artifact-loss declarations",
         )
-        if rollback is not None:
+        if rollback is None:
+            # The previous release keeps its own verified capability: rollback
+            # restores exactly the authority in effect before the window.
             need(
-                rollback.get("explicit_artifact_loss_declaration") is False,
+                type(old.get(DECLARATION)) is bool,
+                "previous release declaration capability is missing",
+            )
+        else:
+            need(
+                rollback.get(DECLARATION) is False,
                 "rollback schema-59 release must refuse artifact-loss declarations",
             )
+
+
+def _wheel_digest(info: dict[str, Any], wheel: Path) -> str:
+    """The wheel digest that verify_assets checked against the release."""
+    digests = [a["sha256"] for a in info["artifacts"] if a["name"] == wheel.name]
+    need(len(digests) == 1, "missing verified wheel digest")
+    return digests[0]
+
+
+def _bound_digest(path: str, verified: str) -> str:
+    need(
+        hashlib.sha256(Path(path).read_bytes()).hexdigest() == verified, "release artifact changed"
+    )
+    return verified
 
 
 def _live_schema(installation: dict[str, Any]) -> int:
@@ -861,7 +883,7 @@ def prepare_stage(
     candidate, wheel = verify_assets(candidate_dir, tag)
     old_tag = lookup(installation, old["git_sha"], runner)
     old_dir = download_release(installation, old_tag, runner)
-    previous, _ = verify_assets(old_dir, old_tag)
+    previous, old_wheel = verify_assets(old_dir, old_tag)
     need(
         previous["git_sha"] == old["git_sha"]
         and previous["package_version"] == old["package_version"],
@@ -871,7 +893,9 @@ def prepare_stage(
     rollback_info = None
     rollback_dir = None
     rollback_wheel = None
-    if (candidate["schema_max"] > live or candidate["schema_max"] >= 59) and rollback_release:
+    if rollback_release is not None:
+        need(bool(rollback_release), "empty --rollback-release")
+        need(candidate["schema_max"] != live, SAME_SCHEMA_ROLLBACK)
         rollback_dir = download_release(installation, rollback_release, runner)
         rollback_info, rollback_wheel = verify_assets(rollback_dir, rollback_release)
     check_schema(previous, candidate, live, rollback_info)
@@ -884,12 +908,16 @@ def prepare_stage(
     prepared.update(
         {
             "state_schema_before": live,
-            "old_wheel": str(next(old_dir.glob("*.whl"))),
+            "old_wheel": str(old_wheel),
             "new_wheel": str(wheel),
+            "old_wheel_sha256": _wheel_digest(previous, old_wheel),
+            "new_wheel_sha256": _wheel_digest(candidate, wheel),
             "candidate_assets": str(candidate_dir),
             "old_assets": str(old_dir),
         }
     )
+    if rollback_info is None and live >= 59:
+        prepared["old_" + DECLARATION] = previous[DECLARATION]
     if rollback_info is not None:
         assert rollback_dir is not None and rollback_wheel is not None
         target = _prepare_runtime(
@@ -899,6 +927,8 @@ def prepare_stage(
             {
                 "old_wheel": prepared["old_wheel"],
                 "new_wheel": str(rollback_wheel),
+                "old_wheel_sha256": prepared["old_wheel_sha256"],
+                "new_wheel_sha256": _wheel_digest(rollback_info, rollback_wheel),
                 "candidate_assets": str(rollback_dir),
                 "state_schema_before": live,
                 "tag": rollback_release,
@@ -1184,6 +1214,10 @@ def create_plan(
                     _write_private(plan_dir / name, content)
                     entry[label] = {"copy": name, "sha256": hashlib.sha256(content).hexdigest()}
             entries.append(entry)
+        old_runtime = {k: old[k] for k in ("root", "git_sha", "tree_sha256")}
+        if "old_" + DECLARATION in new:
+            # The same-schema rollback capability, from verified release metadata.
+            old_runtime[DECLARATION] = new["old_" + DECLARATION]
         plan = {
             "schema_version": 1,
             "installation": copy.deepcopy(installation),
@@ -1191,9 +1225,9 @@ def create_plan(
             "state_schema_before": new.get("state_schema_before", new["schema_max"]),
             "old_wheel": new["old_wheel"],
             "new_wheel": new["new_wheel"],
-            "old_wheel_sha256": hashlib.sha256(Path(new["old_wheel"]).read_bytes()).hexdigest(),
-            "new_wheel_sha256": hashlib.sha256(Path(new["new_wheel"]).read_bytes()).hexdigest(),
-            "old_runtime": {k: old[k] for k in ("root", "git_sha", "tree_sha256")},
+            "old_wheel_sha256": _bound_digest(new["old_wheel"], new["old_wheel_sha256"]),
+            "new_wheel_sha256": _bound_digest(new["new_wheel"], new["new_wheel_sha256"]),
+            "old_runtime": old_runtime,
             "new_runtime": {k: new[k] for k in ("root", "git_sha", "tree_sha256")},
             "restart_order": installation["restart_order"],
             "unit_runtime_modes": modes,
@@ -1264,9 +1298,9 @@ def _add_rollback_plan(
             k: target[k] for k in ("root", "git_sha", "tree_sha256", "tag", "package_version")
         }
         plan["rollback_wheel"] = target["new_wheel"]
-        plan["rollback_wheel_sha256"] = hashlib.sha256(
-            Path(target["new_wheel"]).read_bytes()
-        ).hexdigest()
+        plan["rollback_wheel_sha256"] = _bound_digest(
+            target["new_wheel"], target["new_wheel_sha256"]
+        )
     finally:
         shutil.rmtree(other_dir)
 
@@ -2112,18 +2146,23 @@ def apply_window(
         )
         plan = verify_saved_plan(plan_dir)
         missing_rollback = "schema-59 plan requires a bound rollback artifact"
-        # Without a bound rollback release, a schema-59 plan must explicitly
-        # keep its schema and carry no separate rollback fields; its previous
-        # runtime is then rechecked below as the rollback.
-        previous_rollback = plan["state_schema"] >= 59 and "rollback_runtime" not in plan
+        same_schema = plan.get("state_schema_before", plan["state_schema"]) == plan["state_schema"]
+        if same_schema:
+            need(not any(key.startswith("rollback_") for key in plan), SAME_SCHEMA_ROLLBACK)
+        else:
+            need(
+                "rollback_runtime" in plan and isinstance(plan.get("rollback_wheel"), str),
+                "forward migration plan requires a bound rollback artifact",
+            )
+        # A schema-59 same-schema plan must state both schemas and the previous
+        # runtime's planned capability; that runtime is rechecked below.
+        previous_rollback = plan["state_schema"] >= 59 and same_schema
         if previous_rollback:
             need(
                 plan.get("state_schema_before") == plan["state_schema"]
-                and not any(key.startswith("rollback_") for key in plan),
+                and type(plan["old_runtime"].get(DECLARATION)) is bool,
                 missing_rollback,
             )
-        elif plan["state_schema"] >= 59:
-            need(isinstance(plan.get("rollback_wheel"), str), missing_rollback)
         need(
             expected_digest is None
             or json.loads(_private_bytes(plan_dir / "plan.json"))["sha256"] == expected_digest,
@@ -2153,7 +2192,11 @@ def apply_window(
                 "runtime identity changed",
             )
             if label == "old_runtime" and previous_rollback:
-                need(info.get("explicit_artifact_loss_declaration") is False, missing_rollback)
+                need(
+                    type(info.get(DECLARATION)) is bool
+                    and info[DECLARATION] == runtime[DECLARATION],
+                    "previous runtime declaration capability changed",
+                )
             if runtime["tree_sha256"] is not None:
                 _runtime_command(Path(runtime["root"]), "verify", runner, runtime["tree_sha256"])
         _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
