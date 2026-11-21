@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- `hub_deploy` can plan a same-schema upgrade from a schema-59+ release that
+  refuses artifact-loss declarations without a third rollback release; the
+  installed release stays the rollback and is rechecked before services stop.
+
 ## [0.11.29] - 2026-11-21
 
 - Install target for the topic panel release, with the same code as 0.11.28,

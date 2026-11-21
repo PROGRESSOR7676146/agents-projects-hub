@@ -91,7 +91,14 @@ def check_schema(
     if rollback is not None and (new_schema > live or new_schema >= 59):
         need(rollback.get("schema_max") == new_schema, "rollback release schema mismatch")
     if new_schema >= 59:
-        need(rollback is not None, "schema-59 release requires --rollback-release")
+        # A same-schema release keeps the previous runtime as its rollback
+        # target (ADR 0094). A previous release that refuses declarations is
+        # already the false-capability rollback artifact for that schema.
+        need(
+            rollback is not None
+            or (new_schema == live and old.get("explicit_artifact_loss_declaration") is False),
+            "schema-59 release requires --rollback-release",
+        )
         need(
             new.get("explicit_artifact_loss_declaration") is True,
             "candidate schema-59 release must permit artifact-loss declarations",
@@ -2104,10 +2111,16 @@ def apply_window(
             "plan must be in the ops directory",
         )
         plan = verify_saved_plan(plan_dir)
+        missing_rollback = "schema-59 plan requires a bound rollback artifact"
+        # Without a bound rollback release, a schema-59 plan must keep its
+        # schema; its previous runtime is then rechecked below as the rollback.
+        previous_rollback = plan["state_schema"] >= 59 and "rollback_runtime" not in plan
         if plan["state_schema"] >= 59:
             need(
-                "rollback_runtime" in plan and isinstance(plan.get("rollback_wheel"), str),
-                "schema-59 plan requires a bound rollback artifact",
+                isinstance(plan.get("rollback_wheel"), str)
+                if not previous_rollback
+                else plan.get("state_schema_before", plan["state_schema"]) == plan["state_schema"],
+                missing_rollback,
             )
         need(
             expected_digest is None
@@ -2137,6 +2150,8 @@ def apply_window(
                 ),
                 "runtime identity changed",
             )
+            if label == "old_runtime" and previous_rollback:
+                need(info.get("explicit_artifact_loss_declaration") is False, missing_rollback)
             if runtime["tree_sha256"] is not None:
                 _runtime_command(Path(runtime["root"]), "verify", runner, runtime["tree_sha256"])
         _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
