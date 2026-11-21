@@ -140,16 +140,16 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         )
         self.now = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
         self.message_id = 0
-        self.registered = {CHAT}
+        self.registered = {(CHAT, "example-project")}
         self.before_send: Any = None
 
     def _success(self) -> None:
         self.successes += 1
 
-    def _registered(self, chat_id: int) -> bool:
+    def _registered(self, chat_id: int, project_id: str) -> bool:
         if self.before_send is not None:
             self.before_send()
-        return chat_id in self.registered
+        return (chat_id, project_id) in self.registered
 
     def cycle(self, *, seconds: float = 2.0) -> bool:
         """Advance both clocks past the scan interval, then run one sender step."""
@@ -530,9 +530,41 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(len(self.api.edits), 1)
 
-    def test_unregistered_group_stops_the_panel_without_http(self) -> None:
+    def test_send_claim_is_bound_to_the_exact_confirmed_operation(self) -> None:
+        self.open_and_create()
+        stale = self.store.due(now=self.now + timedelta(days=1))[0]
+        # Another sender confirms B and then A again: same digest, newer operation.
+        for digest in ("b" * 64, stale.confirmed_digest):
+            assert digest is not None
+            current = self.store.due(now=self.now + timedelta(days=1))[0]
+            operation = self.store.begin(
+                current,
+                payload_html="Fictional",
+                reply_markup={"inline_keyboard": []},
+                body_digest=digest,
+                now=self.now + timedelta(days=1),
+            )
+            assert operation is not None
+            self.store.confirm(
+                operation,
+                receipt_message_id=int(current.message_id or 0),
+                next_due_at=self.now,
+                now=self.now + timedelta(days=1),
+            )
+        self.assertEqual(self.panel()["confirmed_digest"], stale.confirmed_digest)
+        self.assertIsNone(
+            self.store.begin(
+                stale,
+                payload_html="Obsolete snapshot",
+                reply_markup={"inline_keyboard": []},
+                body_digest="c" * 64,
+                now=self.now + timedelta(days=1),
+            )
+        )
+
+    def test_unregistered_or_rebound_group_stops_the_panel_without_http(self) -> None:
         self.store.open(self.topic, now=self.now)
-        self.registered.clear()
+        self.registered = {(CHAT, "another-example-project")}
         self.assertFalse(self.cycle())
         self.assertEqual(self.api.requests, 0)
         self.assertEqual(self.panel()["unavailable_reason"], "project_unbound")
@@ -561,6 +593,8 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         self.clock.value += 2
         self.assertTrue(self.sender.deliver_one(now=earlier))
         self.assertEqual(self.operations()[0]["state"], "confirmed")
+        # The pin moves before pruning: no stale pin is retained beyond the bound.
+        self.assertEqual(len(self.operations()), PANEL_SETTLED_RETENTION + 1)
         pinned = self.panel()["confirmed_operation_id"]
         self.assertIn(pinned, [row["operation_id"] for row in self.operations()])
 
@@ -662,3 +696,40 @@ class TopicPanelLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PanelProjectBindingTests(unittest.TestCase):
+    def test_sender_binding_check_requires_the_panel_project(self) -> None:
+        from hermes_codex_router.hub_config import HubConfig, ProjectBinding, TerminalSettings
+        from hermes_codex_router.models import Project, ProjectRegistry
+        from hermes_codex_router.outbox_sender import TelegramOutboxSender
+        from tests.git_fixtures import init_git_root
+        from tests.test_service_integration import persist_registry
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        base = Path(directory.name)
+        root = base / "example-project"
+        init_git_root(root)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(ProjectBinding("example-project", CHAT),),
+            agents=(),
+        )
+        persist_registry(
+            config.registry_path,
+            ProjectRegistry(1, (base,), (Project("example-project", "Example", "Example", root),)),
+        )
+        sender = TelegramOutboxSender.__new__(TelegramOutboxSender)
+        sender.config = config
+        sender.state = HubState.open(config.state_path, codex_permission_profile=None)
+        self.addCleanup(sender.state.close)
+        self.assertTrue(sender._panel_chat_registered(CHAT, "example-project"))
+        self.assertFalse(sender._panel_chat_registered(CHAT, "another-example-project"))
+        self.assertFalse(sender._panel_chat_registered(-1009999999999, "example-project"))

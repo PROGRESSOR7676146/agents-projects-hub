@@ -422,9 +422,11 @@ class TelegramOutboxSender:
         self._refresh_chat_actions()
         return False
 
-    def _panel_chat_registered(self, chat_id: int) -> bool:
+    def _panel_chat_registered(self, chat_id: int, project_id: str) -> bool:
         try:
-            resolve_project_context(self.config, self.state, chat_id=chat_id)
+            resolve_project_context(
+                self.config, self.state, chat_id=chat_id, expected_project_id=project_id
+            )
         except ProjectResolutionError:
             return False
         return True

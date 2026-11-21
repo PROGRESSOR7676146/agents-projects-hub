@@ -58,7 +58,7 @@ class TopicPanelSender:
         transport_success: Callable[[], None],
         transport_failure: Callable[[TelegramError], None],
         record_event: Callable[[str, str, str], None],
-        chat_registered: Callable[[int], bool],
+        chat_registered: Callable[[int, str], bool],
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store = TopicPanelStore(state)
@@ -105,8 +105,9 @@ class TopicPanelSender:
             if panel.message_id is not None and digest == panel.confirmed_digest:
                 self.store.defer_unchanged(panel, next_due_at=next_due, now=current)
                 continue
-            if not self._chat_registered(panel.chat_id):
-                # Registration may change after /panel: never post into an unbound group.
+            if not self._chat_registered(panel.chat_id, panel.project_id):
+                # Registration may change after /panel: post only into the group
+                # still bound to this panel's project.
                 self.store.stop(panel, reason="project_unbound", now=current)
                 self._record_event("warning", "topic_panel_project_unbound", "panel stopped")
                 continue
