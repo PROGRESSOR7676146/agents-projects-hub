@@ -25,9 +25,13 @@ migrated database and all accepted queue/outbox records.
 
 For schema 59 and later, release inspection also binds the artifact-fixed
 `EXPLICIT_ARTIFACT_LOSS_DECLARATION` capability. The active artifact must permit
-new declarations; the distinct rollback artifact must refuse them while still
-being able to read the ledger. A release pair that leaves declarations enabled
-in rollback is rejected before staging or activation.
+new declarations. When the backup schema is older than the target, the distinct
+rollback artifact must refuse them while still being able to read the ledger; a
+migration pair that leaves declarations enabled in rollback is rejected before
+staging or activation. Without a migration, the rollback artifact is the
+previously installed release and keeps its own capability. Equal schemas do not
+prove that identity: the deployment workflow binds it
+([ADR 0094](../decisions/0094-one-command-hub-deploy.md#amendment-same-schema-rollback-is-the-previous-release)).
 
 ## Create and verify
 

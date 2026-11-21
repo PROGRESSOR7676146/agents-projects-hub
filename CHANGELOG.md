@@ -5,9 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
-- `hub_deploy` can plan a same-schema upgrade from a schema-59+ release that
-  refuses artifact-loss declarations without a third rollback release; the
-  installed release stays the rollback and is rechecked before services stop.
+- A same-schema `hub_deploy` upgrade always rolls back to the installed
+  previous release and refuses `--rollback-release`, so the plan, the release
+  manifest and recovery agree. From schema 59 that release keeps its own
+  artifact-loss declaration capability, bound in the plan and rechecked before
+  services stop; a migration's rollback release must still refuse declarations.
 
 ## [0.11.29] - 2026-11-21
 

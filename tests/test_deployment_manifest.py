@@ -240,6 +240,45 @@ class DeploymentManifestTests(unittest.TestCase):
         self.assertTrue(created.active_artifact.explicit_artifact_loss_declaration)
         self.assertFalse(created.rollback_artifact.explicit_artifact_loss_declaration)
 
+    def test_schema59_same_schema_rollback_keeps_its_own_capability(self) -> None:
+        backup = self.base / "state-v59.db"
+        migrate_database(backup, create_backup=False)
+        connection = sqlite3.connect(backup)
+        connection.execute("PRAGMA user_version = 59")
+        connection.commit()
+        connection.close()
+        os.chmod(backup, 0o600)
+        active = _wheel(
+            self.base / "active-same59.whl",
+            version="0.7.1",
+            git_sha="c" * 40,
+            schema_max=59,
+            explicit_artifact_loss_declaration=True,
+        )
+        for index, capability in enumerate((True, False)):
+            previous = _wheel(
+                self.base / f"previous-same59-{index}.whl",
+                version=f"0.7.{index + 2}",
+                git_sha=str(index + 1) * 40,
+                schema_max=59,
+                explicit_artifact_loss_declaration=capability,
+            )
+            with self.subTest(capability=capability):
+                created = create_deployment_manifest(
+                    self.base / f"same59-{index}.json",
+                    active_artifact=active,
+                    rollback_artifact=previous,
+                    configuration=self.config,
+                    state_backup=backup,
+                )
+                self.assertEqual(created.state_backup.schema_version, 59)
+                self.assertIs(
+                    created.rollback_artifact.explicit_artifact_loss_declaration, capability
+                )
+                self.assertEqual(
+                    verify_deployment_manifest(self.base / f"same59-{index}.json"), created
+                )
+
     def test_schema59_wheel_cannot_omit_its_declaration_capability(self) -> None:
         wheel = _wheel(
             self.base / "missing-capability-schema59.whl",
