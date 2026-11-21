@@ -21,18 +21,23 @@ PANEL_CALLBACK_PREFIX = "pn:"
 PANEL_STALE = "Панель устарела; откройте /panel"
 PANEL_REFRESHING = "Проверяю. Если состояние изменилось, панель обновится."
 PANEL_USAGE = "Используйте /panel или /panel off без вложений."
+PANEL_DISABLED = "Панель статуса выключена в настройках Hub."
 _COMMAND_BOT = re.compile(r"/[A-Za-z][A-Za-z0-9_]*(?:@([A-Za-z][A-Za-z0-9_]*))?")
 _REFRESH = re.compile(re.escape(PANEL_REFRESH_PREFIX) + r"([1-9][0-9]{0,17})")
 
 
 def try_handle_topic_panel_command(service: Any, message: TopicMessage) -> bool | None:
-    """Handle `/panel` before routing; None keeps the previous behavior."""
+    """Reserve `/panel` at the Hub before routing, even with the panel disabled.
+
+    A panel command never becomes a prompt: while the flag is off, `/panel` is
+    refused and `/panel off` still ends an existing panel.
+    """
     command = parse_command(message.text)
     config = service.config
-    if not config.topic_panel or command is None or command.name != "panel":
+    if config.hub_bot is None or command is None or command.name != "panel":
         return None
     addressed = _COMMAND_BOT.match(message.text.strip())
-    hub_username = config.hub_bot.telegram_username if config.hub_bot is not None else ""
+    hub_username = config.hub_bot.telegram_username
     if message.is_forwarded or (
         addressed is not None
         and addressed.group(1) is not None
@@ -80,6 +85,9 @@ def try_handle_topic_panel_command(service: Any, message: TopicMessage) -> bool 
             if closed
             else "В этой теме нет открытой панели.",
         )
+        return True
+    if not config.topic_panel:
+        service._send_text(message, PANEL_DISABLED)
         return True
     store.open(topic, now=now)  # The panel message itself is the answer.
     return True

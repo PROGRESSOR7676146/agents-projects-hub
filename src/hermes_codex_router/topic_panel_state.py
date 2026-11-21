@@ -52,6 +52,8 @@ class PanelRecord:
     message_id: int | None
     confirmed_digest: str | None
     refresh_requested_at: str | None
+    confirmed_operation_id: str | None
+    project_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,13 +171,14 @@ class TopicPanelStore:
 
     def due(self, *, now: datetime, limit: int = PANEL_DUE_BATCH) -> tuple[PanelRecord, ...]:
         rows = self._connection.execute(
-            """SELECT topic_id,chat_id,thread_id,instance,message_id,confirmed_digest,
-                      refresh_requested_at
-               FROM topic_panels p
-               WHERE enabled=1 AND unavailable_reason IS NULL AND next_due_at<=?
+            """SELECT p.topic_id,p.chat_id,p.thread_id,p.instance,p.message_id,
+                      p.confirmed_digest,p.refresh_requested_at,p.confirmed_operation_id,
+                      t.project_id
+               FROM topic_panels p JOIN topics t ON t.topic_id=p.topic_id
+               WHERE p.enabled=1 AND p.unavailable_reason IS NULL AND p.next_due_at<=?
                  AND NOT EXISTS (SELECT 1 FROM topic_panel_operations o
                                  WHERE o.topic_id=p.topic_id AND o.state='sending')
-               ORDER BY next_due_at,topic_id LIMIT ?""",
+               ORDER BY p.next_due_at,p.topic_id LIMIT ?""",
             (panel_time(now), max(1, min(limit, PANEL_DUE_BATCH))),
         ).fetchall()
         return tuple(
@@ -187,6 +190,8 @@ class TopicPanelStore:
                 None if row["message_id"] is None else int(row["message_id"]),
                 row["confirmed_digest"],
                 row["refresh_requested_at"],
+                row["confirmed_operation_id"],
+                str(row["project_id"]),
             )
             for row in rows
         )
@@ -229,6 +234,13 @@ class TopicPanelStore:
                 ),
             )
 
+    def stop(self, panel: PanelRecord, *, reason: str, now: datetime) -> None:
+        """Stop this instance without HTTP, e.g. when its group is no longer registered."""
+        with self._state._immediate_transaction():
+            self._stop_instance(
+                panel.topic_id, panel.instance, panel.message_id, reason, panel_time(now)
+            )
+
     def paused(self, *, now: datetime) -> bool:
         """Whether a bot-wide Telegram rate-limit pause still covers panel requests."""
         row = self._connection.execute(
@@ -263,13 +275,27 @@ class TopicPanelStore:
             served_refresh=panel.refresh_requested_at,
         )
         with self._state._immediate_transaction():
+            # Recheck everything the caller observed: another sender may have
+            # confirmed a newer version or recorded a rate-limit pause meanwhile.
             current = self._connection.execute(
                 """SELECT 1 FROM topic_panels p
                    WHERE topic_id=? AND instance=? AND enabled=1
                      AND unavailable_reason IS NULL AND message_id IS ?
+                     AND confirmed_digest IS ? AND confirmed_operation_id IS ?
+                     AND next_due_at<=?
                      AND NOT EXISTS (SELECT 1 FROM topic_panel_operations o
-                                     WHERE o.topic_id=p.topic_id AND o.state='sending')""",
-                (panel.topic_id, panel.instance, panel.message_id),
+                                     WHERE o.topic_id=p.topic_id AND o.state='sending')
+                     AND NOT EXISTS (SELECT 1 FROM topic_panel_pause
+                                     WHERE singleton=1 AND paused_until>?)""",
+                (
+                    panel.topic_id,
+                    panel.instance,
+                    panel.message_id,
+                    panel.confirmed_digest,
+                    panel.confirmed_operation_id,
+                    at,
+                    at,
+                ),
             ).fetchone()
             if current is None:
                 return None
@@ -332,6 +358,7 @@ class TopicPanelStore:
                     operation.target_message_id,
                 ),
             )
+            self._prune(operation.topic_id, operation.operation_id)
         return True
 
     def reject(
@@ -381,6 +408,7 @@ class TopicPanelStore:
                         operation.target_message_id,
                     ),
                 )
+            self._prune(operation.topic_id, operation.operation_id)
         return True
 
     def mark_unknown(self, operation: PanelOperation, *, error_code: str, now: datetime) -> bool:
@@ -396,6 +424,7 @@ class TopicPanelStore:
                 "send_unknown",
                 at,
             )
+            self._prune(operation.topic_id, operation.operation_id)
         return True
 
     def _settle(
@@ -419,8 +448,10 @@ class TopicPanelStore:
                 operation.lease_token,
             ),
         )
-        if cursor.rowcount != 1:
-            return False
+        return cursor.rowcount == 1
+
+    def _prune(self, topic_id: int, operation_id: str) -> None:
+        """Keep recent settled evidence; run after any pin update in the same transaction."""
         self._connection.execute(
             """DELETE FROM topic_panel_operations
                WHERE topic_id=? AND state IN ('confirmed','rejected')
@@ -430,10 +461,17 @@ class TopicPanelStore:
                      ORDER BY send_started_at DESC,operation_id DESC LIMIT ?)
                  AND operation_id NOT IN (
                      SELECT confirmed_operation_id FROM topic_panels
-                     WHERE topic_id=? AND confirmed_operation_id IS NOT NULL)""",
-            (operation.topic_id, operation.topic_id, PANEL_SETTLED_RETENTION, operation.topic_id),
+                     WHERE topic_id=? AND confirmed_operation_id IS NOT NULL)
+                 AND operation_id<>?""",
+            (
+                topic_id,
+                topic_id,
+                PANEL_SETTLED_RETENTION,
+                topic_id,
+                # A wall-clock step back must not prune the operation being settled.
+                operation_id,
+            ),
         )
-        return True
 
     def _stop_instance(
         self, topic_id: int, instance: int, target_message_id: int | None, reason: str, at: str

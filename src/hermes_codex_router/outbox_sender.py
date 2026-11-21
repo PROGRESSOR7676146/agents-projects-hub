@@ -20,7 +20,7 @@ from .hub_config import HubConfig
 from .progress_delivery import ProgressDeliveryQueue
 from .progress_delivery_sender import deliver_progress
 from .project_onboarding import ProjectOnboardingStore
-from .project_resolution import resolve_project_context
+from .project_resolution import ProjectResolutionError, resolve_project_context
 from .session_connect import SessionConnectStore
 from .state import HubState, StateError
 from .task_activity import TaskActivityState
@@ -171,6 +171,7 @@ class TelegramOutboxSender:
                 transport_success=self._record_transport_success,
                 transport_failure=self._record_transport_failure,
                 record_event=self._record_event,
+                chat_registered=self._panel_chat_registered,
             )
             if config.topic_panel
             else None
@@ -420,6 +421,15 @@ class TelegramOutboxSender:
         # Final results and durable progress have priority over advisory chat actions.
         self._refresh_chat_actions()
         return False
+
+    def _panel_chat_registered(self, chat_id: int, project_id: str) -> bool:
+        try:
+            resolve_project_context(
+                self.config, self.state, chat_id=chat_id, expected_project_id=project_id
+            )
+        except ProjectResolutionError:
+            return False
+        return True
 
     def _deliver_final_one(self, *, now: datetime | None = None) -> bool:
         start = self._cursor % len(self.agent_ids)

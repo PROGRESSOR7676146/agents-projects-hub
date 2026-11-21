@@ -99,8 +99,13 @@ Stages 2 and 3, design reviewed by GPT Astra (2026-11-20):
 - «Обновить» is handled after authorization and callback deduplication. It
   makes the exact current panel due at once; a press while a request is pending
   adds nothing, and a newer press is never cleared by an older check.
-- `/panel` is served only by the central Hub ingress; a command addressed to
-  another bot keeps its previous routing.
+- `/panel` is served only by the central Hub ingress, even with the flag off:
+  then creation is refused and `/panel off` still ends a panel, so a panel
+  command never becomes a prompt. A command addressed to another bot keeps its
+  previous routing.
+- Before each request the sender rechecks the project group registration, the
+  shown version, the due time and the rate-limit pause inside the claiming
+  transaction; settlement times are taken at the response.
 - "Message is not modified" confirms only the exact edit. 429 records a durable
   pause for all panel requests, counted from the response; neither a restart
   nor a new press shortens it. 401, network and 5xx failures count as shared

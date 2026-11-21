@@ -425,9 +425,9 @@ configurable. They trigger notices only; they never approve, stop, unlock or rep
 
 ## Development team
 
-Primary: `gpt-6-astra`, effort `high`. It owns architecture, normative contracts,
+Primary: the newest GPT Astra (`gpt-6.2-astra` on 2026-11-21), effort `high`. It owns architecture, normative contracts,
 security decisions, integration, exact-revision evidence and owner communication.
-Helpers: at most `gpt-6.1-sol`, effort `high`, with standard service and no priority, under the current owner instruction.
+Helpers: at most the newest GPT Sol (`gpt-6.2-sol` on 2026-11-21), effort `high`, with standard service and no priority, under the current owner instruction.
 Supply self-contained bounded tasks and required sources. Use an interface that
 can enforce the service tier; the CLI supports explicit `service_tier=default`
 and disabled fast mode. Verify model availability; never silently substitute. Official reference:
@@ -450,9 +450,10 @@ owner defines state API, transaction ownership and invocation boundaries;
 parallel writing and recursive delegation are outside this goal. Sol checks
 supplement, but do not replace, independent review of Codex-authored
 lifecycle/security changes. The
-owner selects the reviewer by the author's active model: **Opus 5.5/high** for
-Codex or other non-Claude authors, **GPT-6.1 Sol/high** for Claude authors and
-**GPT Astra/high** for exceptionally important Claude-authored changes. The owning
+owner selects the reviewer by the author's active model: the newest **Opus/high**
+for Codex or other non-Claude authors, the newest **GPT Sol/high** for Claude
+authors and the newest **GPT Astra/high** for exceptionally important
+Claude-authored changes. The owning
 [source-review runbook](CLAUDE_SOURCE_REVIEW.md) defines exact routing and author
 verification. This supersedes all older paired-review and fallback next triggers
 in this chronology: do not invoke Argon for review. Never substitute another

@@ -58,6 +58,7 @@ class TopicPanelSender:
         transport_success: Callable[[], None],
         transport_failure: Callable[[TelegramError], None],
         record_event: Callable[[str, str, str], None],
+        chat_registered: Callable[[int, str], bool],
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store = TopicPanelStore(state)
@@ -67,6 +68,7 @@ class TopicPanelSender:
         self._transport_success = transport_success
         self._transport_failure = transport_failure
         self._record_event = record_event
+        self._chat_registered = chat_registered
         self._clock = clock
         self._next_scan = 0.0
 
@@ -103,6 +105,12 @@ class TopicPanelSender:
             if panel.message_id is not None and digest == panel.confirmed_digest:
                 self.store.defer_unchanged(panel, next_due_at=next_due, now=current)
                 continue
+            if not self._chat_registered(panel.chat_id, panel.project_id):
+                # Registration may change after /panel: post only into the group
+                # still bound to this panel's project.
+                self.store.stop(panel, reason="project_unbound", now=current)
+                self._record_event("warning", "topic_panel_project_unbound", "panel stopped")
+                continue
             operation = self.store.begin(
                 panel,
                 payload_html=render_panel_message(body, prepared_at=current),
@@ -112,7 +120,7 @@ class TopicPanelSender:
             )
             if operation is None:
                 continue
-            self._send(operation, next_due=next_due, now=current)
+            self._send(operation, next_due=next_due, now=current, cycle_started=monotonic)
             return True
         return False
 
@@ -127,8 +135,14 @@ class TopicPanelSender:
         finally:
             self._connection.rollback()
 
-    def _send(self, operation: PanelOperation, *, next_due: datetime, now: datetime) -> None:
-        started = self._clock()
+    def _send(
+        self,
+        operation: PanelOperation,
+        *,
+        next_due: datetime,
+        now: datetime,
+        cycle_started: float,
+    ) -> None:
         try:
             if operation.kind == "create":
                 message_id = self._api.send_html(
@@ -161,17 +175,30 @@ class TopicPanelSender:
                     )
                 message_id = target
         except TelegramError as error:
-            # A server pause counts from the response, not from the request start.
-            received = now + timedelta(seconds=max(0.0, self._clock() - started))
-            self._settle_error(operation, error, next_due=next_due, now=now, received=received)
+            # Settle at response time: the whole cycle, not only HTTP, has elapsed.
+            self._settle_error(
+                operation, error, next_due=next_due, now=self._settled_at(now, cycle_started)
+            )
             return
         except Exception as error:
             survived("topic_panel_sender.send", error)
-            self.store.mark_unknown(operation, error_code="unexpected_client", now=now)
+            self.store.mark_unknown(
+                operation,
+                error_code="unexpected_client",
+                now=self._settled_at(now, cycle_started),
+            )
             self._record_event("warning", "topic_panel_send_unknown", f"kind={operation.kind}")
             return
-        self.store.confirm(operation, receipt_message_id=message_id, next_due_at=next_due, now=now)
+        self.store.confirm(
+            operation,
+            receipt_message_id=message_id,
+            next_due_at=next_due,
+            now=self._settled_at(now, cycle_started),
+        )
         self._transport_success()
+
+    def _settled_at(self, now: datetime, cycle_started: float) -> datetime:
+        return now + timedelta(seconds=max(0.0, self._clock() - cycle_started))
 
     def _settle_error(
         self,
@@ -180,7 +207,6 @@ class TopicPanelSender:
         *,
         next_due: datetime,
         now: datetime,
-        received: datetime,
     ) -> None:
         status = error.status_code
         rejected = error.failure_class == "api_rejection" and status is not None
@@ -200,7 +226,7 @@ class TopicPanelSender:
             return
         if rejected and status == 429:
             delay = error.retry_after if error.retry_after else PANEL_DEFAULT_RETRY_AFTER
-            until = received + timedelta(seconds=delay)
+            until = now + timedelta(seconds=delay)
             self.store.reject(
                 operation, error_code="api_429", now=now, retry_at=until, pause_until=until
             )

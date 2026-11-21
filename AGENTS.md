@@ -118,8 +118,9 @@ revision and highest proven level.
   state, worker lifecycle, security, trust boundaries or release gates, needs an
   independent agent review by a model family that did not write it, or the
   owner's own review. The reviewer follows the author's active model: Codex or
-  other non-Claude authors get Claude Opus 5.5/high; Claude authors get GPT-6.1
-  Sol/high, or GPT Astra/high for exceptionally important changes. Argon is not
+  other non-Claude authors get Claude Opus/high; Claude authors get GPT
+  Sol/high, or GPT Astra/high for exceptionally important changes. Always use
+  the newest available version of that family (owner, 2026-11-21). Argon is not
   a reviewer. Follow `docs/operations/CLAUDE_SOURCE_REVIEW.md` and record the
   findings in the pull request. Review is bounded: one round, then a second
   only for blockers. After that the owner decides on what is still open
