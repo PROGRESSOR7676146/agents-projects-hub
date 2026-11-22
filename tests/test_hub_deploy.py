@@ -978,6 +978,68 @@ class StageTests(StageFixture):
         self.assertTrue(config["changed"])
 
 
+class ResidencySettleTests(unittest.TestCase):
+    """A forked Type=simple unit is briefly not yet its runtime (systemd-executor)."""
+
+    def manager(self, probes, invocations=(), state="active"):
+        probes, invocations = iter(probes), iter(invocations)
+
+        def resident(unit, root):
+            value = next(probes)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        def identity(unit):
+            invocation = next(invocations, "first")
+            return {"ActiveState": state, "MainPID": "42", "InvocationID": invocation}
+
+        return SimpleNamespace(resident=resident, identity=identity)
+
+    def verify(self, manager, sleeps, **kwargs):
+        return hub_deploy._verify_unit(
+            "worker.service", "/runtime", "process", manager, sleeps.append, **kwargs
+        )
+
+    def test_forked_unit_is_awaited_until_its_runtime_execs(self):
+        sleeps = []
+        identity = self.verify(self.manager([False, False, True]), sleeps)
+        self.assertEqual(identity["MainPID"], "42")
+        self.assertEqual(sleeps, [hub_deploy.RESIDENCY_SETTLE_INTERVAL] * 2)
+
+    def test_vanished_process_of_the_same_invocation_is_retried(self):
+        sleeps = []
+        self.verify(self.manager([FileNotFoundError(), ProcessLookupError(), True]), sleeps)
+        self.assertEqual(len(sleeps), 2)
+
+    def test_identity_change_while_settling_is_refused(self):
+        sleeps = []
+        manager = self.manager([False, True], invocations=["first", "restarted"])
+        with self.assertRaisesRegex(hub_deploy.Refused, "identity changed while starting"):
+            self.verify(manager, sleeps)
+        self.assertEqual(sleeps, [])
+
+    def test_inactive_unit_is_refused_without_waiting(self):
+        sleeps = []
+        with self.assertRaisesRegex(hub_deploy.Refused, "unit inactive or not resident"):
+            self.verify(self.manager([False], state="failed"), sleeps)
+        self.assertEqual(sleeps, [])
+
+    def test_settle_budget_is_bounded(self):
+        attempts = hub_deploy.RESIDENCY_SETTLE_ATTEMPTS
+        self.assertLessEqual(attempts * hub_deploy.RESIDENCY_SETTLE_INTERVAL, 15)
+        sleeps = []
+        with self.assertRaisesRegex(hub_deploy.Refused, "unit inactive or not resident"):
+            self.verify(self.manager([False] * (attempts + 1)), sleeps)
+        self.assertEqual(len(sleeps), attempts)
+
+    def test_zero_settle_checks_once(self):
+        sleeps = []
+        with self.assertRaisesRegex(hub_deploy.Refused, "unit inactive or not resident"):
+            self.verify(self.manager([False, True]), sleeps, settle=0)
+        self.assertEqual(sleeps, [])
+
+
 class ServiceManagerTests(unittest.TestCase):
     def test_dependency_alias_of_untouched_unit_is_refused(self):
         class Manager:
@@ -1470,6 +1532,23 @@ class WindowTests(StageFixture):
             load=lambda: 0,
             fault=fault,
         )
+
+    def test_convergence_retries_residency_without_settle_waits(self):
+        # The convergence loop is already the bounded retry; a nested settle
+        # would multiply its worst case before recovery starts.
+        original = self.manager.resident
+        missed = []
+
+        def resident(unit, root):
+            if unit == "worker.service" and ("start", unit) in self.manager.calls and not missed:
+                missed.append(unit)
+                return False
+            return original(unit, root)
+
+        self.manager.resident = resident
+        self.assertEqual(self.execute()["outcome"], "ACCEPTED")
+        self.assertEqual(missed, ["worker.service"])
+        self.assertEqual(self.sleeps, [5])
 
     def prepare_environment_only_worker(self):
         path = self.units / "worker.service.d/override.conf"

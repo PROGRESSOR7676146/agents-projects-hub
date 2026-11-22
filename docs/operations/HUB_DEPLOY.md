@@ -80,6 +80,13 @@ order. It retries the monitor oneshot once after 60 seconds and checks new
 runtime convergence and untouched identities. Before and after effect records
 are synced to the private journal.
 
+A process-mode unit is resident when its main process has an argument under the
+runtime root. A sandboxed `Type=simple` unit is active before it executes its
+runtime, so a single residency check, such as an executor's readiness hook,
+re-probes for at most 15 seconds while the unit keeps its invocation and main
+PID, and refuses a restart or an inactive unit at once. Convergence already
+repeats its whole check every five seconds, so it does not wait inside it.
+
 The result and exit code are:
 
 - `ACCEPTED` (0): core convergence and monitor check succeeded.

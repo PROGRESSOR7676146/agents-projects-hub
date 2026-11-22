@@ -709,16 +709,53 @@ def _environment_has_root(value: str, root: str) -> bool:
     )
 
 
-def _verify_unit(unit: str, root: str, mode: str, manager: Any) -> None:
-    if mode == "process":
-        need(manager.resident(unit, root), "unit inactive or not resident: " + unit)
-    else:
+# A Type=simple unit is active once forked; with PrivateTmp or other sandboxing,
+# systemd-executor prepares the namespace before exec, so MainPID is briefly not
+# yet the runtime. Residency waits out only that window, sleeping at most 15 s.
+RESIDENCY_SETTLE_ATTEMPTS = 150
+RESIDENCY_SETTLE_INTERVAL = 0.1
+
+
+def _verify_unit(
+    unit: str,
+    root: str,
+    mode: str,
+    manager: Any,
+    sleep: Callable[[float], None] = time.sleep,
+    *,
+    settle: int = RESIDENCY_SETTLE_ATTEMPTS,
+) -> dict[str, str]:
+    """Return the identity of an active unit running from ``root``.
+
+    A process-mode unit that is active but not yet resident is re-probed up to
+    ``settle`` times while its identity stays unchanged. A restart, an inactive
+    unit or an exhausted budget is refused. Pass ``settle=0`` from a caller
+    that already retries.
+    """
+    first = manager.identity(unit)
+    if mode != "process":
         need(mode == "environment", "invalid unit runtime mode")
-        need(manager.identity(unit)["ActiveState"] == "active", "unit inactive: " + unit)
+        need(first["ActiveState"] == "active", "unit inactive: " + unit)
         need(
             _environment_has_root(manager.property(unit, "Environment"), root),
             "unit environment does not reference runtime: " + unit,
         )
+        return first
+    attempt = 0
+    while True:
+        try:
+            resident = manager.resident(unit, root)
+        except (FileNotFoundError, ProcessLookupError):
+            resident = False  # The process exited; the identity check decides.
+        need(manager.identity(unit) == first, "unit identity changed while starting: " + unit)
+        if resident:
+            return first
+        need(
+            first["ActiveState"] == "active" and attempt < settle,
+            "unit inactive or not resident: " + unit,
+        )
+        attempt += 1
+        sleep(RESIDENCY_SETTLE_INTERVAL)
 
 
 def discover_installation(
@@ -1871,7 +1908,10 @@ def _verify(
                     "component not fresh and clean",
                 )
             for unit in plan["restart_order"]:
-                _verify_unit(unit, runtime["root"], plan["unit_runtime_modes"][unit], manager)
+                # This loop is the retry: settling here would multiply its bound.
+                _verify_unit(
+                    unit, runtime["root"], plan["unit_runtime_modes"][unit], manager, settle=0
+                )
             _verify_config_only(
                 plan,
                 manager,
@@ -2216,7 +2256,7 @@ def apply_window(
         need(load() < 4, "load too high")
         for unit in plan["restart_order"]:
             _verify_unit(
-                unit, plan["old_runtime"]["root"], plan["unit_runtime_modes"][unit], manager
+                unit, plan["old_runtime"]["root"], plan["unit_runtime_modes"][unit], manager, sleep
             )
         need(
             manager.identity(installation["monitor_timer"])["ActiveState"] == "active",
