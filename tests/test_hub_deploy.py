@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -1269,13 +1270,21 @@ class ServiceManagerTests(unittest.TestCase):
                 manager.identity("worker.service")
 
     def test_residency_reads_the_given_process(self):
-        executable = Path("/proc/self/cmdline").read_bytes().split(b"\0")[0].decode()
-        root = str(Path(executable).parent)
-        manager = hub_deploy.ServiceManager(lambda argv: self.fail("no systemctl call"))
-        pid = str(os.getpid())
-        self.assertTrue(manager.resident("worker.service", root, pid))
-        self.assertFalse(manager.resident("worker.service", root + "-other", pid))
-        self.assertFalse(manager.resident("worker.service", root, "0"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = str(Path(directory).resolve() / "runtime")
+            child = subprocess.Popen(
+                [sys.executable, "-I", "-c", "import sys; sys.stdin.read()", root + "/marker"],
+                stdin=subprocess.PIPE,
+            )
+            try:
+                manager = hub_deploy.ServiceManager(lambda argv: self.fail("no systemctl call"))
+                pid = str(child.pid)
+                self.assertTrue(manager.resident("worker.service", root, pid))
+                self.assertFalse(manager.resident("worker.service", root + "-other", pid))
+                self.assertFalse(manager.resident("worker.service", root, str(os.getpid())))
+                self.assertFalse(manager.resident("worker.service", root, "0"))
+            finally:
+                child.communicate(timeout=30)
 
     def test_root_slice_is_not_parsed_as_an_option(self):
         calls = []
