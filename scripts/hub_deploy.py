@@ -709,16 +709,56 @@ def _environment_has_root(value: str, root: str) -> bool:
     )
 
 
-def _verify_unit(unit: str, root: str, mode: str, manager: Any) -> None:
-    if mode == "process":
-        need(manager.resident(unit, root), "unit inactive or not resident: " + unit)
-    else:
+# A Type=simple unit is active once forked; with PrivateTmp or other sandboxing,
+# systemd-executor prepares the namespace before exec, so MainPID is briefly not
+# yet the runtime. Residency waits out only that window: up to 150 re-probes,
+# 15 s of sleep in total plus probe time.
+RESIDENCY_SETTLE_ATTEMPTS = 150
+RESIDENCY_SETTLE_INTERVAL = 0.1
+
+
+def _verify_unit(
+    unit: str,
+    root: str,
+    mode: str,
+    manager: Any,
+    sleep: Callable[[float], None] = time.sleep,
+    *,
+    settle: int = RESIDENCY_SETTLE_ATTEMPTS,
+) -> dict[str, str]:
+    """Return the identity snapshot of an active unit running from ``root``.
+
+    A process-mode unit is probed through the MainPID of one identity snapshot
+    and accepted only if the snapshot is unchanged afterwards. While it is active
+    but not yet resident, it is re-probed up to ``settle`` times. A restart, a
+    state other than ``active`` or an exhausted budget is refused. Pass
+    ``settle=0`` from a caller that already retries or must not wait. The
+    snapshot is taken here, so a caller that must bind the invocation it
+    started compares the returned identity with its own record.
+    """
+    first = manager.identity(unit)
+    if mode != "process":
         need(mode == "environment", "invalid unit runtime mode")
-        need(manager.identity(unit)["ActiveState"] == "active", "unit inactive: " + unit)
+        need(first["ActiveState"] == "active", "unit inactive: " + unit)
         need(
             _environment_has_root(manager.property(unit, "Environment"), root),
             "unit environment does not reference runtime: " + unit,
         )
+        need(manager.identity(unit) == first, "unit identity changed while checking: " + unit)
+        return first
+    need(first["ActiveState"] == "active", "unit inactive or not resident: " + unit)
+    attempt = 0
+    while True:
+        try:
+            resident = manager.resident(unit, root, first["MainPID"])
+        except (FileNotFoundError, ProcessLookupError):
+            resident = False  # The process exited; the identity check decides.
+        need(manager.identity(unit) == first, "unit identity changed while starting: " + unit)
+        if resident:
+            return first
+        need(attempt < settle, "unit inactive or not resident: " + unit)
+        attempt += 1
+        sleep(RESIDENCY_SETTLE_INTERVAL)
 
 
 def discover_installation(
@@ -1375,20 +1415,18 @@ def verify_saved_plan(plan_dir: Path, *, check_live: bool = True) -> dict[str, A
     return plan
 
 
-def inspect_unit(unit: str, root: str, runner: Callable[..., Any]) -> bool:
-    def property_value(name: str) -> str:
-        return runner(
-            ["systemctl", "--user", "show", f"--property={name}", "--value", "--", unit]
-        ).stdout.strip()
-
-    if property_value("ActiveState") != "active":
-        return False
-    pid = property_value("MainPID")
+def _process_resident(pid: str, root: str) -> bool:
+    """Whether process ``pid`` has an argument under the runtime ``root``."""
     if not pid.isdecimal() or int(pid) <= 0:
         return False
     args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
     prefix = os.fsencode(root + "/")
     return any(arg.startswith(prefix) for arg in args)
+
+
+def inspect_unit(unit: str, root: str, runner: Callable[..., Any]) -> bool:
+    identity = ServiceManager(runner).identity(unit)
+    return identity["ActiveState"] == "active" and _process_resident(identity["MainPID"], root)
 
 
 def _unit_list(manager: Any, unit: str, name: str) -> list[str]:
@@ -1420,7 +1458,19 @@ class ServiceManager:
         ).stdout.strip()
 
     def identity(self, unit: str) -> dict[str, str]:
-        return {key: self.property(unit, key) for key in ("ActiveState", "MainPID", "InvocationID")}
+        """Read the three values in one call, so they form one manager snapshot."""
+        keys = ("ActiveState", "MainPID", "InvocationID")
+        output = self.runner(
+            # --all keeps an inactive unit's empty InvocationID.
+            ["systemctl", "--user", "show", "--all", "--property=" + ",".join(keys), "--", unit]
+        ).stdout
+        lines = [line.partition("=") for line in output.splitlines()]
+        values = {key: value for key, sep, value in lines if sep}
+        need(
+            len(lines) == len(keys) == len(values) and set(values) == set(keys),
+            "malformed identity of " + unit,
+        )
+        return {key: values[key] for key in keys}
 
     def enabled(self, unit: str) -> bool:
         return self.property(unit, "UnitFileState") == "enabled"
@@ -1459,8 +1509,9 @@ class ServiceManager:
     def reload(self) -> None:
         self.runner(["systemctl", "--user", "daemon-reload"])
 
-    def resident(self, unit: str, root: str) -> bool:
-        return inspect_unit(unit, root, self.runner)
+    def resident(self, unit: str, root: str, pid: str) -> bool:
+        """Probe ``pid`` from the caller's identity snapshot, never a new lookup."""
+        return _process_resident(pid, root)
 
 
 _DEPENDENCIES = (
@@ -1871,7 +1922,10 @@ def _verify(
                     "component not fresh and clean",
                 )
             for unit in plan["restart_order"]:
-                _verify_unit(unit, runtime["root"], plan["unit_runtime_modes"][unit], manager)
+                # This loop is the retry: settling here would multiply its bound.
+                _verify_unit(
+                    unit, runtime["root"], plan["unit_runtime_modes"][unit], manager, settle=0
+                )
             _verify_config_only(
                 plan,
                 manager,
@@ -2215,8 +2269,13 @@ def apply_window(
         need(not _busy(installation), "provider jobs busy")
         need(load() < 4, "load too high")
         for unit in plan["restart_order"]:
+            # Fail fast: waiting would let the busy and load checks above go stale.
             _verify_unit(
-                unit, plan["old_runtime"]["root"], plan["unit_runtime_modes"][unit], manager
+                unit,
+                plan["old_runtime"]["root"],
+                plan["unit_runtime_modes"][unit],
+                manager,
+                settle=0,
             )
         need(
             manager.identity(installation["monitor_timer"])["ActiveState"] == "active",
