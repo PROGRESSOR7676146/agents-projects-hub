@@ -12,8 +12,9 @@ and releases use semantic versioning while the public API is still evolving.
   services stop; a migration's rollback release must still refuse declarations.
 - `hub_deploy` residency checks wait out the moment when a sandboxed unit is
   already active but has not yet executed its runtime. A check made right after
-  a start, as a release executor does on its rollback path, re-probes for at
-  most 15 seconds while the unit keeps its invocation, instead of failing.
+  a start, as a release executor does on its rollback path, re-probes for about
+  15 seconds while one identity snapshot holds, instead of failing. The probe
+  reads that snapshot's main process; preflight still checks once.
 
 ## [0.11.29] - 2026-11-21
 

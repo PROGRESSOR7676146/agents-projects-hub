@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -983,8 +984,10 @@ class ResidencySettleTests(unittest.TestCase):
 
     def manager(self, probes, invocations=(), state="active"):
         probes, invocations = iter(probes), iter(invocations)
+        probed = []
 
-        def resident(unit, root):
+        def resident(unit, root, pid):
+            probed.append(pid)
             value = next(probes)
             if isinstance(value, BaseException):
                 raise value
@@ -994,7 +997,7 @@ class ResidencySettleTests(unittest.TestCase):
             invocation = next(invocations, "first")
             return {"ActiveState": state, "MainPID": "42", "InvocationID": invocation}
 
-        return SimpleNamespace(resident=resident, identity=identity)
+        return SimpleNamespace(resident=resident, identity=identity, probed=probed)
 
     def verify(self, manager, sleeps, **kwargs):
         return hub_deploy._verify_unit(
@@ -1003,9 +1006,12 @@ class ResidencySettleTests(unittest.TestCase):
 
     def test_forked_unit_is_awaited_until_its_runtime_execs(self):
         sleeps = []
-        identity = self.verify(self.manager([False, False, True]), sleeps)
+        manager = self.manager([False, False, True])
+        identity = self.verify(manager, sleeps)
         self.assertEqual(identity["MainPID"], "42")
         self.assertEqual(sleeps, [hub_deploy.RESIDENCY_SETTLE_INTERVAL] * 2)
+        # Only the snapshot's process is probed, never a PID looked up again.
+        self.assertEqual(manager.probed, ["42"] * 3)
 
     def test_vanished_process_of_the_same_invocation_is_retried(self):
         sleeps = []
@@ -1019,11 +1025,23 @@ class ResidencySettleTests(unittest.TestCase):
             self.verify(manager, sleeps)
         self.assertEqual(sleeps, [])
 
-    def test_inactive_unit_is_refused_without_waiting(self):
-        sleeps = []
-        with self.assertRaisesRegex(hub_deploy.Refused, "unit inactive or not resident"):
-            self.verify(self.manager([False], state="failed"), sleeps)
-        self.assertEqual(sleeps, [])
+    def test_inactive_unit_is_refused_without_probing(self):
+        for state in ("failed", "reloading", "activating"):
+            sleeps = []
+            manager = self.manager([True], state=state)
+            with self.assertRaisesRegex(hub_deploy.Refused, "unit inactive or not resident"):
+                self.verify(manager, sleeps)
+            self.assertEqual((sleeps, manager.probed), ([], []))
+
+    def test_environment_identity_is_rechecked(self):
+        manager = self.manager([], invocations=["first", "restarted"])
+        manager.property = lambda unit, name: "SOURCE=/runtime/src"
+        with self.assertRaisesRegex(hub_deploy.Refused, "identity changed"):
+            hub_deploy._verify_unit("worker.service", "/runtime", "environment", manager)
+        manager = self.manager([])
+        manager.property = lambda unit, name: "SOURCE=/runtime/src"
+        identity = hub_deploy._verify_unit("worker.service", "/runtime", "environment", manager)
+        self.assertEqual(identity["InvocationID"], "first")
 
     def test_settle_budget_is_bounded(self):
         attempts = hub_deploy.RESIDENCY_SETTLE_ATTEMPTS
@@ -1230,6 +1248,35 @@ class ServiceManagerTests(unittest.TestCase):
             ],
         )
 
+    def test_identity_is_one_snapshot(self):
+        calls = []
+        output = "MainPID=42\nActiveState=active\nInvocationID=abc\n"
+
+        def runner(argv):
+            calls.append(argv)
+            return SimpleNamespace(stdout=output)
+
+        manager = hub_deploy.ServiceManager(runner)
+        self.assertEqual(
+            manager.identity("worker.service"),
+            {"ActiveState": "active", "MainPID": "42", "InvocationID": "abc"},
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--all", calls[0])  # An inactive unit's empty InvocationID is kept.
+        self.assertEqual(calls[0][-2:], ["--", "worker.service"])
+        for output in ("MainPID=42\nActiveState=active\n", "ActiveState=active\nActiveState=x\n"):
+            with self.assertRaisesRegex(hub_deploy.Refused, "malformed identity"):
+                manager.identity("worker.service")
+
+    def test_residency_reads_the_given_process(self):
+        executable = Path("/proc/self/cmdline").read_bytes().split(b"\0")[0].decode()
+        root = str(Path(executable).parent)
+        manager = hub_deploy.ServiceManager(lambda argv: self.fail("no systemctl call"))
+        pid = str(os.getpid())
+        self.assertTrue(manager.resident("worker.service", root, pid))
+        self.assertFalse(manager.resident("worker.service", root + "-other", pid))
+        self.assertFalse(manager.resident("worker.service", root, "0"))
+
     def test_root_slice_is_not_parsed_as_an_option(self):
         calls = []
 
@@ -1323,7 +1370,7 @@ class FakeManager:
     def reload(self):
         self.calls.append(("reload",))
 
-    def resident(self, unit, root):
+    def resident(self, unit, root, pid):
         self.resident_calls.append((unit, root))
         return self.states[unit] == "active"
 
@@ -1539,16 +1586,24 @@ class WindowTests(StageFixture):
         original = self.manager.resident
         missed = []
 
-        def resident(unit, root):
+        def resident(unit, root, pid):
             if unit == "worker.service" and ("start", unit) in self.manager.calls and not missed:
                 missed.append(unit)
                 return False
-            return original(unit, root)
+            return original(unit, root, pid)
 
         self.manager.resident = resident
         self.assertEqual(self.execute()["outcome"], "ACCEPTED")
         self.assertEqual(missed, ["worker.service"])
         self.assertEqual(self.sleeps, [5])
+
+    def test_preflight_refuses_a_not_resident_unit_without_waiting(self):
+        # Waiting here would let the busy and load checks above go stale.
+        self.manager.resident = lambda unit, root, pid: unit != "worker.service"
+        with self.assertRaisesRegex(hub_deploy.Refused, "not resident: worker.service"):
+            self.execute()
+        self.assertEqual(self.sleeps, [])
+        self.assertFalse(any(call[0] == "stop" for call in self.manager.calls))
 
     def prepare_environment_only_worker(self):
         path = self.units / "worker.service.d/override.conf"

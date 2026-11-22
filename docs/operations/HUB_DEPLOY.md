@@ -80,12 +80,16 @@ order. It retries the monitor oneshot once after 60 seconds and checks new
 runtime convergence and untouched identities. Before and after effect records
 are synced to the private journal.
 
-A process-mode unit is resident when its main process has an argument under the
-runtime root. A sandboxed `Type=simple` unit is active before it executes its
-runtime, so a single residency check, such as an executor's readiness hook,
-re-probes for at most 15 seconds while the unit keeps its invocation and main
-PID, and refuses a restart or an inactive unit at once. Convergence already
-repeats its whole check every five seconds, so it does not wait inside it.
+A process-mode unit is resident when the main process of one identity snapshot
+(`ActiveState`, `MainPID`, `InvocationID`) has an argument under the runtime
+root and the snapshot is unchanged after the probe. A sandboxed `Type=simple`
+unit is active before it executes its runtime, so a check made right after a
+start, such as an executor's readiness hook, re-probes up to 150 times, with
+15 seconds of sleep in total plus probe time, while that snapshot holds. It
+refuses a restart or a state other than `active` at once and returns the
+snapshot, which an executor compares with the invocation it started. Preflight
+checks once, so its busy and load checks do not go stale; convergence repeats
+its whole check every five seconds instead of waiting inside it.
 
 The result and exit code are:
 
