@@ -178,28 +178,37 @@ The plan, its digest and the window manifest stay untouched.
 Write the complete new config to a private file (owned by the invoking user,
 mode `0600`, absolute path) and pass it with `--config`. The tool compares
 top-level keys with exact JSON values and refuses an unchanged config,
-duplicate keys and any changed key outside `RECONFIGURABLE_KEYS`:
-`message_batch_max_ms`, `message_batch_quiet_ms`, `operational_alerts`,
-`task_no_progress_seconds` and `topic_panel`. Only the Controller, sender and
-monitor read these, all from the Hub config. Every other key, including the
-Claude settings that the Claude worker config repeats, needs a release.
-The installed runtime must validate the candidate, the window backup and both
-bound wheels must still match, and the installation must pass the deployment
-preflight: no busy jobs, low load, every service resident in the installed
-runtime and unchanged untouched units.
+duplicate keys, non-JSON numbers and any changed key outside
+`RECONFIGURABLE_KEYS`: `message_batch_max_ms`, `message_batch_quiet_ms`,
+`task_no_progress_seconds` and `topic_panel`. Numbers compare as exact
+decimals, and `1`, `1.0` and `true` differ. Only the Controller and sender read
+these keys, from the Hub config. Other keys stay outside `reconfigure`: Claude
+workers read some from their own copy, a destination such as the alert topic
+is the owner's choice, and the rest are trust, credentials, project
+registration, security profiles, paths, worker counts or the unit set. The
+installed runtime must validate the candidate. Both bound wheels must still
+match, and the window backup must match the window manifest. Every other window
+file must keep the bytes and mode the window installed. The installation must
+pass the deployment preflight: no busy jobs, low load, every service resident
+in the installed runtime, config-only units on that runtime and unchanged
+untouched units.
 
 The amendment stops the monitor and the restart order, rechecks for busy jobs,
 writes the config atomically with its installed mode, creates a new
 `release-manifest.json` in its own directory with the window's wheels and state
-backup, verifies it with `--state` against the live database, starts the
+backup, verifies it with `--state` against the live database, requires it to
+bind the same wheels, schema and backup as the window manifest, starts the
 services and checks the same convergence as a window. Any failure restores the
-previous bytes, restarts and verifies the services, and ends `REVERTED`; an
-unverified restoration ends `RECOVERY_REQUIRED`. An interrupted amendment
-blocks `deploy`, `apply` and further amendments until
-`reconfigure --recover` restores its previous bytes. The result names the
-changed keys, the new config digest and the new manifest path and digest;
-report them for an external backup consumer to re-pin. `status` lists the
-amendments and the manifest that binds the running config.
+previous bytes, restarts and verifies the services, and ends `REVERTED` only
+after a fresh monitor run succeeds; otherwise it ends `RECOVERY_REQUIRED`. An
+interrupted or unverified amendment blocks `deploy`, `apply` and further
+amendments until `reconfigure --recover` restores its previous bytes. Recovery
+refuses while provider jobs are busy, because the services may be running
+again. The result names the changed keys, the new config digest and the new
+manifest path and digest; report them for an external backup consumer to
+re-pin. `status` lists the amendments and the manifest that binds the
+installed config; when the installed bytes differ from the recorded ones, it
+reports `config_drift` instead of a manifest.
 
 A config already edited outside the tool is recorded with `--adopt`: the live
 bytes become the amendment, checked against the same key list, and the
@@ -208,9 +217,18 @@ bytes, not the hand edit.
 
 A release rollback restores the config from before the window, dropping every
 amendment that was not reverted. It refuses until the caller acknowledges this
-with `--drop-amendments`; the result and the window journal list the dropped
-amendments, and the flag is refused when there is nothing to drop. Reapply a
-dropped change with a new `reconfigure` after the next accepted window.
+with `--drop-amendments`, and accepts only the recorded installed bytes or
+those of an unfinished amendment. The window journal records the
+acknowledgement, a `ROLLED_BACK` result lists the dropped amendments, and the
+flag is refused when there is nothing to drop, including on a window that was
+already rolled back. Reapply a dropped change with a new `reconfigure` after
+the next accepted window.
+
+An explicit recovery, `rollback --window` or `reconfigure --recover`, may
+follow a reboot that gave the untouched units new invocations. It therefore
+journals their identities when it starts and requires only that it leaves
+them unchanged. The automatic recovery inside a failed window or amendment
+keeps the baseline taken by its own preflight.
 
 ```text
 python3.12 -I scripts/hub_deploy.py reconfigure --installation /home/example/private/installation.json --config /home/example/private/hub-candidate.json

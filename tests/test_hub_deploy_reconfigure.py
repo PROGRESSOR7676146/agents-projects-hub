@@ -121,7 +121,7 @@ class ReconfigureTests(WindowFixture):
         self.assertEqual(json.loads(self.hub.read_bytes())["topic_panel"], {"enabled": True})
         self.assertEqual(self.require_status()["manifest"], result["manifest"])
 
-    def test_keys_that_need_a_release_are_refused_before_any_effect(self):
+    def test_keys_outside_the_allowlist_are_refused_before_any_effect(self):
         self.accept()
         stops = self.stops()
         config = json.loads(self.hub.read_bytes())
@@ -133,7 +133,7 @@ class ReconfigureTests(WindowFixture):
             {"topic_panel": {"enabled": True}, "codex_worker_count": 2},
         ):
             with self.subTest(changes=changes):
-                with self.assertRaisesRegex(hub_deploy.Refused, "need a release"):
+                with self.assertRaisesRegex(hub_deploy.Refused, "not reconfigurable"):
                     self.reconfigure(self.write_candidate(**changes))
         self.assertEqual(self.stops(), stops)
         self.assertEqual(self.hub.read_bytes(), self.original)
@@ -180,15 +180,28 @@ class ReconfigureTests(WindowFixture):
             ["topic_panel"],
         )
         self.assertEqual(
-            hub_deploy.config_changes(b"{}", b'{"operational_alerts": {"project_id": "x"}}'),
-            ["operational_alerts"],
+            hub_deploy.config_changes(b"{}", b'{"topic_panel": {"enabled": true}}'),
+            ["topic_panel"],
         )
-        with self.assertRaisesRegex(hub_deploy.Refused, "need a release: registry_path"):
+        with self.assertRaisesRegex(hub_deploy.Refused, "not reconfigurable: registry_path"):
             hub_deploy.config_changes(b'{"registry_path": "/a"}', b"{}")
         with self.assertRaisesRegex(hub_deploy.Refused, "no Hub config change"):
             hub_deploy.config_changes(b'{"a": [1, 2]}', b'{\n  "a": [1, 2]\n}')
         with self.assertRaisesRegex(hub_deploy.Refused, "must be an object"):
             hub_deploy.config_changes(b"[]", b"{}")
+        # Digits beyond float precision and int/float types are real changes.
+        changes = (
+            b'{"topic_panel": true, "x": 1.00000000000000001}',
+            b'{"topic_panel": false, "x": 1.00000000000000002}',
+        )
+        with self.assertRaisesRegex(hub_deploy.Refused, "not reconfigurable: x"):
+            hub_deploy.config_changes(*changes)
+        with self.assertRaisesRegex(hub_deploy.Refused, "not reconfigurable: x"):
+            hub_deploy.config_changes(b'{"x": 1}', b'{"x": 1.0}')
+        with self.assertRaisesRegex(hub_deploy.Refused, "non-JSON number"):
+            hub_deploy.config_changes(b"{}", b'{"topic_panel": NaN}')
+        with self.assertRaises(hub_deploy.Refused):
+            hub_deploy.config_changes(b"{}", b'{"operational_alerts": {"project_id": "x"}}')
 
     def test_requires_an_accepted_newest_window(self):
         with self.assertRaisesRegex(hub_deploy.Refused, "not accepted"):
@@ -228,7 +241,7 @@ class ReconfigureTests(WindowFixture):
         config = json.loads(self.original)
         config["owner_user_ids"] = [1]
         self.hub.write_bytes(json.dumps(config).encode())
-        with self.assertRaisesRegex(hub_deploy.Refused, "need a release: owner_user_ids"):
+        with self.assertRaisesRegex(hub_deploy.Refused, "not reconfigurable: owner_user_ids"):
             self.reconfigure(None)
 
     def test_failed_convergence_reverts_the_config_and_restarts(self):
@@ -292,7 +305,7 @@ class ReconfigureTests(WindowFixture):
         self.assertEqual(self.hub.read_bytes(), self.original)
         self.assertIn(str(self.old), (self.units / "worker.service.d/override.conf").read_text())
         rows = hub_deploy._journal_rows(self.ops / window / "journal.jsonl")
-        dropped = next(row for row in rows if row["phase"] == "amendments_dropped")
+        dropped = next(row for row in rows if row["phase"] == "amendments_drop_acknowledged")
         self.assertEqual(dropped["amendments"], ["amendment-001"])
         hub_deploy._unfinished(self.install)
 
@@ -406,6 +419,168 @@ class ReconfigureTests(WindowFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "amendment copy changed"):
             self.reconfigure(self.write_candidate(message_batch_quiet_ms=900))
 
+    def reboot(self):
+        """Every unit gets a new invocation, as after a host restart."""
+        identity = self.manager.identity
+        self.manager.identity = lambda unit: {**identity(unit), "InvocationID": "after-reboot"}
+
+    def test_release_rollback_after_a_reboot_uses_a_fresh_baseline(self):
+        window = self.accept()
+        self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.reboot()
+        result = self.rollback(window, drop_amendments=True)
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        rows = hub_deploy._journal_rows(self.ops / window / "journal.jsonl")
+        baseline = next(row for row in rows if row["phase"] == "recovery_baseline")
+        self.assertEqual(
+            baseline["untouched"]["units"]["tlive.service"]["InvocationID"], "after-reboot"
+        )
+        # A retry on the rolled-back window has nothing left to drop.
+        with self.assertRaisesRegex(hub_deploy.Refused, "no Hub config amendments to drop"):
+            self.rollback(window, drop_amendments=True)
+        self.assertEqual(self.rollback(window)["outcome"], "ROLLED_BACK")
+
+    def test_recover_after_a_reboot_uses_a_fresh_baseline_and_refuses_busy_work(self):
+        window = self.accept()
+
+        def interrupt(boundary):
+            if boundary == "after:config:after":
+                raise Interrupted()
+
+        with self.assertRaises(Interrupted):
+            self.reconfigure(self.write_candidate(topic_panel={"enabled": True}), fault=interrupt)
+        self.reboot()
+        for unit in self.install["restart_order"]:
+            self.manager.states[unit] = "active"
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("INSERT INTO provider_jobs VALUES ('codex', 'executing')")
+            db.commit()
+        stops = self.stops()
+        with self.assertRaisesRegex(hub_deploy.Refused, "recover when idle"):
+            hub_deploy.recover_amendment(
+                self.install, self.manager, self.window_runner, self.sleeps.append
+            )
+        self.assertEqual(self.stops(), stops)
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("DELETE FROM provider_jobs")
+            db.commit()
+        result = hub_deploy.recover_amendment(
+            self.install, self.manager, self.window_runner, self.sleeps.append
+        )
+        self.assertEqual(result["outcome"], "REVERTED", result)
+        self.assertEqual(self.hub.read_bytes(), self.original)
+        rows = hub_deploy._journal_rows(self.amendment(window) / "journal.jsonl")
+        self.assertIn("recovery_baseline", [row["phase"] for row in rows])
+
+    def test_revert_without_a_fresh_monitor_run_requires_recovery(self):
+        self.accept()
+        self.manager.fail_start = True
+        original = self.manager.start
+
+        def start(unit):
+            # The candidate controller fails, then both monitor runs of the revert fail.
+            if self.manager.fail_start is False and unit == "monitor.service":
+                raise hub_deploy.Refused("monitor failure")
+            original(unit)
+
+        self.manager.start = start
+        result = self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED", result)
+        self.assertIn("monitor", result["error"])
+        self.assertEqual(self.hub.read_bytes(), self.original)
+        self.manager.start = original
+        self.assertEqual(
+            hub_deploy.recover_amendment(
+                self.install, self.manager, self.window_runner, self.sleeps.append
+            )["outcome"],
+            "REVERTED",
+        )
+
+    def test_swapped_window_backup_is_refused_before_stopping(self):
+        window = self.accept()
+        backup = self.ops / window / "state.db"
+        with closing(sqlite3.connect(backup)) as db:
+            db.execute("CREATE TABLE swapped (x)")
+            db.commit()
+        stops = self.stops()
+        with self.assertRaisesRegex(hub_deploy.Refused, "differs from the window manifest"):
+            self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.assertEqual(self.stops(), stops)
+
+    def test_new_manifest_must_bind_only_the_config_change(self):
+        self.accept()
+        original = self.window_runner
+
+        def other_wheel(argv, **kwargs):
+            if "create" in argv and "release-manifest" in argv:
+                argv = list(map(str, argv))
+                argv[argv.index("--rollback-artifact") + 1] = argv[
+                    argv.index("--active-artifact") + 1
+                ]
+            return original(argv, **kwargs)
+
+        result = self.reconfigure(
+            self.write_candidate(topic_panel={"enabled": True}), runner=other_wheel
+        )
+        self.assertEqual(result["outcome"], "REVERTED", result)
+        self.assertEqual(self.hub.read_bytes(), self.original)
+
+    def test_changed_window_file_is_refused_before_stopping(self):
+        self.accept()
+        dropin = self.units / "worker.service.d/override.conf"
+        entry = next(
+            e
+            for e in hub_deploy.verify_saved_plan(self.plan, check_live=False)["files"]
+            if e["path"] == str(dropin)
+        )
+        # Restoring the pre-deploy bytes is valid for a release rollback, not here.
+        dropin.write_bytes((self.plan / entry["before"]["copy"]).read_bytes())
+        stops = self.stops()
+        with self.assertRaisesRegex(hub_deploy.Refused, "differs from the window"):
+            self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.assertEqual(self.stops(), stops)
+
+    def test_status_reports_drift_instead_of_a_stale_manifest(self):
+        self.accept()
+        config = json.loads(self.original)
+        config["topic_panel"] = {"enabled": True}
+        self.hub.write_bytes(json.dumps(config).encode())
+        status = self.require_status()
+        self.assertTrue(status["config_drift"])
+        self.assertNotIn("manifest", status)
+        self.reconfigure(None)
+        status = self.require_status()
+        self.assertNotIn("config_drift", status)
+        self.assertTrue(status["manifest"].endswith("amendment-001/release-manifest.json"))
+
+    def test_rollback_refuses_bytes_of_a_reverted_candidate(self):
+        window = self.accept()
+        self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.manager.fail_start = True
+        reverted = self.write_candidate(message_batch_quiet_ms=900).read_bytes()
+        self.assertEqual(self.reconfigure(self.candidate)["outcome"], "REVERTED")
+        self.hub.write_bytes(reverted)
+        with self.assertRaisesRegex(hub_deploy.Refused, "unrelated file edit"):
+            self.rollback(window, drop_amendments=True)
+
+    def test_unfinished_rollback_suggests_the_acknowledgement(self):
+        window = self.accept()
+        self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.fail_verify_old = True
+        result = self.rollback(window, drop_amendments=True)
+        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED", result)
+        self.assertNotIn("dropped_amendments", result)
+        with self.assertRaisesRegex(hub_deploy.Refused, "--drop-amendments"):
+            self.execute()
+
+    def test_abandoned_preparation_is_removed_under_the_lock(self):
+        window = self.accept()
+        abandoned = self.ops / window / ".amendment-preparing-example"
+        abandoned.mkdir(mode=0o700)
+        (abandoned / "config-after").write_bytes(b"{}")
+        self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.assertFalse(abandoned.exists())
+
     def run_cli(self, *argv: str) -> tuple[int, str, str]:
         output, errors = io.StringIO(), io.StringIO()
         with redirect_stdout(output), redirect_stderr(errors):
@@ -428,6 +603,8 @@ class ReconfigureTests(WindowFixture):
             ("status", "--adopt"),
             ("status", "--drop-amendments"),
             ("reconfigure", "--config", candidate, "--drop-amendments"),
+            ("reconfigure", "--config", "", "--adopt"),
+            ("status", "--config", ""),
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(self.run_cli(*argv)[0], 1)

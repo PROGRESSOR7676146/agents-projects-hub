@@ -1473,7 +1473,23 @@ class WindowFixture(StageFixture):
             shutil.copyfile(self.db, argv[-1])
         if "create" in argv and "release-manifest" in argv:
             created = Path(argv[argv.index("create") + 1])
-            created.write_text("manifest")
+
+            def bound(option):
+                path = argv[argv.index(option) + 1]
+                return {"path": path, "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+            document = {
+                "schema_version": 1,
+                "created_at": str(len(self.calls)),
+                "target_schema_version": 8,
+                "active_artifact": bound("--active-artifact"),
+                "rollback_artifact": bound("--rollback-artifact"),
+                "configuration": bound("--config"),
+                "state_backup": {**bound("--backup"), "schema_version": 7},
+            }
+            # Exclusive and private, like the real command.
+            with open(created, "x") as stream:
+                json.dump(document, stream)
             created.chmod(0o600)
         if "status" in argv:
             sha = (

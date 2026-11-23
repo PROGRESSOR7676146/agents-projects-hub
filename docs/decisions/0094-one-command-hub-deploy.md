@@ -91,14 +91,23 @@ services itself and restores the previous bytes on failure. Its `before` must
 be the bytes the window and the earlier finished amendments installed, so the
 chain cannot skip a change.
 
-Only an allowlist of top-level keys may change, read by the Controller, sender
-and monitor from the Hub config alone. A key that Claude workers read from
-their own config would need both files changed in step, and trust,
-credentials, project registration, security profiles, paths, worker counts and
-the unit set are owner decisions or change what runs; all of these need a
-release. Adding a key is a code change with its own review. A hand edit already
-present is recorded with `--adopt` under the same checks, because otherwise
-the first amendment on such an installation could never start.
+Only an allowlist of top-level keys may change, read by the Controller and
+sender from the Hub config alone. A key that Claude workers read from their own
+config would need both files changed in step. A destination such as the alert
+topic, trust, credentials, project registration, security profiles, paths,
+worker counts and the unit set are owner decisions or change what runs.
+Adding a key is a code change with its own review. A hand edit already present
+is recorded with `--adopt` under the same checks, because otherwise the first
+amendment on such an installation could never start. The new manifest must
+bind the same wheels, schema and backup as the window manifest, so an
+amendment cannot move the backup consumer's pin beyond the config.
+
+An explicit recovery after a reboot finds the untouched units with new
+invocations, which a baseline saved before the reboot can never match. Explicit
+`rollback` and `reconfigure --recover` therefore journal a fresh baseline at
+their start and prove only that they leave those units unchanged; the
+automatic recovery inside a failed window or amendment keeps its own
+preflight's baseline.
 
 Owner decision, 2026-11-23: a release rollback restores the config from before
 the window and drops only the amendments made after it, listing them. The

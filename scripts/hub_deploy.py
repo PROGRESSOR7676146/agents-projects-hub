@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import decimal
 import fcntl
 import hashlib
 import json
@@ -60,15 +61,14 @@ AMENDMENT_DONE = ("ACCEPTED", "REVERTED", "CORE_HEALTHY_MONITOR_INCOMPLETE")
 AMENDMENT_EFFECTIVE = ("ACCEPTED", "CORE_HEALTHY_MONITOR_INCOMPLETE")
 MANIFEST = "release-manifest.json"
 # Top-level Hub config keys that `reconfigure` may change on an accepted
-# window. Only the Controller, sender and monitor read them, all from the Hub
-# config; Claude workers read their own copy, so keys they use need a release.
-# Trust, credentials, project registration, security profiles, paths, worker
-# counts and the unit set stay out of reach.
+# window. Only the Controller and sender read them, from the Hub config. Keys
+# that Claude workers read from their own copy, destinations such as the alert
+# topic, trust, credentials, project registration, security profiles, paths,
+# worker counts and the unit set stay out of reach.
 RECONFIGURABLE_KEYS = frozenset(
     {
         "message_batch_max_ms",
         "message_batch_quiet_ms",
-        "operational_alerts",
         "task_no_progress_seconds",
         "topic_panel",
     }
@@ -1854,9 +1854,15 @@ def window_status(installation: dict[str, Any]) -> dict[str, Any] | None:
     if result["state"] in AMENDMENT_EFFECTIVE and all(
         a["state"] in AMENDMENT_DONE for a in amendments
     ):
-        # The manifest that binds the Hub config the installation runs with.
+        # The manifest that binds the installed Hub config, unless it was hand-edited.
+        head, _ = _amendment_chain(path, plan)
+        live = _file_bytes(Path(installation["hub_config"]))
         effective = [a["id"] for a in amendments if a["state"] in AMENDMENT_EFFECTIVE]
-        result["manifest"] = str(path / (effective[-1] if effective else "") / MANIFEST)
+        manifest = path / (effective[-1] if effective else "") / MANIFEST
+        if live is None or hashlib.sha256(live).hexdigest() != head:
+            result["config_drift"] = True
+        elif manifest.is_file():
+            result["manifest"] = str(manifest)
     return result
 
 
@@ -1866,6 +1872,8 @@ def _unfinished(installation: dict[str, Any], input_path: str | None = None) -> 
         rows = _journal_rows(path / "journal.jsonl")
         if not rows or rows[-1]["phase"] not in WINDOW_DONE:
             command = "python3.12 -I scripts/hub_deploy.py rollback --window " + path.name
+            if any(_amendment_state(item) != "REVERTED" for item in _amendments(path)):
+                command += " --drop-amendments"
             raise Refused("unfinished window; run " + command + suffix)
         # A release rollback drops the window's amendments, finished or not.
         if rows[-1]["phase"] != "ROLLED_BACK" and any(
@@ -2234,6 +2242,17 @@ def _preflight(
     return {"units": identities, "socket": socket}
 
 
+def _untouched_snapshot(
+    plan: dict[str, Any], manager: Any, runner: Callable[..., Any], role: str
+) -> dict[str, Any]:
+    """The current untouched and config-only identities, without health requirements."""
+    identities = {
+        unit: manager.identity(unit)
+        for unit in set(plan["untouched_units"]) | set(plan["config_only_units"])
+    }
+    return {"units": identities, "socket": _socket(runner, plan[role], plan["installation"])}
+
+
 def _create_manifest(
     runner: Callable[..., Any], plan: dict[str, Any], manifest: Path, backup: Path
 ) -> None:
@@ -2266,7 +2285,9 @@ def _recover(
     sleep: Callable[[float], None],
     fault: Callable[[str], None] | None = None,
     amended: dict[str, set[str]] | None = None,
+    untouched: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Recover the window; ``untouched`` replaces its saved baseline for an explicit rollback."""
     try:
         plan_dir = Path(metadata["plan_dir"])
         plan = verify_saved_plan(plan_dir, check_live=False)
@@ -2277,6 +2298,9 @@ def _recover(
         _check_recovery_inventory(plan, amended)
         _check_window_dependencies(plan, manager)
         _journal(window, "rollback_started")
+        if untouched is not None:
+            _journal(window, "recovery_baseline", untouched=untouched)
+        baseline = untouched or metadata["untouched"]
         _stop(window, plan, manager, fault)
         _check_recovery_inventory(plan, amended)
         live = _live_schema(plan["installation"])
@@ -2298,11 +2322,9 @@ def _recover(
         _install_files(window, plan_dir, plan, file_role, fault, amended)
         _effect(window, "daemon-reload", manager.reload, fault)
         _check_window_dependencies(plan, manager)
-        _verify_config_only(plan, manager, metadata["untouched"], role)
+        _verify_config_only(plan, manager, baseline, role)
         _start(window, plan, manager, sleep, fault)
-        _verify(
-            runtime, plan, manager, runner, metadata["untouched"], sleep, schema=live, role=role
-        )
+        _verify(runtime, plan, manager, runner, baseline, sleep, schema=live, role=role)
         outcome = "ROLLED_BACK"
     except Exception as exc:
         _journal(window, "recovery_error", error=str(exc))
@@ -2519,16 +2541,25 @@ def rollback_window(
         need(plan["installation"] == installation, "installation changed")
         previous = last_window(installation)
         need(previous is not None and previous["id"] == window_id, "superseded window")
+        assert previous is not None
         # Owner decision 2026-11-23: a release rollback restores the pre-deploy
         # Hub config; amendments made after the window are dropped and listed,
-        # and the caller acknowledges that with --drop-amendments.
-        amendments = _amendments(window)
-        dropped = []
-        for item in amendments:
-            state = _amendment_state(item)
-            if state != "REVERTED":
-                keys = _amendment_metadata(item)["changed_keys"]
-                dropped.append({"id": item.name, "state": state, "changed_keys": keys})
+        # and the caller acknowledges that with --drop-amendments. A rolled-back
+        # window has already dropped them.
+        dropped, amended = [], None
+        if previous["state"] != "ROLLED_BACK":
+            head, chain = _amendment_chain(window, plan)
+            dropped = [
+                {"id": item.name, "state": state, "changed_keys": record["changed_keys"]}
+                for item, record, state in chain
+                if state != "REVERTED"
+            ]
+            # Only the installed head, or an unfinished amendment's two states.
+            allowed = {head}
+            if chain and chain[-1][2] not in AMENDMENT_DONE:
+                allowed |= {chain[-1][1]["before"], chain[-1][1]["after"]}
+            if dropped:
+                amended = {installation["hub_config"]: allowed}
         need(
             drop_amendments or not dropped,
             "rollback restores the pre-deploy Hub config and drops its amendments "
@@ -2536,19 +2567,16 @@ def rollback_window(
             + "; pass --drop-amendments",
         )
         need(not drop_amendments or dropped, "no Hub config amendments to drop")
-        amended = None
-        if dropped:
-            records = [_amendment_metadata(item) for item in amendments]
-            amended = {
-                installation["hub_config"]: {
-                    r[label] for r in records for label in ("before", "after")
-                }
-            }
         _check_recovery_inventory(plan, amended)
+        # An explicit recovery may follow a reboot: untouched units then have new
+        # identities, and this recovery must only leave them as it finds them.
+        baseline = _untouched_snapshot(plan, manager, runner, "new_runtime")
         if dropped:
-            _journal(window, "amendments_dropped", amendments=[item["id"] for item in dropped])
-        result = _recover(window, metadata, manager, runner, sleep, amended=amended)
-        if dropped:
+            _journal(window, "amendments_drop_acknowledged", amendments=[d["id"] for d in dropped])
+        result = _recover(
+            window, metadata, manager, runner, sleep, amended=amended, untouched=baseline
+        )
+        if dropped and result["outcome"] == "ROLLED_BACK":
             result["dropped_amendments"] = dropped
         return result
 
@@ -2601,30 +2629,97 @@ def _amendment_bytes(path: Path, record: dict[str, Any], label: str) -> bytes:
     return data
 
 
+def _hub_entry(plan: dict[str, Any]) -> dict[str, Any]:
+    path = plan["installation"]["hub_config"]
+    entries = [e for e in plan["files"] if e["kind"] == "hub_config" and e["path"] == path]
+    need(len(entries) == 1 and entries[0]["after"] is not None, "missing Hub config snapshot")
+    return entries[0]
+
+
+def _amendment_chain(
+    window: Path, plan: dict[str, Any]
+) -> tuple[str, list[tuple[Path, dict[str, Any], str]]]:
+    """The Hub config digest the window and its finished amendments installed, and the chain.
+
+    Only the newest amendment may be unfinished; each starts from the head before it.
+    """
+    head = _hub_entry(plan)["after"]["sha256"]
+    items = _amendments(window)
+    chain = []
+    for index, item in enumerate(items):
+        record = _amendment_metadata(item)
+        state = _amendment_state(item)
+        need(
+            record["config"] == plan["installation"]["hub_config"] and record["before"] == head,
+            "broken amendment chain: " + item.name,
+        )
+        need(
+            state in AMENDMENT_DONE or index == len(items) - 1,
+            "unfinished config amendment: " + item.name,
+        )
+        if state in AMENDMENT_EFFECTIVE:
+            head = record["after"]
+        chain.append((item, record, state))
+    return head, chain
+
+
 def _config_object(data: bytes) -> dict[str, Any]:
     def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         need(len({key for key, _ in pairs}) == len(pairs), "duplicate Hub config key")
         return dict(pairs)
 
-    value = json.loads(data, object_pairs_hook=unique)
+    def constant(name: str) -> None:
+        raise Refused("non-JSON number in Hub config: " + name)
+
+    # Decimal keeps every digit, so no textual change can hide behind a float.
+    value = json.loads(
+        data, object_pairs_hook=unique, parse_float=decimal.Decimal, parse_constant=constant
+    )
     need(isinstance(value, dict), "Hub config must be an object")
     return value
 
 
+def _same(left: object, right: object) -> bool:
+    """JSON equality that keeps types apart: ``1``, ``1.0`` and ``true`` all differ."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        assert isinstance(right, dict)
+        return left.keys() == right.keys() and all(_same(left[k], right[k]) for k in left)
+    if isinstance(left, list):
+        assert isinstance(right, list)
+        return len(left) == len(right) and all(map(_same, left, right))
+    return left == right
+
+
 def config_changes(before: bytes, after: bytes) -> list[str]:
-    """The changed top-level keys; refuse any key that needs a release."""
+    """The changed top-level keys; refuse any key outside ``RECONFIGURABLE_KEYS``."""
     old, new = _config_object(before), _config_object(after)
     changed = sorted(
         key
         for key in old.keys() | new.keys()
-        if key not in old
-        or key not in new
-        or canonical_document(old[key]) != canonical_document(new[key])
+        if key not in old or key not in new or not _same(old[key], new[key])
     )
     need(bool(changed), "no Hub config change")
     refused = [key for key in changed if key not in RECONFIGURABLE_KEYS]
-    need(not refused, "Hub config keys need a release: " + ", ".join(refused))
+    need(not refused, "Hub config keys are not reconfigurable: " + ", ".join(refused))
     return changed
+
+
+def _manifest_document(path: Path) -> dict[str, Any]:
+    document = json.loads(_private_bytes(path))
+    need(
+        isinstance(document, dict)
+        and isinstance(document.get("configuration"), dict)
+        and isinstance(document.get("state_backup"), dict),
+        "invalid release manifest: " + str(path),
+    )
+    return document
+
+
+def _bindings(document: dict[str, Any]) -> dict[str, Any]:
+    """Everything a manifest binds except the config and its creation time."""
+    return {k: v for k, v in document.items() if k not in ("created_at", "configuration")}
 
 
 def _accepted_window(installation: dict[str, Any]) -> tuple[Path, Path, dict[str, Any]]:
@@ -2646,21 +2741,35 @@ def _accepted_window(installation: dict[str, Any]) -> tuple[Path, Path, dict[str
 
 def _config_head(window: Path, plan_dir: Path, plan: dict[str, Any]) -> bytes:
     """The Hub config bytes the window and its finished amendments installed."""
-    path = plan["installation"]["hub_config"]
-    entries = [e for e in plan["files"] if e["kind"] == "hub_config" and e["path"] == path]
-    need(len(entries) == 1 and entries[0]["after"] is not None, "missing Hub config snapshot")
-    head = _private_bytes(plan_dir / entries[0]["after"]["copy"])
-    for item in _amendments(window):
-        record = _amendment_metadata(item)
-        state = _amendment_state(item)
+    head, chain = _amendment_chain(window, plan)
+    need(all(state in AMENDMENT_DONE for _, _, state in chain), "unfinished config amendment")
+    effective = [(item, record) for item, record, state in chain if state in AMENDMENT_EFFECTIVE]
+    if effective:
+        data = _amendment_bytes(*effective[-1], "after")
+    else:
+        data = _private_bytes(plan_dir / _hub_entry(plan)["after"]["copy"])
+    need(hashlib.sha256(data).hexdigest() == head, "Hub config snapshot changed")
+    return data
+
+
+def _check_accepted_inventory(plan: dict[str, Any]) -> None:
+    """Every other window file still has the bytes and mode the window installed."""
+    for entry in plan["files"]:
+        if entry["path"] == plan["installation"]["hub_config"]:
+            continue
+        path = Path(entry["path"])
+        current = _file_bytes(path)
+        after = entry["after"]
         need(
-            record["config"] == path and record["before"] == hashlib.sha256(head).hexdigest(),
-            "broken amendment chain: " + item.name,
+            (current is None and after is None)
+            or (
+                current is not None
+                and after is not None
+                and hashlib.sha256(current).hexdigest() == after["sha256"]
+                and stat.S_IMODE(path.stat().st_mode) == entry["after_mode"]
+            ),
+            "installed file differs from the window: " + str(path),
         )
-        need(state in AMENDMENT_DONE, "unfinished config amendment: " + item.name)
-        if state in AMENDMENT_EFFECTIVE:
-            head = _amendment_bytes(item, record, "after")
-    return head
 
 
 def reconfigure(
@@ -2678,6 +2787,9 @@ def reconfigure(
     with _lock(installation):
         _unfinished(installation, input_path)
         window, plan_dir, plan = _accepted_window(installation)
+        for abandoned in window.glob(".amendment-preparing-*"):
+            # A process loss before publication left private copies and no effect.
+            shutil.rmtree(abandoned)
         need(_live_schema(installation) == plan["state_schema"], "schema changed since the window")
         head = _config_head(window, plan_dir, plan)
         hub = Path(installation["hub_config"])
@@ -2685,6 +2797,7 @@ def reconfigure(
         need(current is not None, "missing Hub config")
         assert current is not None
         mode = stat.S_IMODE(hub.stat().st_mode)
+        need(mode == _hub_entry(plan)["after_mode"], "Hub config mode changed")
         if candidate is None:
             need(current != head, "no Hub config edit to adopt")
             before, after = head, current
@@ -2703,16 +2816,18 @@ def reconfigure(
                 == plan[label + "_wheel_sha256"],
                 "release artifact changed",
             )
+        # The new manifest must bind the window's backup, so compare it first.
+        reference = _manifest_document(window / MANIFEST)
+        backup = window / "state.db"
         need(
-            (window / "state.db").is_file() and not (window / "state.db").is_symlink(),
-            "window state backup missing",
+            reference["state_backup"].get("path") == str(backup)
+            and backup.is_file()
+            and not backup.is_symlink()
+            and hashlib.sha256(backup.read_bytes()).hexdigest()
+            == reference["state_backup"].get("sha256"),
+            "window state backup differs from the window manifest",
         )
-        # The other window files must still allow a release rollback.
-        _check_recovery_inventory(
-            plan, {installation["hub_config"]: {hashlib.sha256(current).hexdigest()}}
-        )
-        entry = next(e for e in plan["files"] if e["path"] == installation["hub_config"])
-        need(mode == entry["after_mode"], "Hub config mode changed")
+        _check_accepted_inventory(plan)
         _check_runtime(runner, plan["new_runtime"], "runtime identity changed")
         staging = Path(tempfile.mkdtemp(prefix=".amendment-preparing-", dir=window))
         try:
@@ -2725,6 +2840,7 @@ def reconfigure(
             need(result.get("ok") is True, "candidate Hub config validation failed")
             _check_window_dependencies(plan, manager)
             untouched = _preflight(plan, manager, runner, load, "new_runtime")
+            _verify_config_only(plan, manager, untouched, "new_runtime")
             record = {
                 "window": window.name,
                 "config": installation["hub_config"],
@@ -2745,7 +2861,9 @@ def reconfigure(
         path = window / f"amendment-{index:03d}"
         staging.rename(path)
         _sync_dir(window)
-        return _apply_amendment(window, path, plan, record, manager, runner, sleep, fault)
+        return _apply_amendment(
+            window, path, plan, record, reference, manager, runner, sleep, fault
+        )
 
 
 def recover_amendment(
@@ -2758,16 +2876,15 @@ def recover_amendment(
     """Restore the Hub config an interrupted amendment found and restart on it."""
     with _lock(installation):
         window, _, plan = _accepted_window(installation)
-        amendments = _amendments(window)
-        need(
-            bool(amendments) and _amendment_state(amendments[-1]) not in AMENDMENT_DONE,
-            "no unfinished config amendment",
-        )
-        record = _amendment_metadata(amendments[-1])
-        need(record["config"] == installation["hub_config"], "amendment config path changed")
+        _, chain = _amendment_chain(window, plan)
+        need(bool(chain) and chain[-1][2] not in AMENDMENT_DONE, "no unfinished config amendment")
+        path, record, _ = chain[-1]
         _check_runtime(runner, plan["new_runtime"], "runtime identity changed")
+        # The services may be running again, for example after a reboot.
+        need(not _busy(installation), "provider jobs busy; recover when idle")
+        baseline = _untouched_snapshot(plan, manager, runner, "new_runtime")
         return _revert_amendment(
-            window, amendments[-1], plan, record, manager, runner, sleep, fault
+            window, path, plan, record, manager, runner, sleep, fault, untouched=baseline
         )
 
 
@@ -2789,6 +2906,7 @@ def _apply_amendment(
     path: Path,
     plan: dict[str, Any],
     record: dict[str, Any],
+    reference: dict[str, Any],
     manager: Any,
     runner: Callable[..., Any],
     sleep: Callable[[float], None],
@@ -2800,7 +2918,6 @@ def _apply_amendment(
         _stop(path, plan, manager, fault)
         need(not _busy(installation), "provider jobs appeared while stopping")
         _write_config(path, record, "after", fault)
-        # Same wheels and window backup; only the bound config differs.
         _effect(
             path,
             "manifest-create",
@@ -2821,6 +2938,14 @@ def _apply_amendment(
                 ]
             ),
             fault,
+        )
+        # Same wheels, schema and window backup; only the bound config differs.
+        document = _manifest_document(manifest)
+        need(
+            _bindings(document) == _bindings(reference)
+            and document["configuration"]
+            == {"path": installation["hub_config"], "sha256": record["after"]},
+            "new release manifest binds more than the config change",
         )
         _check_window_dependencies(plan, manager)
         monitor_ok = _start(path, plan, manager, sleep, fault)
@@ -2860,23 +2985,30 @@ def _revert_amendment(
     runner: Callable[..., Any],
     sleep: Callable[[float], None],
     fault: Callable[[str], None] | None = None,
+    *,
+    untouched: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Restore the amendment's previous bytes; ``untouched`` is a fresh recovery baseline."""
     result = {"window": window.name, "amendment": path.name, "changed_keys": record["changed_keys"]}
     try:
         _check_window_dependencies(plan, manager)
         _journal(path, "revert_started")
+        if untouched is not None:
+            _journal(path, "recovery_baseline", untouched=untouched)
         _stop(path, plan, manager, fault)
         _write_config(path, record, "before", fault)
-        _start(path, plan, manager, sleep, fault)
+        monitor_ok = _start(path, plan, manager, sleep, fault)
         _verify(
             plan["new_runtime"],
             plan,
             manager,
             runner,
-            record["untouched"],
+            untouched or record["untouched"],
             sleep,
             role="new_runtime",
         )
+        # A stale monitor record must not stand in for a fresh monitor run.
+        need(monitor_ok, "monitor check failed after restoring the Hub config")
     except Exception as exc:
         _journal(path, "recovery_error", error=str(exc))
         _journal(path, "RECOVERY_REQUIRED")
@@ -2914,7 +3046,7 @@ def main(
         installation = load_installation(Path(args.installation))
         service = manager or ServiceManager(runner)
         release_options = args.release or args.rollback_release or args.window or args.plan
-        amendment_options = [bool(args.config), args.adopt, args.recover]
+        amendment_options = [args.config is not None, args.adopt, args.recover]
         need(
             args.action == "reconfigure" or not any(amendment_options),
             "--config, --adopt and --recover belong to reconfigure",
@@ -2940,7 +3072,7 @@ def main(
                     service,
                     runner,
                     sleep,
-                    candidate=Path(args.config) if args.config else None,
+                    candidate=None if args.config is None else Path(args.config),
                     load=load,
                     input_path=args.installation,
                 )
