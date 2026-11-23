@@ -75,13 +75,15 @@ session may run it.
 1. After changing any pinned input, run that check in the same session. If it
    is not ready, tell the owner its reason and that the consumer must re-pin
    before its next scheduled run.
-2. A configuration edit invalidates the manifest that binds the old bytes, and
-   `hub_deploy rollback` then refuses the edited file
-   (see [deploy runbook](HUB_DEPLOY.md)). In the same session, create a new
-   manifest with the same wheels and state backup through
-   `release-manifest create`, confirm it with `release-manifest verify`
-   ([release preparation](IMMUTABLE_RELEASES.md)), and report both new
-   digests, configuration and manifest, for the consumer to re-pin.
+2. Change the installed configuration only through `hub_deploy reconfigure`
+   ([Hub config amendments](HUB_DEPLOY.md#hub-config-amendments)); record an
+   edit already made by hand with `reconfigure --adopt`. A hand edit
+   invalidates the manifest that binds the old bytes, and `hub_deploy
+   rollback` then refuses the edited file. The amendment creates and verifies
+   a new manifest with the same wheels and state backup; report both new
+   digests from its result, configuration and manifest, for the consumer to
+   re-pin. A release rollback restores the configuration from before its
+   window, so the consumer re-pins after it as well.
 3. Do not delete or move a state backup, wheel or manifest that a pinned
    manifest or the consumer's configuration references. Wait until the
    consumer has re-pinned and its check is ready without the file.
