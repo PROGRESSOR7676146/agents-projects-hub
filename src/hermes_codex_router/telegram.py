@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .reply_choices import parse_choice_callback
+from .telegram_quoted_context import forward_origin_label, reply_context
 from .telegram_transport import _InitialConnectNotSent, urlopen_with_send_proof
 
 TELEGRAM_HEALTH_FAILURE_THRESHOLD = 3
@@ -309,6 +310,9 @@ class TopicMessage:
     unavailable_materials: tuple[str, ...] = ()
     # Display name from the topic's creation anchor; never identity.
     topic_name: str | None = None
+    # Lower-priority quoted context (REQ-UX-009); never routing or authority.
+    reply_context: str | None = None
+    forward_origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,6 +631,8 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         ),
         quote_text=_selected_quote(message),
         unavailable_materials=unavailable_materials,
+        reply_context=reply_context(message, sender_id=sender["id"], topic_anchor=raw_thread_id),
+        forward_origin=forward_origin_label(message, sender_id=sender["id"]),
     )
 
 

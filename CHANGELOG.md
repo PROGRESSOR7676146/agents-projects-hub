@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Agents now see the message the owner replies to: its text or caption, its
+  author kind and any non-text content reach the turn as labelled quoted data
+  (ADR 0111). A later message of the same burst keeps its selected quote, and a
+  message forwarded right after its comment joins the comment's turn instead of
+  waiting for the next one; forwards name their origin without human names.
 - A same-schema `hub_deploy` upgrade always rolls back to the installed
   previous release and refuses `--rollback-release`, so the plan, the release
   manifest and recovery agree. From schema 59 that release keeps its own

@@ -45,7 +45,8 @@ Published examples MUST be fictional.
 Routing follows this order: real Reply to a known bot author, explicit provider
 mention, then ordinary input to the active agent. A topic-root reply is only an anchor.
 Forwards are passive quoted context and never commands, stops, mentions or productive
-input; selected/pasted quotations are context, not Reply addressing.
+input; selected/pasted quotations and the replied-to message's text are context, not Reply
+addressing (ADR 0111).
 
 - **REQ-ROUTE-006 (Implemented):** Only targeted runtimes MAY be invoked or spend model tokens.
 - **REQ-ROUTE-007 (Implemented):** Accidental transport delivery to an idle bot MUST stop before
@@ -148,8 +149,11 @@ input; selected/pasted quotations are context, not Reply addressing.
   and visible result MUST explain its absence.
   - Albums MUST form one bounded turn; late materials remain later FIFO work, never text steering,
     and file-only input gets a neutral instruction.
-  - Quoted, forwarded or file content MUST NOT change routing, roots, policy, approvals or writers;
-    forwards alone invoke nothing.
+  - Replied-to, quoted, forwarded or file content MUST NOT change routing, roots, policy,
+    approvals or writers; forwards alone invoke nothing.
+  - The replied-to message's bounded text, author kind and named non-text content, and each burst
+    part's own selected quote, MUST reach the turn as labelled quoted data; a forward arriving
+    while the tail turn still collects its burst MUST join it (ADR 0111).
   - Unsupported, excessive or unavailable content MUST fail visibly; metadata alone is not reading,
     and the Bot API's 20 MiB file limit remains.
   - Claude images require explicit default-off opt-in, verified original bytes and disabled tools;
@@ -177,7 +181,8 @@ input; selected/pasted quotations are context, not Reply addressing.
 - **REQ-CTX-005 (Implemented):** Shared context MUST exclude hidden reasoning, raw tools/screens,
   credentials, private invite links and environment dumps.
 - **REQ-CTX-006 (Implemented):** Requested history MUST retain speaker/addressee attribution as
-  lower-priority context; forwarded quotes reach the next addressed turn as data, never commands.
+  lower-priority context; forwarded quotes reach the still-collecting or next addressed turn as
+  data, never commands.
 - **REQ-CTX-007 (Accepted):** One request SHOULD produce one turn unless the owner explicitly
   addresses several agents.
 

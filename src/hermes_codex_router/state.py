@@ -13,6 +13,7 @@ from .approval_surface import ApprovalWait
 from .approval_surface_state import pending_approval_waits
 from .artifacts import ValidatedArtifact
 from .assessment_inputs import OutcomeAssessmentInput
+from .batch_part_state import BatchPartState
 from .claude_correction_state import ClaudeCorrectionState
 from .codex_control_predicates import control_owner_for_topic
 from .codex_failure import owner_resolution_action
@@ -1076,64 +1077,18 @@ class HubState(HubStateFacade):
                     absolute_floor,
                 ),
             ).fetchone()
-            if candidate is not None:
-                combined = str(candidate["payload_text"]) + separator + user_text
-                if len(combined) <= 20000:
-                    part = (
-                        int(
-                            self._connection.execute(
-                                "SELECT COUNT(*) FROM provider_job_inputs WHERE job_id = ?",
-                                (candidate["job_id"],),
-                            ).fetchone()[0]
-                        )
-                        + 1
-                    )
-                    hard_deadline = datetime.fromisoformat(
-                        str(candidate["created_at"])
-                    ) + timedelta(milliseconds=max_ms)
-                    next_attempt = min(quiet_until, hard_deadline)
-                    self._connection.execute(
-                        """INSERT INTO observed_messages
-                           (chat_id, message_id, observer_agent_id, observed_at)
-                           VALUES (?, ?, 'hub', ?)""",
-                        (chat_id, message_id, timestamp),
-                    )
-                    self._connection.execute(
-                        """INSERT INTO provider_job_inputs
-                           (job_id, chat_id, message_id, part_index, input_text, received_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (candidate["job_id"], chat_id, message_id, part, user_text, timestamp),
-                    )
-                    self._attach_forwarded_materials(
-                        job_id=str(candidate["job_id"]),
-                        topic_id=topic_id,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        session_generation=session_generation,
-                    )
-                    self._insert_incoming_materials(
-                        job_id=str(candidate["job_id"]),
-                        topic_id=topic_id,
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        session_generation=session_generation,
-                        materials=materials,
-                        timestamp=timestamp,
-                    )
-                    self._connection.execute(
-                        """UPDATE provider_jobs
-                           SET payload_text = ?, next_attempt_at = ?, updated_at = ?
-                           WHERE job_id = ? AND status = 'queued'""",
-                        (
-                            combined,
-                            _timestamp(next_attempt),
-                            timestamp,
-                            candidate["job_id"],
-                        ),
-                    )
-                    return self.get_provider_job(str(candidate["job_id"])), True
+            if candidate is not None and BatchPartState(self).append_in_transaction(
+                candidate,
+                chat_id=chat_id,
+                message_id=message_id,
+                part_text=user_text,
+                separator=separator,
+                materials=materials,
+                current=current,
+                quiet_ms=quiet_ms,
+                max_ms=max_ms,
+            ):
+                return self.get_provider_job(str(candidate["job_id"])), True
         return self.enqueue_provider_job(
             idempotency_key=idempotency_key,
             chat_id=chat_id,
@@ -2380,8 +2335,14 @@ class HubState(HubStateFacade):
         text: str,
         materials: Sequence[IncomingMaterialDraft] = (),
         session: SessionRecord | None = None,
+        batch_ms: tuple[int, int] = (0, 0),
+        telegram_ingress_identity: str | None = None,
     ) -> bool:
-        """Persist a Telegram forward as passive visible context, never as work."""
+        """Persist a Telegram forward as passive visible context, never as work.
+
+        A forward that arrives while the user's turn is still collecting its
+        burst joins that turn as quoted data instead of waiting for the next one.
+        """
         quote = _bounded(
             text or "Forwarded Telegram material.",
             name="forwarded quote",
@@ -2398,6 +2359,17 @@ class HubState(HubStateFacade):
         timestamp = _now()
         try:
             with self._immediate_transaction():
+                if batch_ms[0] > 0 and BatchPartState(self).join_forward_in_transaction(
+                    topic_id=topic_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=quote,
+                    materials=materials,
+                    quiet_ms=batch_ms[0],
+                    max_ms=batch_ms[1],
+                    telegram_ingress_identity=telegram_ingress_identity,
+                ):
+                    return True
                 self._connection.execute(
                     "INSERT INTO observed_messages VALUES (?, ?, ?, ?)",
                     (chat_id, message_id, observer, timestamp),

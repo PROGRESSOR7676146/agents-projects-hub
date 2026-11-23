@@ -138,6 +138,11 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 
 ## Live-acceptance backlog
 
+- Reply, quote and forward context (ADR 0111): after deployment, from a real
+  phone client, a Reply to an agent's earlier message in a new session, a Reply
+  with a partial quote, and a forward with a comment must each reach the
+  agent's turn. Offline tests do not close this item.
+
 - tlive approval surface and independent Codex server custody: exact-source review,
   canonical/CI gates, then separately authorized migration, genuine human card
   delivery and tlive-only restart with unchanged external server and retained
