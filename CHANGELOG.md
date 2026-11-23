@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- `hub_deploy` preflight reads the monitor timer's state on its own. A timer
+  has no main process, so the one-call unit identity introduced for residency
+  checks refused every real `deploy`, `apply` and `reconfigure` as malformed.
 - `hub_deploy reconfigure` changes an allowlisted key of the installed Hub
   config as a journaled amendment of the accepted window: it restarts and
   verifies the services, binds a new release manifest to the same wheels and
