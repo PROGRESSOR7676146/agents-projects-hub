@@ -581,6 +581,101 @@ class ReconfigureTests(WindowFixture):
         self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
         self.assertFalse(abandoned.exists())
 
+    def test_release_rollback_probes_the_socket_with_the_recovery_runtime(self):
+        self.manager.states["codex.service"] = "active"
+        self.manifest.write_text(
+            json.dumps({"hub_git_sha": self.old_sha, "codex_binary": {"path": "/fixture/codex"}})
+        )
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, python=Path("/usr/bin/python3")
+        )
+        shutil.rmtree(self.plan)
+        self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
+        window = self.accept()
+        self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        original = self.window_runner
+        probes = []
+
+        def broken_release(argv, **kwargs):
+            if "doctor" in argv:
+                probes.append(argv[0])
+                if str(self.old) not in argv[0]:
+                    raise hub_deploy.Refused("the release being rolled back is broken")
+            return original(argv, **kwargs)
+
+        result = hub_deploy.rollback_window(
+            self.install,
+            window,
+            self.manager,
+            broken_release,
+            self.sleeps.append,
+            drop_amendments=True,
+        )
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        self.assertTrue(probes)
+        self.assertTrue(all(str(self.old) in probe for probe in probes))
+
+    def test_window_manifest_must_be_the_one_the_window_verified(self):
+        window = self.accept()
+        rows = hub_deploy._journal_rows(self.ops / window / "journal.jsonl")
+        bound = next(row for row in rows if row["phase"] == "manifest_bound")
+        manifest = self.ops / window / "release-manifest.json"
+        self.assertEqual(bound["sha256"], digest(manifest.read_bytes()))
+        # Replace the backup and its matching manifest together.
+        backup = self.ops / window / "state.db"
+        with closing(sqlite3.connect(backup)) as db:
+            db.execute("CREATE TABLE swapped (x)")
+            db.commit()
+        document = json.loads(manifest.read_bytes())
+        document["state_backup"]["sha256"] = digest(backup.read_bytes())
+        manifest.write_text(json.dumps(document))
+        stops = self.stops()
+        with self.assertRaisesRegex(hub_deploy.Refused, "differs from the one the window verified"):
+            self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.assertEqual(self.stops(), stops)
+
+    def test_window_without_a_recorded_manifest_digest_is_trusted_as_found(self):
+        window = self.accept()
+        journal = self.ops / window / "journal.jsonl"
+        lines = journal.read_bytes().splitlines(keepends=True)
+        journal.write_bytes(b"".join(line for line in lines if b"manifest_bound" not in line))
+        result = self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        self.assertEqual(result["outcome"], "ACCEPTED", result)
+
+    def test_manifest_replaced_after_its_check_is_not_reported(self):
+        window = self.accept()
+        original = self.window_runner
+        manifest = self.amendment(window) / "release-manifest.json"
+
+        def replace_during_convergence(argv, **kwargs):
+            if "status" in argv and manifest.exists() and not self.sleeps:
+                document = json.loads(manifest.read_bytes())
+                document["state_backup"]["sha256"] = "0" * 64
+                manifest.write_text(json.dumps(document))
+                self.sleeps.append("replaced")
+            return original(argv, **kwargs)
+
+        result = self.reconfigure(
+            self.write_candidate(topic_panel={"enabled": True}),
+            runner=replace_during_convergence,
+        )
+        self.assertEqual(result["outcome"], "REVERTED", result)
+        self.assertNotIn("manifest_sha256", result)
+        rows = hub_deploy._journal_rows(self.amendment(window) / "journal.jsonl")
+        failure = next(row for row in rows if row["phase"] == "amendment_failed")
+        self.assertIn("changed after its check", failure["error"])
+
+    def test_accepted_amendment_journals_its_manifest_digest(self):
+        window = self.accept()
+        result = self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
+        rows = hub_deploy._journal_rows(self.amendment(window) / "journal.jsonl")
+        self.assertEqual(
+            rows[-1], {"phase": "ACCEPTED", "manifest_sha256": result["manifest_sha256"]}
+        )
+
     def run_cli(self, *argv: str) -> tuple[int, str, str]:
         output, errors = io.StringIO(), io.StringIO()
         with redirect_stdout(output), redirect_stderr(errors):

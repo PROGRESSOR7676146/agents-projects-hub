@@ -187,7 +187,10 @@ workers read some from their own copy, a destination such as the alert topic
 is the owner's choice, and the rest are trust, credentials, project
 registration, security profiles, paths, worker counts or the unit set. The
 installed runtime must validate the candidate. Both bound wheels must still
-match, and the window backup must match the window manifest. Every other window
+match, and the window backup must match the window manifest, which must in turn
+match the digest the window journaled as `manifest_bound` when it verified it.
+A window from before that record has none, and its manifest is used as found.
+Every other window
 file must keep the bytes and mode the window installed. The installation must
 pass the deployment preflight: no busy jobs, low load, every service resident
 in the installed runtime, config-only units on that runtime and unchanged
@@ -198,7 +201,9 @@ writes the config atomically with its installed mode, creates a new
 `release-manifest.json` in its own directory with the window's wheels and state
 backup, verifies it with `--state` against the live database, requires it to
 bind the same wheels, schema and backup as the window manifest, starts the
-services and checks the same convergence as a window. Any failure restores the
+services and checks the same convergence as a window. The reported manifest
+digest is that of the checked bytes, which must be unchanged on disk before the
+amendment is accepted; its journal records it. Any failure restores the
 previous bytes, restarts and verifies the services, and ends `REVERTED` only
 after a fresh monitor run succeeds; otherwise it ends `RECOVERY_REQUIRED`. An
 interrupted or unverified amendment blocks `deploy`, `apply` and further
@@ -226,8 +231,9 @@ the next accepted window.
 
 An explicit recovery, `rollback --window` or `reconfigure --recover`, may
 follow a reboot that gave the untouched units new invocations. It therefore
-journals their identities when it starts and requires only that it leaves
-them unchanged. The automatic recovery inside a failed window or amendment
+takes their identities when it starts, observes the Codex socket with the
+runtime it is about to start, journals both as `recovery_baseline` and requires
+only that it leaves them unchanged. The automatic recovery inside a failed window or amendment
 keeps the baseline taken by its own preflight.
 
 ```text

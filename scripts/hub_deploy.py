@@ -2242,15 +2242,25 @@ def _preflight(
     return {"units": identities, "socket": socket}
 
 
-def _untouched_snapshot(
-    plan: dict[str, Any], manager: Any, runner: Callable[..., Any], role: str
-) -> dict[str, Any]:
-    """The current untouched and config-only identities, without health requirements."""
+def _untouched_snapshot(plan: dict[str, Any], manager: Any) -> dict[str, Any]:
+    """The current untouched and config-only identities, without health requirements.
+
+    The socket state is added by the caller with the runtime that it will start.
+    """
     identities = {
         unit: manager.identity(unit)
         for unit in set(plan["untouched_units"]) | set(plan["config_only_units"])
     }
-    return {"units": identities, "socket": _socket(runner, plan[role], plan["installation"])}
+    return {"units": identities, "socket": None}
+
+
+def _with_socket(
+    baseline: dict[str, Any], plan: dict[str, Any], runner: Callable[..., Any], role: str
+) -> dict[str, Any]:
+    app = plan["untouched_units"][0]
+    if baseline["units"][app]["ActiveState"] != "active":
+        return baseline
+    return {**baseline, "socket": _socket(runner, plan[role], plan["installation"])}
 
 
 def _create_manifest(
@@ -2298,9 +2308,6 @@ def _recover(
         _check_recovery_inventory(plan, amended)
         _check_window_dependencies(plan, manager)
         _journal(window, "rollback_started")
-        if untouched is not None:
-            _journal(window, "recovery_baseline", untouched=untouched)
-        baseline = untouched or metadata["untouched"]
         _stop(window, plan, manager, fault)
         _check_recovery_inventory(plan, amended)
         live = _live_schema(plan["installation"])
@@ -2319,6 +2326,12 @@ def _recover(
         )
         runtime = plan[role]
         _check_runtime(runner, runtime, "rollback runtime identity changed")
+        baseline = metadata["untouched"]
+        if untouched is not None:
+            # Observe the socket with the runtime that recovery starts, never with
+            # the release that may be the reason for this rollback.
+            baseline = _with_socket(untouched, plan, runner, role)
+            _journal(window, "recovery_baseline", untouched=baseline)
         _install_files(window, plan_dir, plan, file_role, fault, amended)
         _effect(window, "daemon-reload", manager.reload, fault)
         _check_window_dependencies(plan, manager)
@@ -2495,6 +2508,12 @@ def apply_window(
                 ),
                 fault,
             )
+            # Amendments compare their reference against this digest.
+            _journal(
+                window,
+                "manifest_bound",
+                sha256=hashlib.sha256(_private_bytes(manifest)).hexdigest(),
+            )
             verify_saved_plan(plan_dir)
             _check_window_dependencies(plan, manager)
             _install_files(window, plan_dir, plan, "after", fault)
@@ -2570,7 +2589,7 @@ def rollback_window(
         _check_recovery_inventory(plan, amended)
         # An explicit recovery may follow a reboot: untouched units then have new
         # identities, and this recovery must only leave them as it finds them.
-        baseline = _untouched_snapshot(plan, manager, runner, "new_runtime")
+        baseline = _untouched_snapshot(plan, manager)
         if dropped:
             _journal(window, "amendments_drop_acknowledged", amendments=[d["id"] for d in dropped])
         result = _recover(
@@ -2706,8 +2725,8 @@ def config_changes(before: bytes, after: bytes) -> list[str]:
     return changed
 
 
-def _manifest_document(path: Path) -> dict[str, Any]:
-    document = json.loads(_private_bytes(path))
+def _manifest_document(data: bytes, path: Path) -> dict[str, Any]:
+    document = json.loads(data)
     need(
         isinstance(document, dict)
         and isinstance(document.get("configuration"), dict)
@@ -2816,8 +2835,20 @@ def reconfigure(
                 == plan[label + "_wheel_sha256"],
                 "release artifact changed",
             )
-        # The new manifest must bind the window's backup, so compare it first.
-        reference = _manifest_document(window / MANIFEST)
+        # The new manifest must bind the window's backup, so compare it first. A
+        # window from before this record has no digest; its manifest is trusted as found.
+        reference_bytes = _private_bytes(window / MANIFEST)
+        bound = [
+            row["sha256"]
+            for row in _journal_rows(window / "journal.jsonl")
+            if row["phase"] == "manifest_bound"
+        ]
+        need(
+            len(bound) <= 1
+            and all(hashlib.sha256(reference_bytes).hexdigest() == item for item in bound),
+            "window manifest differs from the one the window verified",
+        )
+        reference = _manifest_document(reference_bytes, window / MANIFEST)
         backup = window / "state.db"
         need(
             reference["state_backup"].get("path") == str(backup)
@@ -2882,7 +2913,7 @@ def recover_amendment(
         _check_runtime(runner, plan["new_runtime"], "runtime identity changed")
         # The services may be running again, for example after a reboot.
         need(not _busy(installation), "provider jobs busy; recover when idle")
-        baseline = _untouched_snapshot(plan, manager, runner, "new_runtime")
+        baseline = _with_socket(_untouched_snapshot(plan, manager), plan, runner, "new_runtime")
         return _revert_amendment(
             window, path, plan, record, manager, runner, sleep, fault, untouched=baseline
         )
@@ -2924,6 +2955,17 @@ def _apply_amendment(
             lambda: _create_manifest(runner, plan, manifest, window / "state.db"),
             fault,
         )
+        # Same wheels, schema and window backup; only the bound config differs.
+        # The reported digest is the one of these checked bytes.
+        checked = _private_bytes(manifest)
+        document = _manifest_document(checked, manifest)
+        need(
+            _bindings(document) == _bindings(reference)
+            and document["configuration"]
+            == {"path": installation["hub_config"], "sha256": record["after"]},
+            "new release manifest binds more than the config change",
+        )
+        manifest_sha256 = hashlib.sha256(checked).hexdigest()
         _effect(
             path,
             "manifest-verify",
@@ -2939,14 +2981,6 @@ def _apply_amendment(
             ),
             fault,
         )
-        # Same wheels, schema and window backup; only the bound config differs.
-        document = _manifest_document(manifest)
-        need(
-            _bindings(document) == _bindings(reference)
-            and document["configuration"]
-            == {"path": installation["hub_config"], "sha256": record["after"]},
-            "new release manifest binds more than the config change",
-        )
         _check_window_dependencies(plan, manager)
         monitor_ok = _start(path, plan, manager, sleep, fault)
         _verify(
@@ -2959,11 +2993,14 @@ def _apply_amendment(
             role="new_runtime",
         )
         outcome = "ACCEPTED" if monitor_ok else "CORE_HEALTHY_MONITOR_INCOMPLETE"
-        manifest_sha256 = hashlib.sha256(_private_bytes(manifest)).hexdigest()
+        need(
+            hashlib.sha256(_private_bytes(manifest)).hexdigest() == manifest_sha256,
+            "new release manifest changed after its check",
+        )
     except Exception as exc:
         _journal(path, "amendment_failed", error=str(exc))
         return _revert_amendment(window, path, plan, record, manager, runner, sleep, fault)
-    _journal(path, outcome)
+    _journal(path, outcome, manifest_sha256=manifest_sha256)
     return {
         "window": window.name,
         "amendment": path.name,

@@ -100,12 +100,17 @@ Adding a key is a code change with its own review. A hand edit already present
 is recorded with `--adopt` under the same checks, because otherwise the first
 amendment on such an installation could never start. The new manifest must
 bind the same wheels, schema and backup as the window manifest, so an
-amendment cannot move the backup consumer's pin beyond the config.
+amendment cannot move the backup consumer's pin beyond the config. A window
+journals the digest of the manifest it verified, and an amendment checks its
+reference against it; windows from before this record use their manifest as
+found.
 
 An explicit recovery after a reboot finds the untouched units with new
 invocations, which a baseline saved before the reboot can never match. Explicit
 `rollback` and `reconfigure --recover` therefore journal a fresh baseline at
-their start and prove only that they leave those units unchanged; the
+their start and prove only that they leave those units unchanged. The socket
+is observed with the runtime the recovery starts, never with the release being
+rolled back; the
 automatic recovery inside a failed window or amendment keeps its own
 preflight's baseline.
 
