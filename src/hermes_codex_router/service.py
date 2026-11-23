@@ -142,6 +142,7 @@ from .telegram_interaction import (
     telegram_contract_version,
     telegram_developer_instructions,
 )
+from .telegram_quoted_context import forwarded_text
 from .telegram_turn_provenance import group_ingress_identity
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
@@ -2841,9 +2842,7 @@ class ProjectHubService:
             if message.attachments or message.unavailable_materials:
                 try:
                     forwarded_materials = receive_incoming_materials(
-                        message,
-                        telegram=self.telegram,
-                        state_path=self.config.state_path,
+                        message, telegram=self.telegram, state_path=self.config.state_path
                     )
                 except TelegramError as exc:
                     raise QueueAcceptanceError(
@@ -2862,9 +2861,11 @@ class ProjectHubService:
                 chat_id=message.chat_id,
                 message_id=message.message_id,
                 observer_agent_id=self.agent.agent_id,
-                text=message.text,
+                text=forwarded_text(message.text, message.forward_origin),
                 materials=forwarded_materials,
                 session=forwarded_session,
+                batch_ms=(self.config.message_batch_quiet_ms, self.config.message_batch_max_ms),
+                telegram_ingress_identity=self._telegram_group_ingress(message),
             )
         if isinstance(decision, EmergencyStopDecision):
             active = self.state.active_session(topic.topic_id)
