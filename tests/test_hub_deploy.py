@@ -1273,10 +1273,21 @@ class ServiceManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = str(Path(directory).resolve() / "runtime")
             child = subprocess.Popen(
-                [sys.executable, "-I", "-c", "import sys; sys.stdin.read()", root + "/marker"],
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; print(flush=True); sys.stdin.read()",
+                    root + "/marker",
+                ],
                 stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
             )
             try:
+                # Popen returns once exec has begun, before the kernel publishes
+                # the new argv; a line from the child proves its cmdline is set.
+                assert child.stdout is not None
+                child.stdout.readline()
                 manager = hub_deploy.ServiceManager(lambda argv: self.fail("no systemctl call"))
                 pid = str(child.pid)
                 self.assertTrue(manager.resident("worker.service", root, pid))
