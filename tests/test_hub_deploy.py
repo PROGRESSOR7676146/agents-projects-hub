@@ -1269,6 +1269,31 @@ class ServiceManagerTests(unittest.TestCase):
             with self.assertRaisesRegex(hub_deploy.Refused, "malformed identity"):
                 manager.identity("worker.service")
 
+    def test_timer_state_is_one_value_read(self):
+        # systemd prints no MainPID for a timer, so preflight reads only its state.
+        calls = []
+        outputs = iter(("active\n", ""))
+
+        def runner(argv):
+            calls.append(argv)
+            return SimpleNamespace(stdout=next(outputs))
+
+        manager = hub_deploy.ServiceManager(runner)
+        self.assertEqual(manager.property("monitor.timer", "ActiveState"), "active")
+        self.assertEqual(
+            calls[0],
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "--property=ActiveState",
+                "--value",
+                "--",
+                "monitor.timer",
+            ],
+        )
+        self.assertNotEqual(manager.property("monitor.timer", "ActiveState"), "active")
+
     def test_residency_reads_the_given_process(self):
         with tempfile.TemporaryDirectory() as directory:
             root = str(Path(directory).resolve() / "runtime")
@@ -1359,6 +1384,9 @@ class FakeManager:
         return SimpleNamespace(stdout="")
 
     def identity(self, unit):
+        # Like systemd: only a service has a MainPID, so a timer's identity is malformed.
+        if not unit.endswith(".service"):
+            raise hub_deploy.Refused("malformed identity of " + unit)
         return {"ActiveState": self.states[unit], "MainPID": "1", "InvocationID": "fixed"}
 
     def enabled(self, unit):
@@ -1399,6 +1427,8 @@ class FakeManager:
             self.effective_reads.append((unit, name))
         if name in ("Id", "Names"):
             return unit
+        if name == "ActiveState":
+            return self.states[unit]
         if name in ("ExecStart", "ExecStartPost"):
             path = Path(self.install["units_dir"]) / (unit + ".d") / "override.conf"
             return (
@@ -2301,6 +2331,13 @@ class WindowTests(WindowFixture):
             self.execute()
         self.assertFalse(any(c[0] in ("start", "stop", "reload") for c in self.manager.calls))
 
+    def test_inactive_monitor_timer_refused_before_effects(self):
+        # The timer's state is read on its own: a timer has no MainPID identity.
+        self.manager.states["monitor.timer"] = "inactive"
+        with self.assertRaisesRegex(hub_deploy.Refused, "monitor timer inactive"):
+            self.execute()
+        self.assertFalse(any(call[0] in ("start", "stop", "reload") for call in self.manager.calls))
+
     def test_dependency_on_untouched_unit_refused_before_effects(self):
         original = self.manager.property
 
@@ -2309,7 +2346,7 @@ class WindowTests(WindowFixture):
                 return "codex.service"
             if name in ("Id", "Names"):
                 return unit
-            if name != "Environment":
+            if name not in ("Environment", "ActiveState"):
                 return ""
             return original(unit, name)
 

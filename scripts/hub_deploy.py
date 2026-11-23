@@ -2206,8 +2206,9 @@ def _preflight(
             manager,
             settle=0,
         )
+    # A timer has no MainPID, so its full identity is unavailable; only its state matters.
     need(
-        manager.identity(installation["monitor_timer"])["ActiveState"] == "active",
+        manager.property(installation["monitor_timer"], "ActiveState") == "active",
         "monitor timer inactive",
     )
     manager.preflight_extra()
