@@ -178,6 +178,11 @@ ask for approval one action at a time.
   revision, the rollback pointer and what is left for the owner. A refusal by
   the permission layer, a sandbox or a gate is a stop, never something to work
   around.
+- **External backup consumers:** an installation's archive owner may pin Hub
+  inputs by hash. After changing any of them (release, configuration, service
+  set, moving or deleting a file), follow
+  [external backup consumers](docs/operations/UPKEEP.md#external-backup-consumers)
+  in the same session and put its check result in the report.
 
 Owner decision, 2026-11-07 ([ADR 0092](docs/decisions/0092-session-hygiene-and-agent-run-procedures.md)):
 
