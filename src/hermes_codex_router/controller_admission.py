@@ -24,7 +24,7 @@ from .state import (
 )
 from .state_errors import CodexPermissionSelectionChanged
 from .telegram import TelegramError, TopicMessage
-from .telegram_quoted_context import with_quoted_context
+from .telegram_quoted_context import bounded_payload, with_quoted_context
 from .telegram_turn_provenance import validate_ingress_identity
 
 AdmissionRejection = Literal[
@@ -136,10 +136,12 @@ class DurableProviderAdmission:
             if blocked is not None:
                 return RejectedAdmission("persistent_root_blocker")
 
-        payload = with_quoted_context(request.prompt, message, limit=20_000)
-        if len(payload) > 20_000:
-            marker = "[Earlier visible context was truncated for durable admission.]\n\n"
-            payload = marker + payload[-(20_000 - len(marker)) :]
+        payload = bounded_payload(
+            request.prompt,
+            message,
+            current_text_length=len(request.batchable_user_text or ""),
+            limit=20_000,
+        )
 
         group_key = self._album_group_key(message)
         materials: tuple[IncomingMaterialDraft, ...] = ()

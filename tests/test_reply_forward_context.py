@@ -6,9 +6,11 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 
+from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TopicMessage, parse_topic_message
 from hermes_codex_router.telegram_quoted_context import (
     QUOTED_TEXT_LIMIT,
+    bounded_payload,
     forward_origin_label,
     forwarded_text,
     reply_context,
@@ -84,6 +86,29 @@ class ReplyContextParsingTests(unittest.TestCase):
         self.assertIn("caption-marker", context)
         self.assertIn("a photo; that content is not attached", context)
 
+    def test_reply_names_document_kind_without_file_name(self) -> None:
+        update = self.harness.update(15, 951, "see the file")
+        _message(update)["reply_to_message"] = {
+            "message_id": 6,
+            "from": BOT,
+            "document": {"file_id": "example-doc", "file_name": "private-name-marker.pdf"},
+        }
+        context = _parsed(update).reply_context
+        assert context is not None
+        self.assertIn("a document", context)
+        self.assertNotIn("private-name-marker", context)
+
+    def test_reply_to_unknown_content_kind_says_it_is_not_attached(self) -> None:
+        update = self.harness.update(16, 951, "what was it")
+        _message(update)["reply_to_message"] = {
+            "message_id": 5,
+            "from": BOT,
+            "checklist": {"title": "Example"},
+        }
+        context = _parsed(update).reply_context
+        assert context is not None
+        self.assertIn("any other content is not attached", context)
+
     def test_reply_text_is_bounded(self) -> None:
         update = self.harness.update(13, 951, "long")
         _message(update)["reply_to_message"] = {
@@ -130,6 +155,32 @@ class ReplyContextParsingTests(unittest.TestCase):
         longest = forwarded_text("y" * 4096, "the Telegram bot @example_opencode_bot")
         self.assertEqual(len(longest), QUOTED_TEXT_LIMIT)
         self.assertTrue(longest.endswith("[...truncated]"))
+
+    def test_payload_keeps_current_message_and_reply_before_earlier_context(self) -> None:
+        message = dataclasses.replace(
+            _parsed(self.harness.update(17, 951, "x")),
+            reply_context="reply-marker",
+            quote_text=None,
+        )
+        earlier = "e" * 25_000
+        payload = bounded_payload(
+            f"{earlier}\n\nCURRENT USER MESSAGE:\nuse it",
+            message,
+            current_text_length=len("use it"),
+            limit=20_000,
+        )
+        self.assertLessEqual(len(payload), 20_000)
+        self.assertTrue(payload.startswith("[Earlier visible context was truncated"))
+        self.assertIn("CURRENT USER MESSAGE:\nuse it", payload)
+        self.assertTrue(payload.endswith("reply-marker"))
+        plain = dataclasses.replace(message, reply_context=None)
+        self.assertEqual(
+            bounded_payload("short", plain, current_text_length=5, limit=20_000), "short"
+        )
+        self.assertNotIn(
+            "context was truncated",
+            bounded_payload("a" * 30_000, plain, current_text_length=10, limit=20_000)[-200:],
+        )
 
     def test_context_is_shortened_before_user_text(self) -> None:
         message = dataclasses.replace(
@@ -294,6 +345,95 @@ class ReplyForwardProviderInputTests(unittest.TestCase):
                 self.assertIn("[...truncated]", context)
             finally:
                 controller.close()
+
+    def test_passive_forward_backlog_keeps_the_reply_in_the_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = self._harness(directory)
+            controller = harness.controller()
+            updates = [harness.update(750, 976, "/agent opencode")]
+            for index in range(6):
+                forward = harness.update(751 + index, 976, f"backlog-{index} " + "f" * 3900)
+                _message(forward)["forward_origin"] = {"type": "user", "sender_user": BOT}
+                updates.append(forward)
+            reply = harness.update(760, 976, "continue from this summary")
+            _message(reply)["reply_to_message"] = {
+                "message_id": 749,
+                "from": BOT,
+                "text": "backlog-summary-marker",
+            }
+            updates.append(reply)
+            try:
+                for update in updates:
+                    self.assertTrue(controller.handle_update(update))
+                topic = controller.state.find_topic(harness.chat_id, 976)
+                assert topic is not None
+                (job,) = controller.state.provider_jobs_for_topic(topic.topic_id)
+            finally:
+                controller.close()
+            self.assertLessEqual(len(job.payload_text), 20_000)
+            self.assertIn("backlog-summary-marker", job.payload_text)
+            self.assertIn("continue from this summary", job.payload_text)
+            self.assertIn("backlog-5", job.payload_text)
+
+    def test_follow_up_after_an_overflowing_forward_starts_its_own_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = self._harness(directory, quiet_ms=5000)
+            controller = harness.controller()
+            select = harness.update(770, 977, "/agent opencode")
+            comment = harness.update(771, 977, "c" * 17_000)
+            forward = harness.update(772, 977, "overflow-forward-marker " + "o" * 3800)
+            _message(forward)["forward_origin"] = {"type": "user", "sender_user": BOT}
+            follow_up = harness.update(773, 977, "review it")
+            try:
+                for update in (select, comment, forward, follow_up):
+                    self.assertTrue(controller.handle_update(update))
+                topic = controller.state.find_topic(harness.chat_id, 977)
+                assert topic is not None
+                jobs = controller.state.provider_jobs_for_topic(topic.topic_id)
+            finally:
+                controller.close()
+            self.assertEqual(len(jobs), 2)
+            self.assertNotIn("overflow-forward-marker", jobs[0].payload_text)
+            self.assertIn("overflow-forward-marker", jobs[1].payload_text)
+            self.assertTrue(jobs[1].payload_text.rstrip().endswith("review it"))
+
+    def test_forward_stays_passive_after_codex_selection_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = self._harness(directory, quiet_ms=5000)
+            controller = harness.controller()
+            comment = harness.update(780, 978, "codex request before a profile change")
+            try:
+                self.assertTrue(controller.handle_update(comment))
+                topic = controller.state.find_topic(harness.chat_id, 978)
+                assert topic is not None
+                session = controller.state.active_session(topic.topic_id)
+                assert session is not None
+                (before,) = controller.state.provider_jobs_for_topic(topic.topic_id)
+            finally:
+                controller.close()
+            other = HubState.open(
+                harness.config.state_path, codex_permission_profile="example-other-policy"
+            )
+            try:
+                self.assertTrue(
+                    other.record_forwarded_quote(
+                        topic_id=topic.topic_id,
+                        chat_id=harness.chat_id,
+                        message_id=781,
+                        observer_agent_id="codex",
+                        text="profile-forward-marker",
+                        session=session,
+                        batch_ms=(5000, 8000),
+                        telegram_ingress_identity=None,
+                    )
+                )
+                (after,) = other.provider_jobs_for_topic(topic.topic_id)
+                context, _ = other.unseen_forwarded_context(topic.topic_id, "codex")
+            finally:
+                other.close()
+            self.assertEqual(after.payload_text, before.payload_text)
+            assert context is not None
+            self.assertIn("profile-forward-marker", context)
 
 
 if __name__ == "__main__":

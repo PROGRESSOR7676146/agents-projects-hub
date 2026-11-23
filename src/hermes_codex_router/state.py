@@ -1077,16 +1077,22 @@ class HubState(HubStateFacade):
                     absolute_floor,
                 ),
             ).fetchone()
-            if candidate is not None and BatchPartState(self).append_in_transaction(
-                candidate,
-                chat_id=chat_id,
-                message_id=message_id,
-                part_text=user_text,
-                separator=separator,
-                materials=materials,
-                current=current,
-                quiet_ms=quiet_ms,
-                max_ms=max_ms,
+            # Passive context newer than the collecting turn's own belongs to a
+            # turn's first part, so such input starts its own FIFO turn.
+            if (
+                candidate is not None
+                and BatchPartState.context_covered(candidate, context_watermark)
+                and BatchPartState(self).append_in_transaction(
+                    candidate,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    part_text=user_text,
+                    separator=separator,
+                    materials=materials,
+                    current=current,
+                    quiet_ms=quiet_ms,
+                    max_ms=max_ms,
+                )
             ):
                 return self.get_provider_job(str(candidate["job_id"])), True
         return self.enqueue_provider_job(

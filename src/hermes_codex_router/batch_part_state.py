@@ -27,6 +27,14 @@ class BatchPartState:
     def __init__(self, state: HubState) -> None:
         self.state = state
 
+    @staticmethod
+    def context_covered(candidate: sqlite3.Row, context_watermark: int | None) -> bool:
+        """Whether the candidate already carries all passive context of a new part."""
+        if context_watermark is None:
+            return True
+        covered = candidate["context_watermark"]
+        return covered is not None and context_watermark <= int(covered)
+
     def append_in_transaction(
         self,
         candidate: sqlite3.Row,
@@ -160,6 +168,7 @@ class BatchPartState:
                  AND sessions.status IN ('active', 'satellite')
                  AND sessions.writer_mode = 'telegram'
                  AND sessions.model = jobs.model AND sessions.effort = jobs.effort
+                 AND jobs.codex_permission_profile IS sessions.codex_permission_profile
                  AND jobs.topic_sequence = (
                      SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
                      WHERE tail.topic_id = jobs.topic_id
@@ -173,10 +182,12 @@ class BatchPartState:
         ).fetchone()
         if candidate is None or persistent_root_blocker(connection, topic_id=topic_id) is not None:
             return None
+        session_id = str(candidate["session_id"])
         try:
-            CodexSessionOrigins(self.state).require_admission(
-                str(candidate["session_id"]), message_id
-            )
-        except StateError:
+            # The same selection guard as an ordinary follow-up: a changed Codex
+            # permission selection keeps the forward passive.
+            self.state._sessions_state.require_codex_selection(self.state.get_session(session_id))
+            CodexSessionOrigins(self.state).require_admission(session_id, message_id)
+        except StateError:  # includes CodexPermissionSelectionChanged
             return None
         return candidate

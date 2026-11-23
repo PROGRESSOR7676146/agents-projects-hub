@@ -77,10 +77,13 @@ window; post-start material is later FIFO, never text steering. Bot API cap 20 M
 per file, unaffected by Premium. Unsupported/excess/unavailable/legacy content
 reports absence, not metadata-as-reading.
 Reply context: replied-to text/caption ≤4,000 characters, author kind without
-human names, non-text kinds named, never fetched; topic anchor is not a reply.
-Each burst part keeps its Reply/quote blocks; overflow shortens context only.
-A forward joins the unleased tail turn inside its quiet/absolute windows, same
-generation/model/ingress, no root blocker; else passive (ADR 0111).
+human names, non-text kinds named without file names, never fetched; topic
+anchor is not a reply. Each burst part keeps its Reply/quote blocks; overflow
+cuts earlier context, then quoted context, never the current message. A forward
+joins the unleased tail turn inside its quiet/absolute windows, same
+generation/model/Codex selection/ingress, no root blocker, checked after its
+files arrive; else passive, and input carrying newer passive context starts
+its own turn (ADR 0111).
 
 Claude default-false image gate: bounded PNG/JPEG through owned external CLI, tools
 off, incompatible with protected file tools. Original bytes match spool. One
