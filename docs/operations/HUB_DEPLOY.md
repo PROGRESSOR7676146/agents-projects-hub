@@ -165,3 +165,61 @@ have been exercised; a forward migration has not yet completed as `ACCEPTED`.
 ```text
 python3.12 -I scripts/hub_deploy.py plan --installation /home/example/private/installation.json --release v1.2.3 --rollback-release v1.2.2
 ```
+
+## Hub config amendments
+
+Never edit the installed Hub config by hand: the window's manifest binds its
+bytes, so an edit breaks an external backup consumer's pin and makes release
+recovery refuse it as an unrelated file edit. `reconfigure` instead records the
+change as a journaled amendment of the newest window, which must be `ACCEPTED`
+([ADR 0094](../decisions/0094-one-command-hub-deploy.md#amendment-hub-config-amendments-on-an-accepted-window)).
+The plan, its digest and the window manifest stay untouched.
+
+Write the complete new config to a private file (owned by the invoking user,
+mode `0600`, absolute path) and pass it with `--config`. The tool compares
+top-level keys with exact JSON values and refuses an unchanged config,
+duplicate keys and any changed key outside `RECONFIGURABLE_KEYS`:
+`message_batch_max_ms`, `message_batch_quiet_ms`, `operational_alerts`,
+`task_no_progress_seconds` and `topic_panel`. Only the Controller, sender and
+monitor read these, all from the Hub config. Every other key, including the
+Claude settings that the Claude worker config repeats, needs a release.
+The installed runtime must validate the candidate, the window backup and both
+bound wheels must still match, and the installation must pass the deployment
+preflight: no busy jobs, low load, every service resident in the installed
+runtime and unchanged untouched units.
+
+The amendment stops the monitor and the restart order, rechecks for busy jobs,
+writes the config atomically with its installed mode, creates a new
+`release-manifest.json` in its own directory with the window's wheels and state
+backup, verifies it with `--state` against the live database, starts the
+services and checks the same convergence as a window. Any failure restores the
+previous bytes, restarts and verifies the services, and ends `REVERTED`; an
+unverified restoration ends `RECOVERY_REQUIRED`. An interrupted amendment
+blocks `deploy`, `apply` and further amendments until
+`reconfigure --recover` restores its previous bytes. The result names the
+changed keys, the new config digest and the new manifest path and digest;
+report them for an external backup consumer to re-pin. `status` lists the
+amendments and the manifest that binds the running config.
+
+A config already edited outside the tool is recorded with `--adopt`: the live
+bytes become the amendment, checked against the same key list, and the
+service cycle runs without a write. A failure restores the last recorded
+bytes, not the hand edit.
+
+A release rollback restores the config from before the window, dropping every
+amendment that was not reverted. It refuses until the caller acknowledges this
+with `--drop-amendments`; the result and the window journal list the dropped
+amendments, and the flag is refused when there is nothing to drop. Reapply a
+dropped change with a new `reconfigure` after the next accepted window.
+
+```text
+python3.12 -I scripts/hub_deploy.py reconfigure --installation /home/example/private/installation.json --config /home/example/private/hub-candidate.json
+python3.12 -I scripts/hub_deploy.py reconfigure --installation /home/example/private/installation.json --adopt
+python3.12 -I scripts/hub_deploy.py reconfigure --installation /home/example/private/installation.json --recover
+python3.12 -I scripts/hub_deploy.py rollback --installation /home/example/private/installation.json --window window-00000000000000000001-example --drop-amendments
+```
+
+The result codes are those of a window, with `REVERTED` (2) for a restored
+amendment. The tool runs from the repository checkout, not from the release
+wheel, so it needs no Hub release. It is covered by offline fixture tests,
+not yet by installed use.

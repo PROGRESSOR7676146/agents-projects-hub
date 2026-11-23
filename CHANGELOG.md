@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- `hub_deploy reconfigure` changes an allowlisted key of the installed Hub
+  config as a journaled amendment of the accepted window: it restarts and
+  verifies the services, binds a new release manifest to the same wheels and
+  backup, and restores the previous bytes on failure. `--adopt` records a hand
+  edit; a release rollback restores the pre-deploy config only with
+  `--drop-amendments` and lists what it dropped.
 - Agents now see the message the owner replies to: its text or caption, its
   author kind and any non-text content reach the turn as labelled quoted data
   (ADR 0111). A later message of the same burst keeps its selected quote, and a

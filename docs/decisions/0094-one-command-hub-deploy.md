@@ -75,6 +75,39 @@ service stops. A forward migration still needs the distinct named rollback
 release that refuses new declarations (ADR 0109). Refusing a permitting
 previous release instead would block every later same-schema upgrade from it.
 
+## Amendment: Hub config amendments on an accepted window
+
+A hand edit of the installed Hub config invalidated the window manifest that an
+external backup consumer pins, and made release recovery refuse the file as
+an unrelated edit. Re-creating a manifest by hand fixed the pin but left
+recovery refusing.
+
+`reconfigure` records each change as a journaled amendment of the newest
+`ACCEPTED` window, outside the plan seal: the plan, its digest and the window
+manifest stay unchanged, so the window's evidence keeps its meaning. Each
+amendment keeps its before and after bytes, a new manifest with the window's
+wheels and state backup, and its own journal; it restarts and verifies the
+services itself and restores the previous bytes on failure. Its `before` must
+be the bytes the window and the earlier finished amendments installed, so the
+chain cannot skip a change.
+
+Only an allowlist of top-level keys may change, read by the Controller, sender
+and monitor from the Hub config alone. A key that Claude workers read from
+their own config would need both files changed in step, and trust,
+credentials, project registration, security profiles, paths, worker counts and
+the unit set are owner decisions or change what runs; all of these need a
+release. Adding a key is a code change with its own review. A hand edit already
+present is recorded with `--adopt` under the same checks, because otherwise
+the first amendment on such an installation could never start.
+
+Owner decision, 2026-11-23: a release rollback restores the config from before
+the window and drops only the amendments made after it, listing them. The
+caller acknowledges this with `--drop-amendments`, a flag the agent passes as
+part of the procedure (ADR 0087, ADR 0092); it is not an owner step. Keeping
+amendments across a rollback was rejected: the previous release never ran with
+them, and their keys could be unknown to it. Only the newest window is
+amended; after a rollback a change waits for the next accepted window.
+
 ## Deferred and status
 
 Migration to symlinks and `stack.py` and the separate Codex server start

@@ -1430,7 +1430,7 @@ class FakeManager:
         )
 
 
-class WindowTests(StageFixture):
+class WindowFixture(StageFixture):
     def setUp(self):
         super().setUp()
         self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
@@ -1448,6 +1448,92 @@ class WindowTests(StageFixture):
         self.sleeps = []
         self.fail_verify_old = False
 
+    def require_window(self) -> dict[str, Any]:
+        window = hub_deploy.last_window(self.install)
+        if window is None:
+            self.fail("expected a window")
+        return window
+
+    def require_status(self) -> dict[str, Any]:
+        status = hub_deploy.window_status(self.install)
+        if status is None:
+            self.fail("expected a window status")
+        return status
+
+    def window_runner(self, argv, **kwargs):
+        argv = list(map(str, argv))
+        self.calls.append(argv)
+        if (
+            "release-info" in argv
+            or "hermes_codex_router.runtime_release" in argv
+            or "validate-hub" in argv
+        ):
+            return self.runner(argv, **kwargs)
+        if "backup" in argv:
+            shutil.copyfile(self.db, argv[-1])
+        if "create" in argv and "release-manifest" in argv:
+            created = Path(argv[argv.index("create") + 1])
+            created.write_text("manifest")
+            created.chmod(0o600)
+        if "status" in argv:
+            sha = (
+                self.old_sha
+                if str(self.old) in argv[0]
+                else ("d" * 40 if "d" * 40 in argv[0] else self.new_sha)
+            )
+            if sha == self.old_sha and self.fail_verify_old:
+                raise hub_deploy.Refused("old convergence failed")
+            component = {
+                "status": "healthy",
+                "release_git_sha": sha,
+                "release_clean": True,
+                "instance_id": "fixture",
+            }
+            health: dict[str, Any] = {
+                k: component for k in ("controller", "monitor", "sender", "project_provisioner")
+            }
+            health["provider_workers"] = []
+            health["deployment_revision"] = {
+                "status": "converged",
+                "git_sha": sha,
+                "required_components": 4,
+            }
+            return SimpleNamespace(
+                stdout=json.dumps(
+                    {
+                        "schema_version": hub_deploy._live_schema(self.install),
+                        "runtime_health": health,
+                    }
+                )
+            )
+        if "doctor" in argv:
+            return SimpleNamespace(
+                stdout=json.dumps({"checks": [{"name": "codex_socket", "detail": "listening"}]})
+            )
+        return SimpleNamespace(stdout="{}")
+
+    def execute(self, fault=None):
+        return hub_deploy.apply_window(
+            self.install,
+            self.plan,
+            self.manager,
+            self.window_runner,
+            self.sleeps.append,
+            load=lambda: 0,
+            fault=fault,
+        )
+
+    def prepare_forward(self, rollback_schema=8):
+        shutil.rmtree(self.assets / "v2.0.0")
+        self.make_assets("v2.0.0", self.new_sha, schema=8)
+        self.make_assets("v3.0.0", "d" * 40, schema=rollback_schema)
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        return old
+
+
+class WindowTests(WindowFixture):
     def test_claude_settings_drift_between_configs_refuses_the_plan(self):
         old = hub_deploy.discover_installation(
             self.install, self.runner, lambda *_: True, lambda _: 0
@@ -1527,79 +1613,6 @@ class WindowTests(StageFixture):
         self.assertEqual(restored["claude_file_permissions"], host)
         self.assertEqual(restored["agents"][0]["executable"], data["agents"][0]["executable"])
 
-    def require_window(self) -> dict[str, Any]:
-        window = hub_deploy.last_window(self.install)
-        if window is None:
-            self.fail("expected a window")
-        return window
-
-    def require_status(self) -> dict[str, Any]:
-        status = hub_deploy.window_status(self.install)
-        if status is None:
-            self.fail("expected a window status")
-        return status
-
-    def window_runner(self, argv, **kwargs):
-        argv = list(map(str, argv))
-        self.calls.append(argv)
-        if (
-            "release-info" in argv
-            or "hermes_codex_router.runtime_release" in argv
-            or "validate-hub" in argv
-        ):
-            return self.runner(argv, **kwargs)
-        if "backup" in argv:
-            shutil.copyfile(self.db, argv[-1])
-        if "create" in argv and "release-manifest" in argv:
-            Path(argv[argv.index("create") + 1]).write_text("manifest")
-        if "status" in argv:
-            sha = (
-                self.old_sha
-                if str(self.old) in argv[0]
-                else ("d" * 40 if "d" * 40 in argv[0] else self.new_sha)
-            )
-            if sha == self.old_sha and self.fail_verify_old:
-                raise hub_deploy.Refused("old convergence failed")
-            component = {
-                "status": "healthy",
-                "release_git_sha": sha,
-                "release_clean": True,
-                "instance_id": "fixture",
-            }
-            health: dict[str, Any] = {
-                k: component for k in ("controller", "monitor", "sender", "project_provisioner")
-            }
-            health["provider_workers"] = []
-            health["deployment_revision"] = {
-                "status": "converged",
-                "git_sha": sha,
-                "required_components": 4,
-            }
-            return SimpleNamespace(
-                stdout=json.dumps(
-                    {
-                        "schema_version": hub_deploy._live_schema(self.install),
-                        "runtime_health": health,
-                    }
-                )
-            )
-        if "doctor" in argv:
-            return SimpleNamespace(
-                stdout=json.dumps({"checks": [{"name": "codex_socket", "detail": "listening"}]})
-            )
-        return SimpleNamespace(stdout="{}")
-
-    def execute(self, fault=None):
-        return hub_deploy.apply_window(
-            self.install,
-            self.plan,
-            self.manager,
-            self.window_runner,
-            self.sleeps.append,
-            load=lambda: 0,
-            fault=fault,
-        )
-
     def test_convergence_retries_residency_without_settle_waits(self):
         # The convergence loop is already the bounded retry; a nested settle
         # would multiply its worst case before recovery starts.
@@ -1644,15 +1657,6 @@ class WindowTests(StageFixture):
         )
         self.plan = hub_deploy.create_plan(self.install, old, new, self.runner)
         return path, original, new
-
-    def prepare_forward(self, rollback_schema=8):
-        shutil.rmtree(self.assets / "v2.0.0")
-        self.make_assets("v2.0.0", self.new_sha, schema=8)
-        self.make_assets("v3.0.0", "d" * 40, schema=rollback_schema)
-        old = hub_deploy.discover_installation(
-            self.install, self.runner, lambda *_: True, lambda _: 0
-        )
-        return old
 
     def test_forward_requires_verified_matching_rollback_release(self):
         old = self.prepare_forward(rollback_schema=9)
