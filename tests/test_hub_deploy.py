@@ -1269,6 +1269,31 @@ class ServiceManagerTests(unittest.TestCase):
             with self.assertRaisesRegex(hub_deploy.Refused, "malformed identity"):
                 manager.identity("worker.service")
 
+    def test_timer_state_is_one_value_read(self):
+        # systemd prints no MainPID for a timer, so preflight reads only its state.
+        calls = []
+        outputs = iter(("active\n", ""))
+
+        def runner(argv):
+            calls.append(argv)
+            return SimpleNamespace(stdout=next(outputs))
+
+        manager = hub_deploy.ServiceManager(runner)
+        self.assertEqual(manager.property("monitor.timer", "ActiveState"), "active")
+        self.assertEqual(
+            calls[0],
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "--property=ActiveState",
+                "--value",
+                "--",
+                "monitor.timer",
+            ],
+        )
+        self.assertNotEqual(manager.property("monitor.timer", "ActiveState"), "active")
+
     def test_residency_reads_the_given_process(self):
         with tempfile.TemporaryDirectory() as directory:
             root = str(Path(directory).resolve() / "runtime")
