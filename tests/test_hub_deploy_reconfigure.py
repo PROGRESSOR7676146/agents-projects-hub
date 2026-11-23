@@ -29,7 +29,8 @@ class ReconfigureTests(WindowFixture):
     def setUp(self):
         super().setUp()
         self.original = self.hub.read_bytes()
-        self.hub.chmod(0o600)
+        # Amendments keep the mode the window recorded, whatever the umask made it.
+        self.mode = self.hub.stat().st_mode & 0o777
         self.candidate = self.base / "private" / "candidate.json"
         self.candidate.parent.mkdir(mode=0o700)
 
@@ -74,7 +75,7 @@ class ReconfigureTests(WindowFixture):
         result = self.reconfigure(candidate)
         self.assertEqual(result["outcome"], "ACCEPTED", result)
         self.assertEqual(self.hub.read_bytes(), candidate.read_bytes())
-        self.assertEqual(self.hub.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.hub.stat().st_mode & 0o777, self.mode)
         self.assertEqual(result["changed_keys"], ["topic_panel"])
         self.assertFalse(result["adopted"])
         self.assertEqual(result["config_sha256"], digest(candidate.read_bytes()))
