@@ -634,7 +634,8 @@ class OwnedExitProofTests(unittest.TestCase):
             try:
                 with open(f"/proc/{child}/stat") as stat:
                     alive = stat.read().split(") ", 1)[1][0] != "Z"
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
+                # A child reaped between open() and read() fails the read with ESRCH.
                 alive = False
             if alive:
                 time.sleep(0.05)
