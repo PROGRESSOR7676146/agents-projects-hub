@@ -2326,13 +2326,14 @@ def _recover(
         )
         runtime = plan[role]
         _check_runtime(runner, runtime, "rollback runtime identity changed")
+        _install_files(window, plan_dir, plan, file_role, fault, amended)
         baseline = metadata["untouched"]
         if untouched is not None:
-            # Observe the socket with the runtime that recovery starts, never with
-            # the release that may be the reason for this rollback.
+            # Observe the socket with the runtime that recovery starts and the config
+            # it restored, never with the release that may be the reason for this
+            # rollback; untouched units are never stopped, so their state still holds.
             baseline = _with_socket(untouched, plan, runner, role)
             _journal(window, "recovery_baseline", untouched=baseline)
-        _install_files(window, plan_dir, plan, file_role, fault, amended)
         _effect(window, "daemon-reload", manager.reload, fault)
         _check_window_dependencies(plan, manager)
         _verify_config_only(plan, manager, baseline, role)
@@ -2489,6 +2490,7 @@ def apply_window(
                 lambda: _create_manifest(runner, plan, manifest, backup),
                 fault,
             )
+            checked = hashlib.sha256(_private_bytes(manifest)).hexdigest()
             _effect(
                 window,
                 "manifest-verify",
@@ -2508,12 +2510,13 @@ def apply_window(
                 ),
                 fault,
             )
-            # Amendments compare their reference against this digest.
-            _journal(
-                window,
-                "manifest_bound",
-                sha256=hashlib.sha256(_private_bytes(manifest)).hexdigest(),
+            # Amendments compare their reference against this digest, which must be
+            # that of the bytes read before and after verification.
+            need(
+                hashlib.sha256(_private_bytes(manifest)).hexdigest() == checked,
+                "release manifest changed during verification",
             )
+            _journal(window, "manifest_bound", sha256=checked)
             verify_saved_plan(plan_dir)
             _check_window_dependencies(plan, manager)
             _install_files(window, plan_dir, plan, "after", fault)

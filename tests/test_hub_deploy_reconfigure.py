@@ -605,6 +605,8 @@ class ReconfigureTests(WindowFixture):
                 probes.append(argv[0])
                 if str(self.old) not in argv[0]:
                     raise hub_deploy.Refused("the release being rolled back is broken")
+                if b"topic_panel" in self.hub.read_bytes():
+                    raise hub_deploy.Refused("the previous release cannot read the amendment")
             return original(argv, **kwargs)
 
         result = hub_deploy.rollback_window(
@@ -637,6 +639,34 @@ class ReconfigureTests(WindowFixture):
         with self.assertRaisesRegex(hub_deploy.Refused, "differs from the one the window verified"):
             self.reconfigure(self.write_candidate(topic_panel={"enabled": True}))
         self.assertEqual(self.stops(), stops)
+
+    def test_manifest_replaced_during_window_verification_is_never_bound(self):
+        original = self.window_runner
+        replaced = []
+
+        def replace_during_verify(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if "verify" in argv and "release-manifest" in argv and not replaced:
+                manifest = Path(argv[argv.index("verify") + 1])
+                document = json.loads(manifest.read_bytes())
+                document["created_at"] = "replaced"
+                manifest.write_text(json.dumps(document))
+                replaced.append(manifest)
+            return result
+
+        result = hub_deploy.apply_window(
+            self.install,
+            self.plan,
+            self.manager,
+            replace_during_verify,
+            self.sleeps.append,
+            load=lambda: 0,
+        )
+        self.assertEqual(result["outcome"], "ROLLED_BACK", result)
+        rows = hub_deploy._journal_rows(self.ops / result["id"] / "journal.jsonl")
+        self.assertNotIn("manifest_bound", [row["phase"] for row in rows])
+        failure = next(row for row in rows if row["phase"] == "apply_failed")
+        self.assertIn("changed during verification", failure["error"])
 
     def test_window_without_a_recorded_manifest_digest_is_trusted_as_found(self):
         window = self.accept()

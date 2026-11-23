@@ -188,7 +188,8 @@ is the owner's choice, and the rest are trust, credentials, project
 registration, security profiles, paths, worker counts or the unit set. The
 installed runtime must validate the candidate. Both bound wheels must still
 match, and the window backup must match the window manifest, which must in turn
-match the digest the window journaled as `manifest_bound` when it verified it.
+match the digest the window journaled as `manifest_bound`: that of the bytes it
+read before and after verifying the manifest.
 A window from before that record has none, and its manifest is used as found.
 Every other window
 file must keep the bytes and mode the window installed. The installation must
@@ -232,8 +233,8 @@ the next accepted window.
 An explicit recovery, `rollback --window` or `reconfigure --recover`, may
 follow a reboot that gave the untouched units new invocations. It therefore
 takes their identities when it starts, observes the Codex socket with the
-runtime it is about to start, journals both as `recovery_baseline` and requires
-only that it leaves them unchanged. The automatic recovery inside a failed window or amendment
+runtime it is about to start after restoring that runtime's files, journals
+both as `recovery_baseline` and requires only that it leaves them unchanged. The automatic recovery inside a failed window or amendment
 keeps the baseline taken by its own preflight.
 
 ```text
