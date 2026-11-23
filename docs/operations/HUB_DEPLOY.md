@@ -104,7 +104,9 @@ On an interrupted window, `apply` and `deploy` print the complete
 the last recorded window, live schema and currently applicable rollback target
 and revision; recovery makes its final selection after stopping services.
 Recovery accepts only the newest window and validates the complete saved file
-inventory before effects and again after quiescence. With the original schema it
+inventory before effects and again after quiescence. A file matching none of its
+recorded digests, such as a Hub configuration edited after the window, refuses
+recovery as an unrelated file edit until its recorded bytes are restored. With the original schema it
 restores the previous runtime; with the target schema it installs the prepared
 rollback release. Another schema stops recovery and requires an owner decision.
 The selected artifact, runtime identity and pin are rechecked, and the choice is

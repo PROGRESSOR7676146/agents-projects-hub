@@ -57,6 +57,35 @@ checks: `status`, `doctor` and the audits. Never run a live model probe.
    rollback cannot be verified, stop all changes, keep the evidence and tell
    the owner at once.
 
+### External backup consumers
+
+An installation may have an external archive owner whose scheduled backup pins
+Hub inputs by SHA-256 and refuses on any difference, even an approved one:
+
+- the installed configuration and the release manifest that binds it;
+- the current and rollback wheels;
+- the state backup that a pinned manifest references;
+- the set of Hub services and their argv;
+- the schema, the database inventory and the registry path.
+
+The private handoff names the owner's read-only check command. That command
+takes no backup lock, copies nothing and contacts no remote storage, so a
+session may run it.
+
+1. After changing any pinned input, run that check in the same session. If it
+   is not ready, tell the owner its reason and that the consumer must re-pin
+   before its next scheduled run.
+2. A configuration edit invalidates the manifest that binds the old bytes, and
+   `hub_deploy rollback` then refuses the edited file
+   (see [deploy runbook](HUB_DEPLOY.md)). In the same session, create a new
+   manifest with the same wheels and state backup through
+   `release-manifest create`, confirm it with `release-manifest verify`
+   ([release preparation](IMMUTABLE_RELEASES.md)), and report both new
+   digests, configuration and manifest, for the consumer to re-pin.
+3. Do not delete or move a state backup, wheel or manifest that a pinned
+   manifest or the consumer's configuration references. Wait until the
+   consumer has re-pinned and its check is ready without the file.
+
 A refusal by the permission layer, a sandbox or a gate stops the step. Report
 it and ask; never work around it.
 
@@ -86,6 +115,7 @@ Send one short report to the channel where the owner gave the task:
   exceptions named, including this session's own leftovers removed or kept;
 - the exact revision every component runs, and the highest evidence level;
 - the backup and rollback pointer, described without private paths;
+- the external backup consumer's check result, when the installation has one;
 - what is left for the owner, each item with a recommendation.
 
 Then rewrite the private handoff to the current state.
