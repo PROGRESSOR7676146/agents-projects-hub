@@ -195,8 +195,8 @@ class TopicPanelLifecycleTests(unittest.TestCase):
         create = self.api.creates[0]
         self.assertEqual((create["chat_id"], create["thread_id"]), (CHAT, 7))
         self.assertTrue(create["silent"])
-        self.assertIn("Нет активных задач", create["html"])
-        self.assertIn("Последнее изменение: 20.11 15:00", create["html"])
+        self.assertIn("⚪ Свободно", create["html"])
+        self.assertIn("изменено 20.11 15:00", create["html"])
         self.assertEqual(
             create["reply_markup"],
             {"inline_keyboard": [[{"text": "Обновить", "callback_data": f"pn:r:{instance}"}]]},

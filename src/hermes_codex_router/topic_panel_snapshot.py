@@ -161,20 +161,24 @@ def read_panel_snapshot(
     last_result: LastResult | None = None
     last_result_at = None
     if headline == "idle":
-        saved = connection.execute(
-            """SELECT 1 FROM provider_jobs WHERE topic_id=? AND status='result_ready' LIMIT 1""",
+        # Only the newest answered job counts: an older answer whose delivery stayed
+        # unknown after the owner let the topic continue must not mask newer ones.
+        latest = connection.execute(
+            """SELECT j.status,
+                      (SELECT MAX(o.delivered_at) FROM telegram_outbox o
+                       WHERE o.job_id=j.job_id AND o.status='delivered'
+                         AND o.purpose='provider_result') AS delivered_at
+               FROM provider_jobs j
+               WHERE j.topic_id=? AND (j.status='result_ready' OR EXISTS(
+                   SELECT 1 FROM telegram_outbox o WHERE o.job_id=j.job_id
+                   AND o.status='delivered' AND o.purpose='provider_result'))
+               ORDER BY j.topic_sequence DESC LIMIT 1""",
             (topic_id,),
         ).fetchone()
-        delivered = connection.execute(
-            """SELECT MAX(o.delivered_at) FROM telegram_outbox o
-               JOIN provider_jobs j ON j.job_id=o.job_id
-               WHERE j.topic_id=? AND o.status='delivered' AND o.purpose='provider_result'""",
-            (topic_id,),
-        ).fetchone()[0]
-        if saved is not None:
+        if latest is not None and latest["status"] == "result_ready":
             last_result = "saved"
-        elif delivered is not None:
-            last_result, last_result_at = "delivered", _time(delivered)
+        elif latest is not None:
+            last_result, last_result_at = "delivered", _time(latest["delivered_at"])
     return PanelSnapshot(
         observed_at=now,
         headline=headline,

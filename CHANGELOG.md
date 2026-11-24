@@ -12,6 +12,13 @@ and releases use semantic versioning while the public API is still evolving.
   press passes the letter, once, to that topic's current agent as the owner's
   message with the file attached. Letters never start a turn by themselves.
   `hub_deploy reconfigure` may change `agent_mail`.
+- An idle `/panel` reports the newest answered job of its topic. An older answer
+  whose delivery stayed unknown after the owner let the topic continue no longer
+  shows "delivery not confirmed" forever over newer delivered answers.
+- The `/panel` status message is about half as long and states each fact once:
+  the start time appears once, the model no longer repeats the agent name,
+  events that share a time share it, the queue count joins the headline or the
+  details line, and the last-change footer is one short line.
 - `hub_deploy` preflight reads the monitor timer's state on its own. A timer
   has no main process, so the one-call unit identity introduced for residency
   checks refused every real `deploy`, `apply` and `reconfigure` as malformed.
