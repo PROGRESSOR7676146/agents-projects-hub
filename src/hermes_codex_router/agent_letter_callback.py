@@ -33,7 +33,7 @@ def handle_letter_process(service: Any, callback: TopicCallback) -> bool:
         or callback.message_sender_id is None
         or callback.message_sender_id != hub_bot.telegram_user_id
     ):
-        _answer(service, callback.callback_id, "Письмо уже передано агенту")
+        _answer(service, callback.callback_id, "Кнопка уже использована")
         return True
     letter = AgentLetterStore(service.state).displayed_letter(
         letter_id,
@@ -49,7 +49,7 @@ def handle_letter_process(service: Any, callback: TopicCallback) -> bool:
     if service.state.message_already_observed(callback.chat_id, callback.message_id) or (
         _recorded(service, record)
     ):
-        _answer(service, callback.callback_id, "Письмо уже передано агенту")
+        _answer(service, callback.callback_id, "Кнопка уже использована")
         return True
     synthetic_message: dict[str, object] = {
         # The pressed Hub message id is unique in the chat and never a user

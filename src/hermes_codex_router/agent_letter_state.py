@@ -18,7 +18,7 @@ import hashlib
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Sequence
 
 from .agent_letter_records import (
@@ -35,6 +35,7 @@ from .agent_mail import (
     ends_with_choices,
     extract_letter,
     failure_notice_html,
+    failure_reason,
     letter_address,
     letter_caption,
     letter_file_allowed,
@@ -101,8 +102,13 @@ class AgentLetterStore:
 
     # Routes -----------------------------------------------------------------
 
-    def sync_routes(self, routes: Sequence[MailRoute]) -> None:
-        """Replace the projection with the configured routes in one transaction."""
+    def sync_routes(self, routes: Sequence[MailRoute], *, now: datetime | None = None) -> None:
+        """Replace the projection with the configured routes in one transaction.
+
+        A route that disappears ends its letters not yet shown, even those
+        waiting for a retry, so restoring the route later cannot release them.
+        """
+        current = letter_time(now if now is not None else datetime.now(timezone.utc))
         with self._state._immediate_transaction():
             self._connection.execute("DELETE FROM agent_mail_routes")
             self._connection.executemany(
@@ -112,6 +118,28 @@ class AgentLetterStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 [route_parameters(route) for route in routes],
             )
+            removed = self._connection.execute(
+                """SELECT deliveries.letter_id FROM agent_letter_deliveries deliveries
+                   JOIN agent_letters letters USING(letter_id)
+                   WHERE deliveries.kind = 'display' AND deliveries.state = 'pending'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM agent_mail_routes routes
+                       WHERE routes.alias = letters.route_alias
+                         AND routes.source_project_id = letters.source_project_id
+                         AND routes.source_chat_id = letters.source_chat_id
+                         AND routes.source_thread_id = letters.source_thread_id
+                         AND routes.target_project_id = letters.target_project_id
+                         AND routes.target_chat_id = letters.target_chat_id
+                         AND routes.target_thread_id = letters.target_thread_id)"""
+            ).fetchall()
+            for row in removed:
+                self._connection.execute(
+                    """UPDATE agent_letter_deliveries
+                       SET state='rejected', error_code='route_removed', completed_at=?
+                       WHERE letter_id=? AND kind='display' AND state='pending'""",
+                    (current, row["letter_id"]),
+                )
+                self._queue_failure_notice(str(row["letter_id"]), current)
 
     def routes_for_topic(self, topic_id: int) -> tuple[MailRoute, ...]:
         rows = self._connection.execute(
@@ -197,6 +225,7 @@ class AgentLetterStore:
                 body=body,
             ),
             source_label=source_label,
+            target_label=target_label,
         )
         notice = queued_notice(
             file_name=directive.file_name, alias=route.alias, target_label=target_label
@@ -251,13 +280,12 @@ class AgentLetterStore:
                           letters.source_chat_id, letters.source_thread_id,
                           letters.target_project_id, letters.target_chat_id,
                           letters.target_thread_id, letters.file_name, letters.body,
-                          letters.caption_html, target.title AS target_title,
-                          (SELECT display.state FROM agent_letter_deliveries display
-                           WHERE display.letter_id = deliveries.letter_id
-                             AND display.kind = 'display') AS display_state
+                          letters.caption_html, letters.target_label,
+                          display.state AS display_state, display.error_code AS display_error
                    FROM agent_letter_deliveries deliveries
                    JOIN agent_letters letters USING(letter_id)
-                   JOIN topics target ON target.topic_id = letters.target_topic_id
+                   JOIN agent_letter_deliveries display
+                     ON display.letter_id = deliveries.letter_id AND display.kind = 'display'
                    WHERE deliveries.letter_id=? AND deliveries.kind=?""",
                 (row["letter_id"], row["kind"]),
             ).fetchone()
@@ -283,8 +311,11 @@ class AgentLetterStore:
             caption_html=str(claimed["caption_html"]),
             failure_html=failure_notice_html(
                 file_name=str(claimed["file_name"]),
-                target_label=topic_label(route.target_project_id, str(claimed["target_title"])),
-                unknown=claimed["display_state"] == "unknown",
+                target_label=str(claimed["target_label"]),
+                reason=failure_reason(
+                    display_state=str(claimed["display_state"]),
+                    error_code=claimed["display_error"],
+                ),
             ),
         )
 
@@ -385,9 +416,11 @@ class AgentLetterStore:
                WHERE letter_id=? AND kind=? AND state='sending'""",
             (state, error_code[:64], current, letter_id, kind),
         )
-        if kind != "display":
-            return
-        # The source topic learns once that its queued letter was not shown.
+        if kind == "display":
+            self._queue_failure_notice(letter_id, current)
+
+    def _queue_failure_notice(self, letter_id: str, current: str) -> None:
+        """The source topic learns once that its queued letter was not shown."""
         self._connection.execute(
             """INSERT OR IGNORE INTO agent_letter_deliveries
                (letter_id, kind, chat_id, thread_id, state, available_at)

@@ -30,6 +30,7 @@ class AgentLetterDraft:
     body_sha256: str
     caption_html: str
     source_label: str
+    target_label: str
 
 
 # The whole route, both endpoints included, must still be configured and
@@ -68,9 +69,11 @@ def insert_letter_in_transaction(
 ) -> None:
     """Commit one letter and its pending display inside the result transaction.
 
-    A route or endpoint that changed after the worker validated the letter
-    still commits the letter, as a rejected display with a source notice, so
-    the answer that already says "queued" is corrected instead of lost.
+    A route or endpoint topic that changed after the worker validated the
+    letter still commits the letter, as a rejected display with a source
+    notice, so the answer that already says "queued" is corrected instead of
+    lost. This is a pre-filter: the sender's check of the route and of both
+    groups' current registration before any upload is the authoritative gate.
     """
     current = letter_time(datetime.fromisoformat(timestamp))
     route = draft.route
@@ -79,8 +82,8 @@ def insert_letter_in_transaction(
            (letter_id, source_job_id, source_topic_id, source_agent_id, route_alias,
             source_project_id, source_chat_id, source_thread_id, target_project_id,
             target_chat_id, target_thread_id, target_topic_id, file_name, body,
-            body_sha256, caption_html, source_label, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            body_sha256, caption_html, source_label, target_label, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             draft.letter_id,
             job_row["job_id"],
@@ -99,6 +102,7 @@ def insert_letter_in_transaction(
             draft.body_sha256,
             draft.caption_html,
             draft.source_label,
+            draft.target_label,
             current,
         ),
     )

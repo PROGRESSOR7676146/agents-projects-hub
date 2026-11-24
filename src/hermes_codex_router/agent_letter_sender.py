@@ -80,9 +80,16 @@ class AgentLetterSender:
             self.store.settle(delivery, "rejected", "route_removed", now=current)
             self._record_event("warning", "agent_letter_rejected", "reason=route_removed")
             return True
+        route = delivery.route
         if not (
             self.store.topic_bound(delivery)
             and self._chat_registered(delivery.chat_id, delivery.project_id)
+            and (
+                delivery.kind != "display"
+                # A display discloses the source's letter: both groups must
+                # still belong to their projects, not only the historical rows.
+                or self._chat_registered(route.source_chat_id, route.source_project_id)
+            )
         ):
             # The topic no longer belongs to the project the letter names for it.
             self.store.settle(delivery, "rejected", "topic_unbound", now=current)

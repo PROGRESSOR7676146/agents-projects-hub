@@ -153,6 +153,37 @@ class ConfigTests(unittest.TestCase):
             "same topic": ({"routes": [self.route(to=same_topic)]}, True),
             "duplicate": ({"routes": [self.route(), self.route()]}, True),
             "title": ({"routes": [self.route(to={"title": "Backups"})]}, True),
+            "alias newline": ({"routes": [self.route(alias="backup\n")]}, True),
+            "empty project": (
+                {
+                    "routes": [
+                        self.route(to={"project_id": "", "chat_id": -1009999999999, "thread_id": 1})
+                    ]
+                },
+                True,
+            ),
+            "zero chat": (
+                {
+                    "routes": [
+                        self.route(to={"project_id": "example-x", "chat_id": 0, "thread_id": 1})
+                    ]
+                },
+                True,
+            ),
+            "huge thread": (
+                {
+                    "routes": [
+                        self.route(
+                            to={
+                                "project_id": "example-x",
+                                "chat_id": -1009999999999,
+                                "thread_id": 2**63,
+                            }
+                        )
+                    ]
+                },
+                True,
+            ),
         }
         for name, (value, supported) in cases.items():
             with self.subTest(name), self.assertRaises(AgentMailConfigError):
@@ -468,13 +499,50 @@ class SenderTests(MailStateTestCase):
         self.assertEqual(self.deliveries()[0]["state"], "unknown")
 
     def test_route_removed_before_display_is_rejected_and_settled_without_routes(self) -> None:
-        self.store.sync_routes(())
-        self.assertTrue(self.sender.deliver_one(now=NOW))
-        self.assertTrue(self.sender.deliver_one(now=NOW))
+        self.store.sync_routes((), now=NOW)  # The cutover ends the unshown display at once.
+        self.assertTrue(self.sender.deliver_one(now=NOW))  # The source notice.
+        self.assertFalse(self.sender.deliver_one(now=NOW))
         self.assertEqual(self.api.documents, [])
         display, notice = self.deliveries()
         self.assertEqual((display["state"], display["error_code"]), ("rejected", "route_removed"))
         self.assertEqual((notice["state"], notice["chat_id"]), ("confirmed", SOURCE_CHAT))
+
+    def test_source_group_rebinding_alone_blocks_the_display(self) -> None:
+        self.sender._chat_registered = lambda chat_id, project_id: chat_id != SOURCE_CHAT
+        self.sender.deliver_one(now=NOW)
+        self.assertEqual(self.api.documents, [])
+        self.assertEqual(self.deliveries()[0]["error_code"], "topic_unbound")
+
+    def test_route_removed_and_restored_before_a_retry_never_releases_the_letter(self) -> None:
+        self.api.error = TelegramError(
+            "slow down", failure_class="api_rejection", status_code=429, retry_after=60
+        )
+        self.sender.deliver_one(now=NOW)
+        self.api.error = None
+        self.store.sync_routes((), now=NOW + timedelta(seconds=1))
+        self.store.sync_routes((ROUTE,), now=NOW + timedelta(seconds=2))
+        later = NOW + timedelta(minutes=5)
+        while self.sender.deliver_one(now=later):
+            pass
+        self.assertEqual(self.api.documents, [])
+        display, notice = self.deliveries()
+        self.assertEqual((display["state"], display["error_code"]), ("rejected", "route_removed"))
+        self.assertEqual(notice["state"], "confirmed")
+        (message,) = self.api.messages
+        self.assertIn("маршрут почты", message[2])
+
+    def test_notice_keeps_the_label_frozen_at_preparation(self) -> None:
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET project_id = 'example-other', title = 'Secret plans' "
+                "WHERE topic_id = ?",
+                (self.target.topic_id,),
+            )
+        while self.sender.deliver_one(now=NOW):
+            pass
+        (message,) = self.api.messages
+        self.assertNotIn("Secret plans", message[2])
+        self.assertIn("Backups", message[2])
 
     def test_incomplete_receipt_is_unknown_and_never_repeated(self) -> None:
         self.api.document = {}
@@ -566,7 +634,7 @@ class SenderTests(MailStateTestCase):
         (edit,) = [params for method, params in calls if method == "editMessageReplyMarkup"]
         self.assertIn("Не передано", str(edit["reply_markup"]))
         self.assertEqual(
-            answers, ["Hub не принял письмо, причина — в теме", "Письмо уже передано агенту"]
+            answers, ["Hub не принял письмо, причина — в теме", "Кнопка уже использована"]
         )
 
     def test_displayed_letter_matches_only_the_exact_message(self) -> None:
@@ -768,7 +836,7 @@ class EndToEndTests(unittest.TestCase):
                 self.assertIn("Обработай письмо агента", job.payload_text)
                 (material,) = controller.state.incoming_materials_for_job(job.job_id)
                 self.assertEqual(Path(str(material.storage_path)).read_bytes(), document["content"])
-                self.assertEqual(bot.answers[-1], "Письмо уже передано агенту")
+                self.assertEqual(bot.answers[-1], "Кнопка уже использована")
                 self.assertIn("editMessageReplyMarkup", bot.calls)
             finally:
                 controller.close()

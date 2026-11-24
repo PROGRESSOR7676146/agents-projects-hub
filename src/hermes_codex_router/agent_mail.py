@@ -15,6 +15,7 @@ import html
 import json
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from .reply_choices import _open_fence, extract_reply_choices
 
@@ -96,7 +97,7 @@ def extract_letter(text: str) -> ExtractedLetter:
     if len(parts) != 2:
         return ExtractedLetter(text, malformed=True)
     address, file_name = (part.strip() for part in parts)
-    if _ADDRESS.match(address) is None or not _safe_file_name(file_name):
+    if _ADDRESS.fullmatch(address) is None or not _safe_file_name(file_name):
         return ExtractedLetter(text, malformed=True)
     return ExtractedLetter(
         "\n".join(preceding).rstrip(), LetterDirective(address=address, file_name=file_name)
@@ -195,15 +196,28 @@ def refused_notice(reason: str) -> str:
     return f"\n\n✉️ Письмо не отправлено: {reason}."
 
 
-def failure_notice_html(*, file_name: str, target_label: str, unknown: bool) -> str:
-    if unknown:
-        what = (
-            "Hub не получил подтверждения, что письмо показано. Повторно не отправляю: "
-            "проверьте тему получателя."
-        )
-    else:
-        what = "Telegram отказал в показе. Письмо сохранено, повторной отправки не будет."
-    return html.escape(f"✉️ Письмо «{file_name}» для {target_label}: {what}")
+FailureReason = Literal["unknown", "telegram", "route"]
+_FAILURE_TEXT: dict[str, str] = {
+    "unknown": (
+        "Hub не получил подтверждения, что письмо показано. Повторно не отправляю: "
+        "проверьте тему получателя."
+    ),
+    "telegram": "Telegram отказал в показе. Письмо сохранено, повторной отправки не будет.",
+    "route": (
+        "письмо не показано: маршрут почты выключен или изменился, либо тема больше не "
+        "принадлежит проекту. Письмо сохранено, повторной отправки не будет."
+    ),
+}
+
+
+def failure_reason(*, display_state: str, error_code: str | None) -> FailureReason:
+    if display_state == "unknown":
+        return "unknown"
+    return "telegram" if (error_code or "").startswith("api_") else "route"
+
+
+def failure_notice_html(*, file_name: str, target_label: str, reason: FailureReason) -> str:
+    return html.escape(f"✉️ Письмо «{file_name}» для {target_label}: {_FAILURE_TEXT[reason]}")
 
 
 def process_keyboard(letter_id: str) -> dict[str, object]:
@@ -220,7 +234,7 @@ def done_keyboard(*, queued: bool) -> dict[str, object]:
 
 
 def parse_process_callback(data: str) -> str | None:
-    match = _CALLBACK.match(data)
+    match = _CALLBACK.fullmatch(data)
     return None if match is None else match.group("letter")
 
 

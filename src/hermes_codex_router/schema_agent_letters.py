@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS agent_letters (
     body_sha256 TEXT NOT NULL CHECK(length(body_sha256)=64),
     caption_html TEXT NOT NULL CHECK(length(caption_html) BETWEEN 1 AND 1024),
     source_label TEXT NOT NULL CHECK(length(source_label) BETWEEN 1 AND 300),
+    -- Frozen when the letter was prepared: a later rename or rebinding of the
+    -- target topic is never shown to the source.
+    target_label TEXT NOT NULL CHECK(length(target_label) BETWEEN 1 AND 300),
     created_at TEXT NOT NULL,
     CHECK(source_topic_id != target_topic_id)
 );

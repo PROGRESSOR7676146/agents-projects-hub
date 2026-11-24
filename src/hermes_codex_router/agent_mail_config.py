@@ -11,10 +11,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from .agent_mail import ALIAS_PATTERN, MailRoute
+from .registry import PROJECT_ID
 
 MAX_ROUTES = 16
 _ROUTE_KEYS = frozenset({"alias", "from", "to"})
 _ENDPOINT_KEYS = frozenset({"project_id", "chat_id", "thread_id"})
+_INT64 = 2**63
 
 
 class AgentMailConfigError(ValueError):
@@ -45,7 +47,7 @@ def parse_agent_mail(
         if not isinstance(raw, dict) or set(raw) != _ROUTE_KEYS:
             raise AgentMailConfigError("each agent_mail route needs exactly alias, from and to")
         alias = raw["alias"]
-        if not isinstance(alias, str) or ALIAS_PATTERN.match(alias) is None:
+        if not isinstance(alias, str) or ALIAS_PATTERN.fullmatch(alias) is None:
             raise AgentMailConfigError("agent_mail route alias must match [a-z][a-z0-9-]{0,15}")
         source = _endpoint(raw["from"], project_chats)
         target = _endpoint(raw["to"], project_chats)
@@ -73,11 +75,15 @@ def _endpoint(raw: Any, project_chats: Mapping[str, int | None]) -> tuple[str, i
     if not isinstance(raw, dict) or set(raw) != _ENDPOINT_KEYS:
         raise AgentMailConfigError("an agent_mail endpoint needs project_id, chat_id and thread_id")
     project_id, chat_id, thread_id = raw["project_id"], raw["chat_id"], raw["thread_id"]
+    # Bounded like the projection schema, so a bad value fails the config load
+    # instead of the shared sender's start.
     if (
         not isinstance(project_id, str)
+        or PROJECT_ID.fullmatch(project_id) is None
         or type(chat_id) is not int
+        or not (chat_id != 0 and -_INT64 <= chat_id < _INT64)
         or type(thread_id) is not int
-        or thread_id <= 0
+        or not 0 < thread_id < _INT64
     ):
         raise AgentMailConfigError("an agent_mail endpoint has an invalid value")
     # A statically configured project must use its own group. A project bound

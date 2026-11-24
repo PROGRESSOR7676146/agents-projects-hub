@@ -61,23 +61,29 @@ bounded to 4,000 characters and consumed per agent.
    result transaction, at most one per source job, together with the exact
    route: alias and both endpoints. If that route or an endpoint binding
    changed after the worker checked it, the letter is still kept, its display
-   is recorded as rejected and the source topic is told. Every stored field is
-   bounded before the commit, so a letter can never abort the source result.
+   is recorded as rejected and the source topic is told. This is a pre-filter;
+   the sender's check before any upload is the authoritative gate. Every
+   stored field, including the target label shown in later notices, is
+   bounded and frozen before the commit, so a letter can never abort the
+   source result and a renamed or rebound target is never disclosed.
 5. **Display.** The Hub bot posts the letter as a document in the target topic,
    with a caption fixed at commit (sender, file, preview) and one owner-only
    «Обработать» button. Each send is saved as `sending` before the request and
    confirmed only by a receipt that carries the document, so a confirmed
    display can always be processed. Before sending, the exact route must still
-   be configured and the topic must still belong to the letter's project;
-   otherwise the display is rejected. Removing a route or disabling mail
-   therefore stops letters not yet shown, while settlement, stale-lease
-   recovery and notices continue with no route configured. A rate limit, a
+   be configured, the target topic must still belong to the letter's project
+   and both groups must still be registered to their projects; otherwise the
+   display is rejected. Replacing the route projection rejects at once every
+   letter not yet shown whose route disappeared, including one waiting for a
+   retry, so restoring the route later cannot release it. Settlement,
+   stale-lease recovery and notices continue with no route configured. A rate limit, a
    401 or a proven not-sent attempt retries, at most five attempts; another
    4xx is final; an attempted send without a processable receipt is `unknown`
    and is never repeated. A rejected or unknown display produces one notice in
    the source topic, sent only while that topic still belongs to the source
-   project. Mail ranks after final results, notices, progress and session
-   markers, and before the topic panel.
+   project; it says whether Telegram refused, the outcome is unknown, or the
+   route or binding changed. Mail ranks after final results, notices, progress
+   and session markers, and before the topic panel.
 6. **Processing.** Only the configured owner may press «Обработать», on the
    exact confirmed Hub-bot display in that numeric topic, while the group and
    topic still belong to the letter's target project. The press becomes the
