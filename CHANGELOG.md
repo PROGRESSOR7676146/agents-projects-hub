@@ -5,6 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.31] - 2026-11-24
+
+- Install target for the agent mail release, with the same code as 0.11.30,
+  its schema-61-compatible rollback. Agent mail, owner document-loss
+  declarations and the receipt-bound spool cleanup are on in this artifact;
+  mail stays off until the owner configures `agent_mail` routes.
+
 ## [0.11.30] - 2026-11-24
 
 - Agent mail between topics (ADR 0112, schema 61, off by default). With
