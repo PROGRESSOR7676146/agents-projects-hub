@@ -9,16 +9,17 @@ REMOTE_UNCERTAIN_DECISION = True
 # continuing to record exact retirement evidence.  It can therefore reopen a
 # migrated database without repeating the candidate's local cleanup behavior.
 # An install target removes only documents whose terminal proof committed.
-RECEIPT_BOUND_ARTIFACT_CLEANUP = True
+RECEIPT_BOUND_ARTIFACT_CLEANUP = False
 
 # ADR 0109: the schema-59-compatible rollback artifact keeps the immutable
 # ledger reader but sets this false.  It can therefore recover an already
 # migrated state without extending the owner-attested loss history.  0.11.28
 # is the schema-60 rollback artifact for 0.11.29 and ships both flags off;
-# 0.11.29, the install target, ships both on.
-EXPLICIT_ARTIFACT_LOSS_DECLARATION = True
+# 0.11.29, the install target, ships both on.  0.11.30 is the schema-61
+# rollback artifact for 0.11.31 and ships them off with AGENT_MAIL.
+EXPLICIT_ARTIFACT_LOSS_DECLARATION = False
 
 # ADR 0112: agent mail between configured topics. The schema-61 rollback
 # artifact ships it off: configured routes are then ignored, the sender
 # rejects letters not yet shown and keeps settling, and presses refuse.
-AGENT_MAIL = True
+AGENT_MAIL = False

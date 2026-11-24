@@ -548,7 +548,8 @@ class HubConfigTests(unittest.TestCase):
                 ]
             },
         )
-        (route,) = load_hub_config(path).agent_mail
+        with patch.object(artifact_capabilities, "AGENT_MAIL", True):
+            (route,) = load_hub_config(path).agent_mail
         self.assertEqual((route.alias, route.target_thread_id), ("other", 7))
         with patch.object(artifact_capabilities, "AGENT_MAIL", False):
             self.assertEqual(load_hub_config(path).agent_mail, ())
