@@ -216,7 +216,11 @@ class MailStateTestCase(unittest.TestCase):
         self.session = self.state.activate_agent(
             self.source.topic_id, "claude", "claude-example", "high"
         )
-        self.store = AgentLetterStore(self.state, agent_name="Claude")
+        self.store = AgentLetterStore(
+            self.state,
+            agent_name="Claude",
+            static_groups=(("example-hub", SOURCE_CHAT), ("example-backup", TARGET_CHAT)),
+        )
         self.store.sync_routes((ROUTE,))
         self.messages = 0
 
@@ -373,6 +377,29 @@ class PreparationTests(MailStateTestCase):
         self.assertLessEqual(len(outcome.draft.caption_html), 1024)
         self.commit(job, outcome.draft)
         self.assertEqual(self.state.get_provider_result(job.job_id).visible_response, "Answer")
+
+    def test_source_group_unregistered_at_commit_rejects_the_display(self) -> None:
+        job = self.leased_job()
+        outcome = self.store.prepare(job, self.answer(job), (self.artifact("TASK.md", b"text"),))
+        assert outcome.draft is not None
+        # The topic rows are unchanged; only the group registration moved.
+        self.commit(
+            job,
+            dataclasses.replace(outcome.draft, static_groups=(("example-backup", TARGET_CHAT),)),
+        )
+        display, notice = self.deliveries()
+        self.assertEqual((display["state"], display["error_code"]), ("rejected", "route_changed"))
+        self.assertEqual(notice["kind"], "failure_notice")
+
+    def test_group_moved_to_another_project_refuses_before_commit(self) -> None:
+        job = self.leased_job()
+        store = AgentLetterStore(
+            self.state,
+            static_groups=(("example-other", SOURCE_CHAT), ("example-backup", TARGET_CHAT)),
+        )
+        outcome = store.prepare(job, self.answer(job), (self.artifact("TASK.md", b"text"),))
+        self.assertIsNone(outcome.draft)
+        self.assertIn("сменила проект", outcome.notice)
 
     def test_route_removed_before_commit_corrects_the_source(self) -> None:
         job = self.leased_job()

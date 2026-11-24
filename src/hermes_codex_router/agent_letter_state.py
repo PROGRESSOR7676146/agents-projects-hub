@@ -24,6 +24,7 @@ from typing import Literal, Sequence
 from .agent_letter_records import (
     ROUTE_AUTHORIZED_SQL,
     AgentLetterDraft,
+    group_registered,
     letter_time,
     route_parameters,
 )
@@ -95,10 +96,17 @@ class DisplayedLetter:
 class AgentLetterStore:
     """Short immediate transactions over agent mail tables only."""
 
-    def __init__(self, state: HubState, *, agent_name: str = "") -> None:
+    def __init__(
+        self,
+        state: HubState,
+        *,
+        agent_name: str = "",
+        static_groups: tuple[tuple[str, int], ...] = (),
+    ) -> None:
         self._state = state
         self._connection = state._connection
         self._agent_name = agent_name
+        self._static_groups = static_groups
 
     # Routes -----------------------------------------------------------------
 
@@ -203,6 +211,16 @@ class AgentLetterStore:
         target = self._target_topic(route)
         if target is None:
             return LetterOutcome(extracted.text, refused_notice("Hub ещё не знает тему получателя"))
+        if not all(
+            group_registered(self._connection, self._static_groups, chat_id, project_id)
+            for chat_id, project_id in (
+                (route.source_chat_id, route.source_project_id),
+                (route.target_chat_id, route.target_project_id),
+            )
+        ):
+            return LetterOutcome(
+                extracted.text, refused_notice("группа отправителя или получателя сменила проект")
+            )
         refusal, body = _letter_body(directive.file_name, artifacts)
         if body is None:
             return LetterOutcome(extracted.text, refused_notice(refusal))
@@ -226,6 +244,7 @@ class AgentLetterStore:
             ),
             source_label=source_label,
             target_label=target_label,
+            static_groups=self._static_groups,
         )
         notice = queued_notice(
             file_name=directive.file_name, alias=route.alias, target_label=target_label

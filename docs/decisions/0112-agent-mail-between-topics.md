@@ -61,8 +61,10 @@ bounded to 4,000 characters and consumed per agent.
    result transaction, at most one per source job, together with the exact
    route: alias and both endpoints. If that route or an endpoint binding
    changed after the worker checked it, the letter is still kept, its display
-   is recorded as rejected and the source topic is told. This is a pre-filter;
-   the sender's check before any upload is the authoritative gate. Every
+   is recorded as rejected and the source topic is told. That check includes
+   the current registration of both groups to their projects; the sender
+   repeats every check, with registry and Git-root validation, before any
+   upload. Every
    stored field, including the target label shown in later notices, is
    bounded and frozen before the commit, so a letter can never abort the
    source result and a renamed or rebound target is never disclosed.

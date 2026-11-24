@@ -147,7 +147,15 @@ class ExternalQueueWorker:
         self.state = HubState.open(
             config.state_path, codex_permission_profile=config.codex_permission_profile
         )
-        self.letters = AgentLetterStore(self.state, agent_name=self.agent.display_name)
+        self.letters = AgentLetterStore(
+            self.state,
+            agent_name=self.agent.display_name,
+            static_groups=tuple(
+                (item.project_id, item.telegram_chat_id)
+                for item in config.projects
+                if item.telegram_chat_id is not None
+            ),
+        )
         try:
             self.state.reconcile_legacy_execution_scopes(
                 {project.project_id: project.root for project in self.registry.projects}

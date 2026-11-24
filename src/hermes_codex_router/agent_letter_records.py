@@ -31,6 +31,9 @@ class AgentLetterDraft:
     caption_html: str
     source_label: str
     target_label: str
+    # The worker's statically configured project groups; with onboarding
+    # bindings in the database they decide current group registration.
+    static_groups: tuple[tuple[str, int], ...] = ()
 
 
 # The whole route, both endpoints included, must still be configured and
@@ -47,6 +50,28 @@ ROUTE_AUTHORIZED_SQL = """
       AND routes.source_thread_id = ? AND routes.target_project_id = ?
       AND routes.target_chat_id = ? AND routes.target_thread_id = ?
 """
+
+
+def group_registered(
+    connection: sqlite3.Connection,
+    static_groups: tuple[tuple[str, int], ...],
+    chat_id: int,
+    project_id: str,
+) -> bool:
+    """Whether this group is currently bound to this project.
+
+    Mirrors the binding part of project resolution: one static binding or one
+    onboarding binding, never two that disagree. Registry and Git-root checks
+    stay with the sender's authoritative gate before any upload.
+    """
+    static = {project for project, chat in static_groups if chat == chat_id}
+    receipt = connection.execute(
+        "SELECT project_id FROM project_group_bindings WHERE telegram_chat_id = ?", (chat_id,)
+    ).fetchone()
+    onboarded = None if receipt is None else str(receipt[0])
+    if len(static) > 1 or (static and onboarded is not None and onboarded not in static):
+        return False
+    return (next(iter(static)) if static else onboarded) == project_id
 
 
 def route_parameters(route: MailRoute) -> tuple[object, ...]:
@@ -72,8 +97,8 @@ def insert_letter_in_transaction(
     A route or endpoint topic that changed after the worker validated the
     letter still commits the letter, as a rejected display with a source
     notice, so the answer that already says "queued" is corrected instead of
-    lost. This is a pre-filter: the sender's check of the route and of both
-    groups' current registration before any upload is the authoritative gate.
+    lost. Both groups' current registration is checked here too; the sender
+    repeats every check, with registry and Git-root validation, before upload.
     """
     current = letter_time(datetime.fromisoformat(timestamp))
     route = draft.route
@@ -108,6 +133,12 @@ def insert_letter_in_transaction(
     )
     authorized = (
         connection.execute(ROUTE_AUTHORIZED_SQL, route_parameters(route)).fetchone() is not None
+        and group_registered(
+            connection, draft.static_groups, route.source_chat_id, route.source_project_id
+        )
+        and group_registered(
+            connection, draft.static_groups, route.target_chat_id, route.target_project_id
+        )
         and (route.source_chat_id, route.source_thread_id)
         == (job_row["chat_id"], job_row["thread_id"])
         and connection.execute(
