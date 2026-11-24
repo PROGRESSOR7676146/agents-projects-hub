@@ -1,9 +1,10 @@
 """Controller handling of owner decision buttons on Hub-bot messages.
 
 ``bh:`` confirms or cancels one held request. ``ud:`` decides one uncertain
-non-Codex job (ADR 0107). Both run before the generic callback claim: the
-state layer binds each press to its delivered message and makes a repeated
-press return the decision already taken, without new effects.
+non-Codex job (ADR 0107). ``ml:`` passes one agent letter to its topic's agent
+(ADR 0112). All run before the generic callback claim: each press is bound to
+its delivered message and a repeated press returns the outcome already taken,
+without new effects.
 """
 
 from __future__ import annotations
@@ -12,13 +13,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .agent_letter_callback import handle_letter_process
+from .agent_mail import LETTER_CALLBACK_PREFIX
 from .diagnostic_log import survived
 from .state import StateError
 from .telegram import TelegramError, TopicCallback
 from .uncertain_decision import DONE_CALLBACK, done_keyboard, parse_callback
 from .uncertain_decision_state import UncertainDecision, UncertainDecisionState
 
-OWNER_DECISION_PREFIXES = ("bh:", "ud:")
+OWNER_DECISION_PREFIXES = ("bh:", "ud:", LETTER_CALLBACK_PREFIX)
 
 
 def handle_owner_decision_callback(service: Any, callback: TopicCallback) -> bool:
@@ -27,9 +30,13 @@ def handle_owner_decision_callback(service: Any, callback: TopicCallback) -> boo
             callback.callback_id,
             "Только владелец может решить судьбу запроса"
             if callback.data.startswith("bh:")
+            else "Только владелец может передать письмо агенту"
+            if callback.data.startswith(LETTER_CALLBACK_PREFIX)
             else "Только владелец может решить судьбу задачи",
         )
         return True
+    if callback.data.startswith(LETTER_CALLBACK_PREFIX):
+        return handle_letter_process(service, callback)
     if callback.data.startswith("bh:"):
         return _held(service, callback)
     return _uncertain(service, callback)

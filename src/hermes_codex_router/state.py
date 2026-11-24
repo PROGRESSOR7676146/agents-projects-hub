@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Literal, Mapping, Sequence
 
+from .agent_letter_records import AgentLetterDraft, insert_letter_in_transaction
 from .approval_surface import ApprovalWait
 from .approval_surface_state import pending_approval_waits
 from .artifacts import ValidatedArtifact
@@ -1665,6 +1666,7 @@ class HubState(HubStateFacade):
         acknowledge_handoff: bool = False,
         telegram_contract_version: int | None = None,
         artifacts: tuple[ValidatedArtifact, ...] = (),
+        letter: AgentLetterDraft | None = None,
         now: datetime | None = None,
     ) -> ProviderJobResultRecord | None:
         """Commit result, acknowledgements and outbox; None if a covering stop cancels the job."""
@@ -1679,16 +1681,10 @@ class HubState(HubStateFacade):
             name="Telegram outbox text",
             maximum=MAX_PROVIDER_RESPONSE_LENGTH,
         )
-        provider_session = (
-            _bounded(provider_session_id, name="provider session id", maximum=256)
-            if provider_session_id is not None
-            else None
+        provider_session = _optional_bounded(
+            provider_session_id, name="provider session id", maximum=256
         )
-        selected_model = (
-            _bounded(actual_model, name="actual model", maximum=200)
-            if actual_model is not None
-            else None
-        )
+        selected_model = _optional_bounded(actual_model, name="actual model", maximum=200)
         metadata = safe_metadata_json.strip() if safe_metadata_json else None
         if metadata is not None and len(metadata) > 4000:
             raise StateError("invalid safe metadata")
@@ -1842,6 +1838,8 @@ class HubState(HubStateFacade):
                 ),
             )
             self._insert_telegram_outbox_parts(outbox_id, html, artifacts=artifacts)
+            if letter is not None:
+                insert_letter_in_transaction(self._connection, job_row, letter, timestamp)
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'result_ready', lease_owner = NULL,

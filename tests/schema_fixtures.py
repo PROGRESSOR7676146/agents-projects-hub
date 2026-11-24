@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router import migrations
+from hermes_codex_router.schema_agent_letters import AGENT_LETTER_TABLES, AGENT_LETTER_TRIGGERS
 from hermes_codex_router.schema_artifact_losses import ARTIFACT_LOSS_TRIGGER_NAMES
 from hermes_codex_router.schema_codex_permissions import (
     PROFILE_TABLES,
@@ -138,6 +139,7 @@ def legacy_selection_columns(path: Path):
 
 def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
     """Remove only empty schema54 proof from fictional historical fixtures."""
+    remove_agent_letters_schema(connection)
     remove_topic_panels_schema(connection)
     remove_artifact_losses_schema(connection)
     remove_artifact_retirements_schema(connection)
@@ -181,6 +183,19 @@ def remove_artifact_retirements_schema(connection: sqlite3.Connection) -> None:
     ):
         connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     connection.execute(f"DROP TABLE {table}")
+
+
+def remove_agent_letters_schema(connection: sqlite3.Connection) -> None:
+    """Remove only empty schema61 agent mail state from fictional historical fixtures."""
+    existing = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    for trigger in AGENT_LETTER_TRIGGERS:
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    for table in AGENT_LETTER_TABLES:
+        if table in existing:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            connection.execute(f"DROP TABLE {table}")
 
 
 def remove_topic_panels_schema(connection: sqlite3.Connection) -> None:

@@ -179,8 +179,10 @@ Write the complete new config to a private file (owned by the invoking user,
 mode `0600`, absolute path) and pass it with `--config`. The tool compares
 top-level keys with exact JSON values and refuses an unchanged config,
 duplicate keys, non-JSON numbers and any changed key outside
-`RECONFIGURABLE_KEYS`: `message_batch_max_ms`, `message_batch_quiet_ms`,
-`task_no_progress_seconds` and `topic_panel`. Numbers compare as exact
+`RECONFIGURABLE_KEYS`: `agent_mail`, `message_batch_max_ms`,
+`message_batch_quiet_ms`, `task_no_progress_seconds` and `topic_panel`. Workers
+read agent mail routes from the database, where the sender projects them
+at start ([ADR 0112](../decisions/0112-agent-mail-between-topics.md)). Numbers compare as exact
 decimals, and `1`, `1.0` and `true` differ. Only the Controller and sender read
 these keys, from the Hub config. Other keys stay outside `reconfigure`: Claude
 workers read some from their own copy, a destination such as the alert topic

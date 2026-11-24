@@ -310,8 +310,8 @@ def codex_turn_text(
     )
 
 
-def codex_provider_prompt(turn_text: str, *, staging_dir: Path) -> str:
-    return telegram_user_turn_prompt(turn_text, staging_dir=staging_dir)
+def codex_provider_prompt(turn_text: str, *, staging_dir: Path, contacts: str = "") -> str:
+    return telegram_user_turn_prompt(turn_text, staging_dir=staging_dir, contacts=contacts)
 
 
 def external_provider_prompt(
@@ -321,12 +321,14 @@ def external_provider_prompt(
     runtime: str,
     full_contract: bool,
     staging_dir: Path,
+    contacts: str = "",
 ) -> str:
     return telegram_turn_prompt(
         job.payload_text + prepared.prompt_suffix,
         runtime=runtime,
         new_session=full_contract,
         staging_dir=staging_dir,
+        contacts=contacts,
     )
 
 

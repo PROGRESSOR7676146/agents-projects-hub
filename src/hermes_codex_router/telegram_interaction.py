@@ -134,7 +134,9 @@ def telegram_contract_version(runtime: str) -> int:
     )
 
 
-def telegram_user_turn_prompt(user_turn: str, *, staging_dir: object | None = None) -> str:
+def telegram_user_turn_prompt(
+    user_turn: str, *, staging_dir: object | None = None, contacts: str = ""
+) -> str:
     """Add only per-turn transport metadata to the user's productive text."""
 
     clean = user_turn.strip()
@@ -148,6 +150,8 @@ def telegram_user_turn_prompt(user_turn: str, *, staging_dir: object | None = No
             "Place only deliberate user-facing deliverables there. Files elsewhere are not "
             "attached, and files left by other turns are never reused."
         )
+    if contacts:
+        sections.append(contacts)  # Agent mail addresses of this turn (ADR 0112).
     sections.append(f"CURRENT USER TURN:\n{clean}")
     return "\n\n".join(sections)
 
@@ -158,12 +162,13 @@ def telegram_turn_prompt(
     runtime: str,
     new_session: bool,
     staging_dir: object | None = None,
+    contacts: str = "",
 ) -> str:
     """Prompt fallback for runtimes without a native instruction channel."""
 
     return "\n\n".join(
         (
             telegram_developer_instructions(runtime=runtime, new_session=new_session),
-            telegram_user_turn_prompt(user_turn, staging_dir=staging_dir),
+            telegram_user_turn_prompt(user_turn, staging_dir=staging_dir, contacts=contacts),
         )
     )

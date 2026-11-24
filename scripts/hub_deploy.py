@@ -67,6 +67,9 @@ MANIFEST = "release-manifest.json"
 # worker counts and the unit set stay out of reach.
 RECONFIGURABLE_KEYS = frozenset(
     {
+        # Workers read agent mail routes from the database, where the
+        # sender projects them at start (ADR 0112).
+        "agent_mail",
         "message_batch_max_ms",
         "message_batch_quiet_ms",
         "task_no_progress_seconds",

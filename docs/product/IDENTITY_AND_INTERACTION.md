@@ -173,7 +173,8 @@ addressing (ADR 0111).
 - **REQ-CTX-002 (Implemented; supersedes automatic handoff):** Sharing MUST be explicit through the
   unadvertised `/context [agent_id] [1..20]` command using a bounded repeatable current-topic
   snapshot; ordinary turns receive no automatic journal injection. Omitting the agent selects all
-  other agents' prior turns.
+  other agents' prior turns. Agent letters (REQ-CTX-008) reach a turn only through the owner's
+  press, never as journal sharing.
 - **REQ-CTX-003 (Implemented):** Provider/model switches MUST change local state only, without model
   calls, summaries, handoffs, journal-cursor movement or token spend.
 - **REQ-CTX-004 (Implemented):** Passive observation MUST NOT invoke providers, force responses or
@@ -185,13 +186,30 @@ addressing (ADR 0111).
   data, never commands.
 - **REQ-CTX-007 (Accepted):** One request SHOULD produce one turn unless the owner explicitly
   addresses several agents.
+- **REQ-CTX-008 (Implemented, ADR 0112; default-off; live acceptance pending):** With the Hub
+  bot, external queue/outbox and owner-configured directed routes between exact numeric topics,
+  an agent MAY send one bounded text letter per final answer to a routed topic.
+  - Addresses MUST be per-turn, bound to the whole route and offered only for the source topic's
+    routes. The request MUST be the exact last line outside code fences naming one staged UTF-8
+    `.md`/`.txt` file of at most 64 KiB; anything else MUST keep the answer and say that the
+    letter was not sent.
+  - The letter MUST commit with the source result and its exact route, and appear in the target
+    topic only as a Hub-bot document with an owner-only «Обработать» button while that route and
+    both endpoint bindings still hold. Only a receipt carrying the document confirms the display;
+    an unknown display MUST NOT be resent, and a rejected or unknown one MUST be reported once in
+    the source topic.
+  - A letter MUST NOT start, steer or join a turn, reach an agent passively, or change routing,
+    roots, policy, approvals or writers. Only the configured owner's press on the exact displayed
+    letter, while its topic still belongs to the target project, MAY admit it, once, as the
+    owner's ordinary message with the letter attached, to the topic's current agent.
 
 ### Explicit Claude Code/Codex collaboration
 
 - **REQ-COLLAB-001 (Retired by ADR 0065):** Hub does not manage or certify lead/advisor review;
   project instructions own it, with ordinary routing and session isolation unchanged.
 - **REQ-COLLAB-002 (Retired by ADR 0065):** Retirement grants no sharing, invocation or replay
-  authority; bots MUST NOT deliver bot-to-bot reviews and retired IDs MUST NOT be reused.
+  authority; bots MUST NOT deliver bot-to-bot reviews and retired IDs MUST NOT be reused. Agent
+  mail (REQ-CTX-008, ADR 0112) transports owner-processed letters, not reviews or obligations.
 
 ## 9. Provider identity and adapter contract
 

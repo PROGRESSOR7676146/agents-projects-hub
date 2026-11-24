@@ -576,6 +576,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_artifact_losses.py",
                         "schema_artifact_retirements.py",
                         "schema_topic_panels.py",
+                        "schema_agent_letters.py",
                         "schema_delivery_holds.py",
                         "schema_delivery_control.py",
                         "schema_delivery_control_activation.py",

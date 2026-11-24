@@ -5,6 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Agent mail between topics (ADR 0112, schema 61, off by default). With
+  owner-configured `agent_mail` routes, an agent ends its answer with
+  `[[letter: <address> | <file>]]` to send one staged text file to a routed
+  topic. The Hub bot posts it there with an owner-only «Обработать» button; a
+  press passes the letter, once, to that topic's current agent as the owner's
+  message with the file attached. Letters never start a turn by themselves.
+  `hub_deploy reconfigure` may change `agent_mail`.
 - `hub_deploy` preflight reads the monitor timer's state on its own. A timer
   has no main process, so the one-call unit identity introduced for residency
   checks refused every real `deploy`, `apply` and `reconfigure` as malformed.

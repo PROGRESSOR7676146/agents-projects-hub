@@ -36,7 +36,8 @@ without losing local control or incurring surprise model spend.
 
 ## 2. Product principles
 
-1. Each project group holds one project's durable conversation and history.
+1. Each project group holds one project's durable conversation and history; owner-configured
+    agent mail (REQ-CTX-008) is the only cross-project flow.
 2. Local deterministic code chooses recipients; provider identities stay directly addressable.
 3. One coherent input normally creates one turn; passive observation MUST NOT spend model tokens.
 4. A provider session MUST have one writer, across Telegram and local frontends.

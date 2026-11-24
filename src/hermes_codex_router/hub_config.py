@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from . import artifact_capabilities
+from .agent_mail import MailRoute
+from .agent_mail_config import AgentMailConfigError, parse_agent_mail
 from .claude_catalog import CLAUDE_EFFORTS, parse_claude_catalog
 from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
 from .codex_permissions import validate_permission_profile_id
@@ -149,6 +151,8 @@ class HubConfig:
     claude_stream_input: bool = False
     # Default-off read-only topic status panel (ADR 0110); validated at load.
     topic_panel: bool = False
+    # Default-off agent mail routes (ADR 0112); empty keeps mail off.
+    agent_mail: tuple[MailRoute, ...] = ()
     # The file this configuration was loaded from, for local hand-off commands.
     source_path: Path | None = None
     # Consecutive productive messages with identical routing are collected
@@ -1168,6 +1172,18 @@ def load_hub_config(
         or topology.outbox_runtime != "external"
     ):
         raise HubConfigError("topic_panel requires the Hub bot and the external queue and outbox")
+    try:
+        agent_mail = parse_agent_mail(
+            root.get("agent_mail"),
+            project_chats={item.project_id: item.telegram_chat_id for item in projects},
+            supported=hub_bot is not None
+            and hub_bot.telegram_user_id is not None
+            and topology.dispatch_mode == "queue"
+            and topology.queue_runtime == "external"
+            and topology.outbox_runtime == "external",
+        )
+    except AgentMailConfigError as error:
+        raise HubConfigError(str(error)) from None
     if claude_image_input and not any(
         agent.runtime == "claude" and agent.agent_id in topology.external_worker_agent_ids
         for agent in agents
@@ -1233,6 +1249,7 @@ def load_hub_config(
         claude_image_input=claude_image_input,
         claude_stream_input=claude_stream_input,
         topic_panel=topic_panel,
+        agent_mail=agent_mail,
         message_batch_quiet_ms=topology.message_batch_quiet_ms,
         message_batch_max_ms=topology.message_batch_max_ms,
         task_no_progress_seconds=_task_progress_seconds(root, "task_no_progress_seconds", 300),

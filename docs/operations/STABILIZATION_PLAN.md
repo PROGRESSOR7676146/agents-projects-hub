@@ -138,6 +138,13 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 
 ## Live-acceptance backlog
 
+- Agent mail (ADR 0112): after deployment and the owner enabling routes, an
+  agent letter from one routed topic must appear in the other as a Hub-bot
+  document with «Обработать», a phone press must start exactly one turn of the
+  target topic's agent that reads the whole letter, and a second press must
+  change nothing. Both directions of the first route need this check. Offline
+  tests do not close this item.
+
 - Reply, quote and forward context (ADR 0111): after deployment, from a real
   phone client, a Reply to an agent's earlier message in a new session, a Reply
   with a partial quote, and a forward with a comment must each reach the

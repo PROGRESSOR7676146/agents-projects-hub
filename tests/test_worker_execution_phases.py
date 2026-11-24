@@ -241,7 +241,7 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
                 codex_provider_prompt(current, staging_dir=staging),
                 "codex-prompt",
             )
-        codex_builder.assert_called_once_with(current, staging_dir=staging)
+        codex_builder.assert_called_once_with(current, staging_dir=staging, contacts="")
 
         with patch(
             "hermes_codex_router.worker_execution.telegram_turn_prompt",
@@ -262,6 +262,7 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
             runtime="opencode",
             new_session=True,
             staging_dir=staging,
+            contacts="",
         )
 
     def test_codex_thread_open_preserves_resume_and_forced_new_boundaries(self) -> None:
