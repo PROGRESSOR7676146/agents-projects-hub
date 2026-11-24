@@ -1146,7 +1146,7 @@ class ArtifactLossTests(unittest.TestCase):
                 ).fetchone()
             )
         result = migrations.migrate_database(legacy, create_backup=False)
-        self.assertEqual((result.previous_version, result.current_version), (58, 60))
+        self.assertEqual((result.previous_version, result.current_version), (58, 61))
         with sqlite3.connect(legacy) as connection:
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
@@ -1276,7 +1276,7 @@ class ArtifactLossTests(unittest.TestCase):
 
         inventory = inspect_artifact_recovery_inventory(damaged, self.spool)
 
-        self.assertEqual(inventory.schema_version, 60)
+        self.assertEqual(inventory.schema_version, 61)
         self.assertFalse(inventory.ledger_valid)
         self.assertEqual(inventory.coverage, "incomplete")
         self.assertEqual(inventory.entries[0].availability, "unresolved_missing")

@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from .agent_letter_sender import AgentLetterSender
+from .agent_letter_state import AgentLetterStore
 from .blocker_notice_sender import deliver_root_blocker_notice
 from .claude_activity import ClaudeActivityState
 from .command_menu import group_commands
@@ -174,6 +176,22 @@ class TelegramOutboxSender:
                 chat_registered=self._panel_chat_registered,
             )
             if config.topic_panel
+            else None
+        )
+        # Workers may read another configuration copy, so the Hub-config
+        # reader projects agent mail routes into the database (ADR 0112).
+        AgentLetterStore(self.state).sync_routes(config.agent_mail)
+        self.letters = (
+            AgentLetterSender(
+                self.state,
+                cast(Any, self.telegram_bots["hub"]),
+                transport_success=self._record_transport_success,
+                transport_failure=self._record_transport_failure,
+                record_event=self._record_event,
+                chat_registered=self._panel_chat_registered,
+            )
+            # Settlement and notices continue while no route is configured.
+            if config.hub_bot is not None
             else None
         )
         self._publish_health()
@@ -416,6 +434,8 @@ class TelegramOutboxSender:
                 return True
         if self.config.hub_bot is not None and self._deliver_connect_one():
             return True
+        if self.letters is not None and self.letters.deliver_one(now=now):
+            return True  # Agent mail, after every mandatory delivery (ADR 0112).
         if self.panels is not None and self.panels.deliver_one(now=now):
             return True  # Low-priority status panel, after every mandatory delivery.
         # Final results and durable progress have priority over advisory chat actions.

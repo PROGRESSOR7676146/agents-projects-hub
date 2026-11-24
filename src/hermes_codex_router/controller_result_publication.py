@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .agent_letter_records import AgentLetterDraft
 from .artifacts import (
     ValidatedArtifact,
     artifact_spool_root,
@@ -32,6 +33,7 @@ class PreparedResultPublication:
     telegram_contract_version: int
     artifacts: tuple[ValidatedArtifact, ...] = ()
     safe_metadata_json: str | None = None
+    letter: AgentLetterDraft | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +76,7 @@ class PreparedResultPublisher:
                 acknowledge_handoff=publication.job.handoff_id is not None,
                 telegram_contract_version=publication.telegram_contract_version,
                 artifacts=publication.artifacts,
+                letter=publication.letter,
             )
             if result is None:
                 # A covering stop cancelled the job in the commit (R-021).

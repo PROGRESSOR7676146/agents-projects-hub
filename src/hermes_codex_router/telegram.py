@@ -1152,6 +1152,30 @@ class TelegramBotApi:
                 operation="send_document",
                 failure_class="local_io",
             ) from None
+        return int(
+            self.send_document_bytes(
+                chat_id,
+                thread_id,
+                content,
+                file_name=file_name or resolved.name,
+                caption=caption,
+                reply_markup=reply_markup,
+                mime_type=mime_type,
+            )["message_id"]
+        )
+
+    def send_document_bytes(
+        self,
+        chat_id: int,
+        thread_id: int,
+        content: bytes,
+        *,
+        file_name: str,
+        caption: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Send one document and return Telegram's message, document included."""
         fields: dict[str, str] = {"chat_id": str(chat_id)}
         if thread_id != 1:
             fields["message_thread_id"] = str(thread_id)
@@ -1160,8 +1184,7 @@ class TelegramBotApi:
             fields["parse_mode"] = "HTML"
         if reply_markup is not None:
             fields["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-
-        upload_name = file_name or resolved.name
+        upload_name = file_name
         if (
             not upload_name
             or Path(upload_name).name != upload_name
@@ -1195,4 +1218,4 @@ class TelegramBotApi:
                 operation="send_document",
                 failure_class="invalid_response",
             )
-        return result["message_id"]
+        return result

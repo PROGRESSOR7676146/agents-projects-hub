@@ -10,6 +10,7 @@ from typing import Iterator
 
 from .database_backup import backup_database as backup_database
 from .migration_sql import _execute_migration_script
+from .schema_agent_letters import AGENT_LETTER_SCHEMA as MIGRATION_61
 from .schema_artifact_losses import ARTIFACT_LOSS_SCHEMA as MIGRATION_59
 from .schema_artifact_retirements import (
     ARTIFACT_RETIREMENT_SCHEMA as MIGRATION_58,
@@ -1490,6 +1491,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_58,
         MIGRATION_59,
         MIGRATION_60,
+        MIGRATION_61,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

@@ -5,9 +5,11 @@ import subprocess
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .agent_letter_state import AgentLetterStore
 from .claude_quota_observation import QuotaObservationCallback
 from .claude_recovery import recover_claude_completion, recover_claude_job
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
@@ -144,6 +146,15 @@ class ExternalQueueWorker:
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(
             config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
+        self.letters = AgentLetterStore(
+            self.state,
+            agent_name=self.agent.display_name,
+            static_groups=tuple(
+                (item.project_id, item.telegram_chat_id)
+                for item in config.projects
+                if item.telegram_chat_id is not None
+            ),
         )
         try:
             self.state.reconcile_legacy_execution_scopes(
@@ -1115,7 +1126,9 @@ class ExternalQueueWorker:
                 job,
                 thread,
                 project,
-                prompt=codex_provider_prompt(turn_text, staging_dir=staging_dir),
+                prompt=codex_provider_prompt(
+                    turn_text, staging_dir=staging_dir, contacts=self.letters.contacts_prompt(job)
+                ),
                 local_image_paths=prepared.local_image_paths,
             )
             journal.record_turn(job.job_id, token, turn_id)
@@ -1144,15 +1157,16 @@ class ExternalQueueWorker:
             self.config.state_path,
             report_rejections=True,
         )
+        letter = self.letters.prepare(job, result.text, artifacts.artifacts)
         prepared_result = prepare_codex_worker_result(
-            result,
+            replace(result, text=letter.text),
             prepared,
             agent_name=self.agent.display_name,
             model=thread.model,
             effort=job.effort,
             session_label=(f"{project.display_name} · {topic.title} · {self.agent.display_name}"),
             limits=limits,
-            artifact_notice=artifacts.visible_notice,
+            artifact_notice=artifacts.visible_notice + letter.notice,
             trim_visible_text=True,
             empty_visible_text="Codex completed the turn without visible text.",
         )
@@ -1171,6 +1185,7 @@ class ExternalQueueWorker:
                 actual_model=thread.model,
                 telegram_contract_version=telegram_contract_version(self.agent.runtime),
                 artifacts=artifacts.artifacts,
+                letter=letter.draft,
             )
         )
 
@@ -1302,6 +1317,7 @@ class ExternalQueueWorker:
                         runtime=self.agent.runtime,
                         full_contract=self._needs_full_telegram_contract(job),
                         staging_dir=staging_dir,
+                        contacts=self.letters.contacts_prompt(job),
                     ),
                     interrupt_prepared=interrupt_prepared,
                     staging_dir=staging_dir,
@@ -1355,15 +1371,16 @@ class ExternalQueueWorker:
             report_rejections=True,
         )
         actual_model = result.model or job.model
+        letter = self.letters.prepare(job, result.text, artifacts.artifacts)
         prepared_result = prepare_external_worker_result(
-            result,
+            replace(result, text=letter.text),
             prepared,
             agent_name=self.agent.display_name,
             runtime=self.agent.runtime,
             model=actual_model,
             effort=job.effort,
             session_label=(f"{project.display_name} · {topic.title} · {self.agent.display_name}"),
-            artifact_notice=artifacts.visible_notice,
+            artifact_notice=artifacts.visible_notice + letter.notice,
             trim_visible_text=True,
         )
         PreparedResultPublisher(
@@ -1382,5 +1399,6 @@ class ExternalQueueWorker:
                 telegram_contract_version=telegram_contract_version(self.agent.runtime),
                 artifacts=artifacts.artifacts,
                 safe_metadata_json=prepared_result.safe_metadata_json,
+                letter=letter.draft,
             )
         )

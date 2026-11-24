@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hermes_codex_router import artifact_capabilities
 from hermes_codex_router.hub_config import (
     HubConfig,
     HubConfigError,
@@ -522,6 +523,38 @@ class HubConfigTests(unittest.TestCase):
                         "expected_user_id": 999,
                     },
                 )
+            )
+
+    def test_agent_mail_routes_load_and_a_mail_off_artifact_ignores_them(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+        path = self.write_config(
+            hub_bot={
+                "telegram_username": "project_hub_bot",
+                "token_file": str(hub_token),
+                "telegram_user_id": 9001,
+            },
+            dispatch_mode="queue",
+            queue_runtime="external",
+            outbox_runtime="external",
+            agent_mail={
+                "routes": [
+                    {
+                        "alias": "other",
+                        "from": {"project_id": "alpha", "chat_id": -1001234567890, "thread_id": 1},
+                        "to": {"project_id": "beta", "chat_id": -1009999999999, "thread_id": 7},
+                    }
+                ]
+            },
+        )
+        (route,) = load_hub_config(path).agent_mail
+        self.assertEqual((route.alias, route.target_thread_id), ("other", 7))
+        with patch.object(artifact_capabilities, "AGENT_MAIL", False):
+            self.assertEqual(load_hub_config(path).agent_mail, ())
+        with self.assertRaisesRegex(HubConfigError, "agent_mail requires"):
+            load_hub_config(
+                self.write_config(agent_mail=json.loads(path.read_text())["agent_mail"])
             )
 
     def test_controller_does_not_depend_on_provisioner_secret_files(self) -> None:

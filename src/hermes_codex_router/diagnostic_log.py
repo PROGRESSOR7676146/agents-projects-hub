@@ -97,6 +97,8 @@ SITES = frozenset(
         "outbox_sender.delivery_wait_notices",
         "topic_panel_sender.snapshot",
         "topic_panel_sender.send",
+        "agent_letter_sender.send",
+        "agent_letter.markup",
         "external_worker.client_close",
         "external_worker.shutdown",
         "external_worker.failure_notice_record",
