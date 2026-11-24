@@ -186,7 +186,7 @@ addressing (ADR 0111).
   data, never commands.
 - **REQ-CTX-007 (Accepted):** One request SHOULD produce one turn unless the owner explicitly
   addresses several agents.
-- **REQ-CTX-008 (Implemented, ADR 0112; default-off; live acceptance pending):** With the Hub
+- **REQ-CTX-008 (Implemented, ADR 0112; default-off; owner live-accepted 2026-11-24):** With the Hub
   bot, external queue/outbox and owner-configured directed routes between exact numeric topics,
   an agent MAY send one bounded text letter per final answer to a routed topic.
   - Addresses MUST be per-turn, bound to the whole route and offered only for the source topic's
