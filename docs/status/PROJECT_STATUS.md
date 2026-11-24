@@ -1,7 +1,7 @@
 # Project status
 
 Status: active alpha
-Release: v0.11.29
+Release: v0.11.30
 
 Source checkpoint: [0.8.0](../operations/RELEASE_0_8_0.md); earlier entries
 are historical. The PR/tag own combined source gates; live acceptance is separate.
@@ -32,7 +32,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Telegram decision for uncertain Claude work (schema 57) | Implemented offline; `REMOTE_UNCERTAIN_DECISION` enabled from v0.11.23 (v0.11.22 ships it off as rollback) | Pending installation and Telegram acceptance of both buttons | [REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0107](../decisions/0107-telegram-decision-for-uncertain-claude-work.md) |
 | Topic status panel, read-only first delivery | Install target v0.11.29 with schema-60 rollback artifact v0.11.28, same code, behind the default-off `topic_panel` flag: `/panel`, `/panel off`, owner «Обновить», low-priority sender edits with per-operation evidence | Owner live-accepted on 0.11.29 (2026-11-23); compact text and idle last-result fix pending release | [REQ-UX-010](../product/IDENTITY_AND_INTERACTION.md), [ADR 0110](../decisions/0110-read-only-topic-status-panel.md) |
-| Agent mail between topics (schema 61) | Implemented offline behind default-off `agent_mail` routes: per-turn addresses, one staged text letter per answer committed with the result, Hub-bot display with owner-only «Обработать», failure notice to the source, no passive delivery or wake | Pending release with a schema-61 rollback artifact, migration rehearsal, installation, owner enabling and live phone acceptance | [REQ-CTX-008](../product/IDENTITY_AND_INTERACTION.md), [ADR 0112](../decisions/0112-agent-mail-between-topics.md) |
+| Agent mail between topics (schema 61) | Release v0.11.30 is the schema-61 rollback artifact (mail off by capability); implemented behind default-off `agent_mail` routes: per-turn addresses, one staged text letter per answer committed with the result, Hub-bot display with owner-only «Обработать», failure notice to the source, no passive delivery or wake | Pending install target release, migration rehearsal, installation, owner enabling and live phone acceptance | [REQ-CTX-008](../product/IDENTITY_AND_INTERACTION.md), [ADR 0112](../decisions/0112-agent-mail-between-topics.md) |
 | Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
 | Codex ingress-loss precautions (schema 52) | Live observer and existing maintenance integration under exact-source validation; native offline witness passed | Pending | [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0064](../decisions/0064-codex-control-loss.md) |

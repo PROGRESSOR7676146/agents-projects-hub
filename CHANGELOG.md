@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.30] - 2026-11-24
+
 - Agent mail between topics (ADR 0112, schema 61, off by default). With
   owner-configured `agent_mail` routes, an agent ends its answer with
   `[[letter: <address> | <file>]]` to send one staged text file to a routed
@@ -17,8 +19,9 @@ and releases use semantic versioning while the public API is still evolving.
   shows "delivery not confirmed" forever over newer delivered answers.
 - The `/panel` status message is about half as long and states each fact once:
   the start time appears once, the model no longer repeats the agent name,
-  events that share a time share it, the queue count joins the headline or the
-  details line, and the last-change footer is one short line.
+  agent activity and interim delivery stay labelled apart, each with its time,
+  the queue count joins the headline or the details line, and the last-change
+  footer is one short line.
 - `hub_deploy` preflight reads the monitor timer's state on its own. A timer
   has no main process, so the one-call unit identity introduced for residency
   checks refused every real `deploy`, `apply` and `reconfigure` as malformed.
@@ -43,6 +46,11 @@ and releases use semantic versioning while the public API is still evolving.
   a start, as a release executor does on its rollback path, re-probes for about
   15 seconds while one identity snapshot holds, instead of failing. The probe
   reads that snapshot's main process; preflight still checks once.
+- This artifact is the schema-61-compatible runtime rollback for 0.11.31, not
+  an install target: agent mail is off whatever the configuration says, new
+  document-loss declarations are refused, and the receipt-bound spool cleanup
+  after final delivery is off. Switching to it does not turn the panel off;
+  the `topic_panel` flag does.
 
 ## [0.11.29] - 2026-11-21
 
