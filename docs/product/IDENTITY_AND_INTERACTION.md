@@ -118,7 +118,7 @@ addressing (ADR 0111).
   MUST remain deterministic.
 - **REQ-UX-008 (Accepted):** Hub owns actual Telegram effects and delivery confirmation; providers
   own meaning, execution and visible wording.
-- **REQ-UX-010 (Implemented, ADR 0110; default-off; live topic acceptance pending):** With the Hub bot, external
+- **REQ-UX-010 (Implemented, ADR 0110; default-off; owner live-accepted 2026-11-23):** With the Hub bot, external
   queue/outbox and a local opt-in, a configured owner MAY open one status panel per registered
   project topic with `/panel`; `/panel off` stops updates and a repeated `/panel` replaces it. Hub
   edits that one message instead of sending status messages.

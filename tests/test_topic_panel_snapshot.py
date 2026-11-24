@@ -98,13 +98,13 @@ class TopicPanelSnapshotTests(unittest.TestCase):
         snapshot = self.read()
         self.assertEqual(snapshot.activity_kind, "message")
         self.assertEqual(snapshot.activity_at, datetime.fromisoformat(seen))
-        self.assertIn("Последнее событие: сообщение агента", render_panel_body(snapshot))
+        self.assertIn("\nСообщение", render_panel_body(snapshot))
 
     def test_queued_and_stopping_states_keep_job_identity(self) -> None:
         self.enqueue()
         snapshot = self.read()
         self.assertEqual((snapshot.agent, snapshot.model), ("Claude", "example-model"))
-        self.assertIn("⏳ В очереди · Claude", render_panel_body(snapshot))
+        self.assertRegex(render_panel_body(snapshot), r"^⏳ В очереди(: [^·]+)? · Claude")
         self.lease()
         with self.db:
             self.db.execute(
@@ -121,8 +121,7 @@ class TopicPanelSnapshotTests(unittest.TestCase):
                 ),
             )
         body = render_panel_body(self.read())
-        self.assertIn("🟠 Остановка запрошена · Claude", body)
-        self.assertIn("Модель: example-model", body)
+        self.assertIn("🟠 Остановка запрошена · Claude example-model", body)
 
     def test_pending_hold_counts_separately_from_queue(self) -> None:
         cause_id, _ = self.execute()
@@ -304,8 +303,7 @@ class TopicPanelSnapshotTests(unittest.TestCase):
         self.assertIsNone(snapshot.activity_kind)
         self.assertIsNone(snapshot.activity_at)
         body = render_panel_body(snapshot)
-        self.assertIn("🔴 Нужно ваше решение · Claude", body)
-        self.assertIn("Модель: example-model", body)
+        self.assertIn("🔴 Нужно решение · Claude example-model", body)
 
         # An earlier visible message keeps its own kind and time under the wait.
         message_at = self.now - timedelta(minutes=7)
@@ -318,7 +316,7 @@ class TopicPanelSnapshotTests(unittest.TestCase):
             )
         snapshot = self.read()
         self.assertEqual((snapshot.activity_kind, snapshot.activity_at), ("message", message_at))
-        self.assertNotIn("ожидание разрешения", render_panel_body(snapshot))
+        self.assertNotIn("Запрос разрешения", render_panel_body(snapshot))
         with self.db:
             self.db.execute("DELETE FROM provider_visible_items WHERE job_id=?", (job_id,))
 
@@ -414,6 +412,35 @@ class TopicPanelSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.headline, "idle")
         self.assertEqual(snapshot.last_result, "saved")
         self.assertIsNone(snapshot.last_result_at)
+
+    def test_idle_last_result_follows_the_newest_finished_job(self) -> None:
+        # An older answer whose delivery stayed unknown after the owner let the
+        # topic continue must not hide newer delivered answers. The fixture sets
+        # final states afterwards because a saved answer holds the lane here.
+        old_id, _ = self.execute()
+        self.finish_job(old_id, "completed")
+        newer_id, _ = self.execute()
+        delivered = self.now - timedelta(minutes=1)
+        self.finish_job(newer_id, "completed")
+        self.insert_outbox(newer_id, "delivered", delivered.isoformat())
+        latest_id, _ = self.execute()
+        self.finish_job(latest_id, "completed")
+        failed_id, _ = self.execute()
+        self.finish_job(failed_id, "failed")
+        self.finish_job(old_id, "result_ready")
+
+        # The newest answered job before the failed one was delivered.
+        with self.db:
+            self.db.execute("UPDATE provider_jobs SET status='failed' WHERE job_id=?", (latest_id,))
+        snapshot = self.read()
+        self.assertEqual(snapshot.headline, "idle")
+        self.assertEqual((snapshot.last_result, snapshot.last_result_at), ("delivered", delivered))
+
+        # The newest answer saved but not yet delivered is reported as such; the
+        # newer failed job has no answer and does not change that.
+        self.finish_job(latest_id, "result_ready")
+        snapshot = self.read()
+        self.assertEqual((snapshot.last_result, snapshot.last_result_at), ("saved", None))
 
 
 if __name__ == "__main__":
