@@ -688,6 +688,7 @@ def _release_info_command(args: argparse.Namespace) -> int:
             "remote_uncertain_decision": artifact_capabilities.REMOTE_UNCERTAIN_DECISION,
             "receipt_bound_artifact_cleanup": artifact_capabilities.RECEIPT_BOUND_ARTIFACT_CLEANUP,
             "explicit_artifact_loss_declaration": artifact_capabilities.EXPLICIT_ARTIFACT_LOSS_DECLARATION,
+            "agent_mail": artifact_capabilities.AGENT_MAIL,
         }
     )
     return 0 if CURRENT_RELEASE.verified else 1

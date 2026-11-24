@@ -97,7 +97,10 @@ bounded to 4,000 characters and consumed per agent.
 8. **State.** Schema 61 adds the route projection, immutable letters and
    retained delivery evidence. Letters live in the database, not in the
    artifact spool. The migration is forward-only: a rollback needs a
-   schema-61-compatible release with mail off.
+   schema-61-compatible release with mail off. The release capability
+   `AGENT_MAIL` fixes that in the artifact: the rollback release ignores
+   configured routes, so the sender rejects letters not yet shown and keeps
+   settling, and presses refuse, whatever the configuration says.
 
 ## Alternatives
 

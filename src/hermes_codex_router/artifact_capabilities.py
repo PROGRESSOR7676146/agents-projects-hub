@@ -17,3 +17,8 @@ RECEIPT_BOUND_ARTIFACT_CLEANUP = True
 # is the schema-60 rollback artifact for 0.11.29 and ships both flags off;
 # 0.11.29, the install target, ships both on.
 EXPLICIT_ARTIFACT_LOSS_DECLARATION = True
+
+# ADR 0112: agent mail between configured topics. The schema-61 rollback
+# artifact ships it off: configured routes are then ignored, the sender
+# rejects letters not yet shown and keeps settling, and presses refuse.
+AGENT_MAIL = True

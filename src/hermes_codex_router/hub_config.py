@@ -1184,6 +1184,8 @@ def load_hub_config(
         )
     except AgentMailConfigError as error:
         raise HubConfigError(str(error)) from None
+    if not artifact_capabilities.AGENT_MAIL:
+        agent_mail = ()  # A mail-off artifact keeps a valid config but no routes.
     if claude_image_input and not any(
         agent.runtime == "claude" and agent.agent_id in topology.external_worker_agent_ids
         for agent in agents
