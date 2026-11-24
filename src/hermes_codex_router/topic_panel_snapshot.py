@@ -175,10 +175,11 @@ def read_panel_snapshot(
                ORDER BY j.topic_sequence DESC LIMIT 1""",
             (topic_id,),
         ).fetchone()
-        if latest is not None and latest["status"] == "result_ready":
-            last_result = "saved"
-        elif latest is not None:
+        # A real final receipt wins over a status that has not caught up yet.
+        if latest is not None and latest["delivered_at"] is not None:
             last_result, last_result_at = "delivered", _time(latest["delivered_at"])
+        elif latest is not None:
+            last_result = "saved"
     return PanelSnapshot(
         observed_at=now,
         headline=headline,

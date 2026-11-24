@@ -168,18 +168,19 @@ def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = No
 
     details: list[str] = []
     if snapshot.headline in ("executing", "needs_owner", "stop_requested"):
-        # Activity kinds stay distinct facts (ADR 0110); only equal times are shared.
+        # Activity kinds stay distinct facts (ADR 0110); only equal times are
+        # shared, and every event keeps its time even in the start minute.
         events: list[tuple[str, str]] = []
         if snapshot.activity_at is not None and approval_at is None:
             activity_labels: dict[str, str] = {
                 "tool": "инструмент",
-                "message": "сообщение",
+                "message": "сообщение агента",
                 "approval": "запрос разрешения",
             }
             label = activity_labels.get(snapshot.activity_kind or "", "событие")
             events.append((label, format_time(snapshot.activity_at)))
         if snapshot.headline == "executing" and snapshot.interim_delivered_at is not None:
-            events.append(("доставлено", format_time(snapshot.interim_delivered_at)))
+            events.append(("промежуточная доставка", format_time(snapshot.interim_delivered_at)))
         groups: list[tuple[list[str], str]] = []
         for label, at in events:
             if groups and groups[-1][1] == at:
@@ -187,7 +188,7 @@ def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = No
             else:
                 groups.append(([label], at))
         for labels, at in groups:
-            details.append(", ".join(labels) + ("" if at == start else f" {at}"))
+            details.append(", ".join(labels) + f" {at}")
         if (
             not events
             and not silent
@@ -204,7 +205,10 @@ def render_panel_body(snapshot: PanelSnapshot, *, timezone: ZoneInfo | None = No
 
     if silent:
         # A fixed phrase: the body changes once at the threshold, not every minute.
-        lines.append(f"Новых событий нет {SILENCE_HIGHLIGHT_SECONDS // 60}+ мин. Это не остановка.")
+        lines.append(
+            f"Новых наблюдаемых событий нет {SILENCE_HIGHLIGHT_SECONDS // 60}+ мин. "
+            "Это не означает остановку."
+        )
 
     lines = lines[:MAX_PANEL_LINES]
     while len("\n".join(lines)) > MAX_PANEL_CHARACTERS:

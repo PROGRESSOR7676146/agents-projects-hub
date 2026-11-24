@@ -20,7 +20,7 @@ from hermes_codex_router.topic_panel_view import (
 )
 
 OBSERVED = datetime(2026, 11, 20, 11, 32, tzinfo=UTC)
-SILENCE = "Новых событий нет 10+ мин. Это не остановка."
+SILENCE = "Новых наблюдаемых событий нет 10+ мин. Это не означает остановку."
 
 
 class RenderPanelBodyTests(unittest.TestCase):
@@ -52,8 +52,11 @@ class RenderPanelBodyTests(unittest.TestCase):
             interim_delivered_at=started,
         )
         body = render_panel_body(snapshot)
-        self.assertEqual(body, "🟢 Claude opus-5-5 · с 14:31\nСообщение, доставлено")
-        self.assertEqual(body.count("14:31"), 1)
+        # The event keeps its time even in the start minute (independent review).
+        self.assertEqual(
+            body, "🟢 Claude opus-5-5 · с 14:31\nСообщение агента, промежуточная доставка 14:31"
+        )
+        self.assertEqual(body.count("14:31"), 2)  # The start and the event, each once.
         self.assertEqual(body.casefold().count("claude"), 1)
 
     def test_owner_reasons_are_ordered_deduplicated_and_owner_only(self) -> None:
@@ -113,7 +116,7 @@ class RenderPanelBodyTests(unittest.TestCase):
     def test_activity_labels_and_headline_rules(self) -> None:
         cases: tuple[tuple[ActivityKind, str], ...] = (
             ("tool", "Инструмент"),
-            ("message", "Сообщение"),
+            ("message", "Сообщение агента"),
             ("approval", "Запрос разрешения"),
         )
         for kind, label in cases:
@@ -143,7 +146,8 @@ class RenderPanelBodyTests(unittest.TestCase):
             interim_delivered_at=OBSERVED - timedelta(minutes=3),
         )
         self.assertEqual(
-            render_panel_body(snapshot).splitlines()[1], "Инструмент 14:31 · доставлено 14:29"
+            render_panel_body(snapshot).splitlines()[1],
+            "Инструмент 14:31 · промежуточная доставка 14:29",
         )
 
     def test_silence_threshold_and_no_events_yet(self) -> None:
@@ -169,11 +173,11 @@ class RenderPanelBodyTests(unittest.TestCase):
         )
         body = render_panel_body(snapshot)
         self.assertIn(SILENCE, body.splitlines())
-        self.assertIn("доставлено 14:22", body)
+        self.assertIn("промежуточная доставка 14:22", body)
         recent = replace(snapshot, interim_delivered_at=OBSERVED - timedelta(minutes=9))
         self.assertNotIn(SILENCE, render_panel_body(recent))
         self.assertNotIn("Событий пока нет", render_panel_body(recent))
-        self.assertNotIn("доставлено", render_panel_body(replace(snapshot, headline="needs_owner")))
+        self.assertNotIn("доставка", render_panel_body(replace(snapshot, headline="needs_owner")))
 
     def test_queue_with_and_without_held(self) -> None:
         snapshot = PanelSnapshot(OBSERVED, "queued", agent="Агент", queued=3)
@@ -258,6 +262,26 @@ class RenderPanelBodyTests(unittest.TestCase):
 
         huge_agent = PanelSnapshot(OBSERVED, "executing", agent="<" * MAX_PANEL_CHARACTERS)
         self.assertEqual(render_panel_body(huge_agent), "🟢 " + "&lt;" * 80)
+
+    def test_both_identity_fields_at_maximum_with_footer_stay_bounded(self) -> None:
+        snapshot = PanelSnapshot(
+            OBSERVED,
+            "executing",
+            agent="<&" * MAX_PANEL_CHARACTERS,
+            model="\"'>" * MAX_PANEL_CHARACTERS,
+            started_at=OBSERVED - timedelta(minutes=20),
+            activity_kind="tool",
+            activity_at=OBSERVED - timedelta(minutes=15),
+            interim_delivered_at=OBSERVED - timedelta(minutes=12),
+            queued=99,
+            held=99,
+        )
+        body = render_panel_body(snapshot)
+        self.assertLessEqual(len(body), MAX_PANEL_CHARACTERS)
+        message = render_panel_message(body, prepared_at=OBSERVED)
+        self.assertLessEqual(len(message), MAX_PANEL_CHARACTERS + 40)
+        self.assertLessEqual(len(message), 4096)
+        self.assertNotIn("<&", message)
 
     def test_multiline_identity_stays_one_line(self) -> None:
         snapshot = PanelSnapshot(
