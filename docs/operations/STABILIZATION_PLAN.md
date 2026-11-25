@@ -138,10 +138,10 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 
 ## Live-acceptance backlog
 
-- Claude CLI store (ADR 0113): pending the migration deploy, the host update
+- Claude CLI store (ADR 0113, v0.11.32): pending the migration deploy, the host update
   tool's nightly `claude-promote` call and the first promotion and rollback in
   the installed system. Offline tests and a real-CLI gate run cover the source.
-- One-tap new session with handoff (ADR 0114): pending release, enabling
+- One-tap new session with handoff (ADR 0114, v0.11.32): pending installation, enabling
   `session_handoff` and owner acceptance from a phone in a Claude and a Codex
   topic: the control appears after an answer ending with `[[handoff]]`; a press
   opens one new session whose first turn reads that answer; a «▶ option» press

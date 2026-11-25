@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.32] - 2026-11-25
+
 - One-tap new session with handoff (ADR 0114), off until an installation sets
   `session_handoff`. An agent that recommends a fresh session ends its answer
   with `[[handoff]]` or `[[handoff: A | B]]`; the Hub bot then shows «Новая
