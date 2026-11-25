@@ -31,6 +31,7 @@ SOAK_SECONDS = 24 * 3600
 JITTER_SECONDS = 3600
 FRESH_CANDIDATE_SECONDS = 3 * 24 * 3600
 KEPT_SELECTIONS = 4
+KEPT_SELECTION_SECONDS = 7 * 24 * 3600
 KEPT_ANCESTORS = 3
 KEPT_RESULTS = 100
 MANIFEST_BASE = "https://downloads.claude.ai/claude-code-releases"
@@ -148,7 +149,7 @@ def check_store(store: Path) -> Path:
         info = parent.stat()
         need(
             info.st_uid in {0, os.geteuid()}
-            and (not info.st_mode & 0o002 or info.st_mode & stat.S_ISVTX),
+            and (not info.st_mode & 0o022 or info.st_mode & stat.S_ISVTX),
             "unsafe store ancestor",
         )
     marker = store / "store.json"
@@ -192,6 +193,7 @@ def verify_object(store: Path, digest: str) -> Path:
         stat.S_ISREG(info.st_mode)
         and stat.S_ISDIR(parent.st_mode)
         and info.st_uid == os.geteuid()
+        and parent.st_uid == os.geteuid()
         and stat.S_IMODE(info.st_mode) == 0o555
         and stat.S_IMODE(parent.st_mode) == 0o555,
         "stored Claude CLI is unsafe",
@@ -359,6 +361,8 @@ def seed(store: Path, source: Path, version: str, origin: str, *, now: float) ->
 def selection(store: Path, identifier: str) -> dict[str, Any]:
     need(_SELECTION.fullmatch(identifier) is not None, "invalid selection id")
     directory = store / "selections" / identifier
+    info = directory.lstat()
+    need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid(), "unsafe selection directory")
     record = _read_json(directory / "selection.json")
     digest = record.get("sha256")
     need(
@@ -454,6 +458,7 @@ def _pending(store: Path) -> dict[str, Any] | None:
         pending = _read_json(path)
         need(
             pending.get("phase") in {"switching", "reverting"}
+            and pending.get("outcome") in {None, "success", "revert", "none"}
             and _SELECTION.fullmatch(str(pending.get("to")))
             and (pending.get("from") is None or _SELECTION.fullmatch(str(pending["from"])))
             and _GIT.fullmatch(str(pending.get("hub_git_sha")))
@@ -502,7 +507,14 @@ def _revert(store: Path, pending: dict[str, Any]) -> None:
 
 
 def _finish(store: Path, pending: dict[str, Any], outcome: str | None, *, now: float) -> None:
-    """Leave the journaled quarantine records, then close the transaction."""
+    """Commit the outcome, leave its quarantine records, then close the transaction.
+
+    Once the outcome is committed, recovery only replays its effects.
+    """
+    outcome = outcome or "none"
+    if pending.get("outcome") != outcome:
+        pending = dict(pending, outcome=outcome)
+        _write_json(store / "pending.json", pending)
     digests = {"success": pending["on_success"], "revert": pending["on_revert"]}.get(outcome, [])
     for digest in digests:
         _record(
@@ -526,11 +538,20 @@ def recover(store: Path, post_check: PostCheck, *, now: float) -> str | None:
     pending = _pending(store)
     if pending is None:
         return None
+    if pending.get("outcome") is not None:
+        _finish(store, pending, pending["outcome"], now=now)
+        return "switch_closed"
     source, target = pending["from"], pending["to"]
     try:
         active = current_id(store)
     except StoreRefused as exc:
         raise NeedsInspection(str(exc)) from None
+    if source is None and active is None:
+        _finish(store, pending, None, now=now)  # the first pointer was never written
+        return "switch_not_started"
+    if active == target and pending["phase"] == "reverting" and source is not None:
+        _point(store, source)  # the revert was journaled but the pointer had not moved
+        active = source
     if active == target and pending["phase"] == "switching":
         if _checked(store, target, post_check):
             _finish(store, pending, "success", now=now)
@@ -653,7 +674,11 @@ def ensure_pair(store: Path, gate: Gate, hub_git_sha: str, *, now: float) -> dic
         not quarantined(store, hub_git_sha, active["sha256"]),
         "release failed the gate for the active Claude CLI",
     )
-    verify_object(store, active["sha256"])
+    path = verify_object(store, active["sha256"])
+    need(
+        os.path.realpath(stable_path(store)) == str(path),
+        "the worker path does not resolve to the active Claude CLI",
+    )
     if has_pair(store, hub_git_sha, active["sha256"]):
         return active
     result = run_pair_gate(store, gate, hub_git_sha, active, None, now=now)
@@ -721,15 +746,6 @@ def promote(
             if not gated["passed"]:
                 rejected.append({"version": candidate["version"], "failure": gated["failure"]})
                 continue
-        if not window_open():
-            prune(store, now=now())
-            return _result(
-                "skipped",
-                active=_brief(active),
-                reason="window_closed",
-                rejected=rejected,
-                recovered=note,
-            )
         identifier = write_selection(
             store,
             candidate,
@@ -738,6 +754,14 @@ def promote(
             hub_git_sha=hub_git_sha,
             now=now(),
         )
+        if not window_open():  # at the commit boundary; the unused selection is pruned later
+            return _result(
+                "skipped",
+                active=_brief(active),
+                reason="window_closed",
+                rejected=rejected,
+                recovered=note,
+            )
         switch(
             store, identifier, hub_git_sha=hub_git_sha, now=now(), on_revert=(candidate["sha256"],)
         )
@@ -911,7 +935,9 @@ def prune(store: Path, *, now: float) -> list[str]:
         except (OSError, ValueError, StoreRefused):
             continue
     records.sort(key=lambda r: (r.get("selected_at", 0), r["id"]), reverse=True)
-    kept_ids = {r["id"] for r in records[:KEPT_SELECTIONS]}
+    kept_ids = {r["id"] for r in records[:KEPT_SELECTIONS]} | {
+        r["id"] for r in records if now - int(r.get("selected_at", 0)) < KEPT_SELECTION_SECONDS
+    }
     ancestor = active
     for _ in range(KEPT_ANCESTORS + 1):
         if ancestor is None:

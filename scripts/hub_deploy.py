@@ -3350,10 +3350,13 @@ def claude_main(
     ) as exc:
         result = {"component": "claude", "outcome": "refused", "reason": str(exc)}
     result["hub_git_sha"] = hub_git_sha
-    if store is not None and (store / "store.json").exists():
+    if store is not None:
         try:
+            # Only through a store that validates now; never through a refused one.
+            claude_store.check_store(store)
+            need((store / "store.json").exists(), "store is not initialized")
             result["receipt"] = str(claude_store.save_result(store, result, now=time.time()))
-        except OSError as exc:
+        except (OSError, Refused, claude_store.StoreRefused) as exc:
             # The outcome above is durable; a missing receipt never changes it.
             result["receipt_error"] = type(exc).__name__
     print(json.dumps(result, sort_keys=True))

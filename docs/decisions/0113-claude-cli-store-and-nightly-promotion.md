@@ -42,7 +42,7 @@ workers without a per-run confirmation, within these bounds:
   from the official Claude Code download origin without redirects. The candidate is hashed
   as a copy inside the store before anything executes it.
 - **Nightly window only.** Promotion refuses outside the configured local
-  window and rechecks it right before each switch; there is no bypass.
+  window and rechecks it right before each pointer switch; there is no bypass.
   Rollback is allowed at any time.
 - **Soak of one day.** Hub records when it admitted each candidate, on its own
   clock, never from file times. Every new version becomes a candidate; a
@@ -157,8 +157,9 @@ binaries, so a Hub rollback to them restores their original pair. New releases
 no longer embed the binary, and deploy no longer reads a cache path.
 
 Retention keeps the objects of the current selection and three rollback
-ancestors, of the four most recent selections, of candidates younger than three
-days and of newer candidates that are not quarantined, and prunes the rest with
+ancestors, of the four most recent selections and every selection of the last
+seven days, of candidates younger than three days and of newer candidates that
+are not quarantined, and prunes the rest with
 their dangling receipts. Quarantine records stay.
 
 ## Consequences
@@ -166,8 +167,8 @@ their dangling receipts. Quarantine records stay.
 - Hub bots run a CLI at most about two days behind the host, without a Hub
   release, and each digest is stored once.
 - A worker resolves and starts the binary within one turn start; retention
-  keeps every recently selected object, so pruning cannot remove a binary
-  between those two steps unless several nightly switches happen in between.
+  keeps every object selected in the last week, so pruning cannot remove a
+  binary between those two steps.
 - A switch can reach a turn that starts between the switch and the
   post-check. The gate already ran on the same digest, so the post-check only
   confirms the pointer, the digest, the version and the advertised controls.

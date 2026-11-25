@@ -83,8 +83,17 @@ def _symlink_hops(path: Path, within: Path) -> list[tuple[str, str]]:
     raise ClaudeCliGateError("gate_interpreter_invalid")
 
 
-# Only system code and configuration; no /home, /mnt, /run, /var, /srv or /opt.
-_SYSTEM_ROOTS = ("/usr", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
+# Only system code and the few configuration files a process start needs; no /home,
+# /mnt, /run, /var, /srv, /opt or the rest of /etc.
+_SYSTEM_ROOTS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
+_ETC_FILES = (
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/nsswitch.conf",
+    "/etc/ld.so.cache",
+    "/etc/localtime",
+    "/etc/hosts",
+)
 
 
 def gate_argv(candidate: Path, previous: Path | None, version: str) -> list[str]:
@@ -114,6 +123,9 @@ def gate_argv(candidate: Path, previous: Path | None, version: str) -> list[str]
         elif path.is_dir():
             argv += ["--ro-bind", root, root]
             shown.append(path)
+    for name in _ETC_FILES:
+        if Path(name).is_file():
+            argv += ["--ro-bind", str(Path(name).resolve()), name]
     # Show exactly the interpreter and the package this release imports.
     hops = _symlink_hops(python, Path("/"))
     sources = (Path(sys.prefix), Path(sys.base_prefix), package.parent, python.resolve().parent)
@@ -274,7 +286,7 @@ class _Server(ThreadingHTTPServer):
         self.requests = 0
         self.rejections = 0
         self.models: list[str] = []
-        # Per answered request: nonces in user turns and replies in assistant turns.
+        # Per answered request: nonces in user turns and the assistant replies.
         self.history: list[tuple[frozenset[str], frozenset[str]]] = []
 
 
@@ -330,12 +342,13 @@ class _Handler(BaseHTTPRequestHandler):
         for message in messages:
             if not isinstance(message, dict):
                 continue
-            found = [n for text in _texts(message.get("content")) for n in _NONCE.findall(text)]
+            texts = _texts(message.get("content"))
+            found = [n for text in texts for n in _NONCE.findall(text)]
             if message.get("role") == "user":
                 asked.update(found)
                 last = found or last
             elif message.get("role") == "assistant":
-                answered.update(found)
+                answered.update(text.strip()[:64] for text in texts)
         with self.gate.lock:
             self.gate.models.append(str(body.get("model")))
             overloaded = self.gate.overloaded
@@ -409,6 +422,7 @@ def _isolated() -> bool:
             and home.is_dir()
             and _only_mount_points(home, shown)
             and not any(Path(p).exists() for p in ("/run", "/mnt", "/var", "/srv", "/opt"))
+            and {p.name for p in Path("/etc").iterdir()} <= {Path(n).name for n in _ETC_FILES}
         )
     except OSError:
         return False
@@ -545,7 +559,8 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
         sent = server.history[before:]
     # The resumed request must carry the earlier exchange, not just reuse its identity.
     if not any(
-        {first_nonce, second_nonce} <= asked and first_nonce in answered for asked, answered in sent
+        {first_nonce, second_nonce} <= asked and "ack " + first_nonce in answered
+        for asked, answered in sent
     ):
         return fail("resume_history_missing")
     checks.append("resume_previous" if with_previous else "resume")

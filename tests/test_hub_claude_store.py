@@ -447,6 +447,107 @@ class ReviewRegressionTests(StoreFixture):
         self.assertEqual(list(empty.iterdir()), [])
 
 
+class ReviewRoundTwoTests(StoreFixture):
+    """Crash boundaries and bindings from the second review round."""
+
+    def promoted_pending(self) -> tuple[dict[str, Any], dict[str, Any], str]:
+        active = self.seed()
+        candidate = self.admit("2.1.330", self.now - 2 * DAY)
+        identifier = store_mod.write_selection(
+            self.store,
+            candidate,
+            previous=active["id"],
+            reason="promote",
+            hub_git_sha=HUB,
+            now=self.now,
+        )
+        store_mod.switch(
+            self.store, identifier, hub_git_sha=HUB, now=self.now, on_revert=(candidate["sha256"],)
+        )
+        return active, candidate, identifier
+
+    def test_journaled_revert_with_unmoved_pointer_is_finished(self) -> None:
+        active, candidate, identifier = self.promoted_pending()
+        pending = store_mod._pending(self.store)
+        assert pending is not None
+        store_mod._write_json(self.store / "pending.json", dict(pending, phase="reverting"))
+        self.assertEqual(store_mod.current_id(self.store), identifier)  # crash before the rename
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_reverted"
+        )
+        self.assertEqual(store_mod.current_id(self.store), active["id"])
+        self.assertTrue(store_mod.quarantined(self.store, HUB, candidate["sha256"]))
+
+    def test_committed_outcome_is_replayed_without_rechecking(self) -> None:
+        active, candidate, identifier = self.promoted_pending()
+        pending = store_mod._pending(self.store)
+        assert pending is not None
+        store_mod._write_json(self.store / "pending.json", dict(pending, outcome="success"))
+        self.post_failures.add("2.1.330")  # a later check must not undo a committed success
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_closed"
+        )
+        self.assertEqual(store_mod.current_id(self.store), identifier)
+        self.assertFalse(store_mod.quarantined(self.store, HUB, candidate["sha256"]))
+
+    def test_first_switch_that_never_moved_the_pointer_closes(self) -> None:
+        receipt = store_mod.seed(
+            self.store, self.host_file("2.1.316"), "2.1.316", "c" * 40, now=self.now
+        )
+        identifier = store_mod.write_selection(
+            self.store, receipt, previous=None, reason="seed", hub_git_sha=HUB, now=self.now
+        )
+        store_mod._write_json(
+            self.store / "pending.json",
+            {
+                "phase": "switching",
+                "from": None,
+                "to": identifier,
+                "hub_git_sha": HUB,
+                "on_success": [],
+                "on_revert": [],
+                "at": 1,
+            },
+        )
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_not_started"
+        )
+        self.assertIsNone(store_mod.current_id(self.store))
+
+    def test_selection_directory_must_not_be_a_link(self) -> None:
+        active = self.seed()
+        selections = self.store / "selections"
+        alias = "20260101T000000Z-" + active["sha256"][:12]
+        os.symlink(active["id"], selections / alias)
+        with self.assertRaisesRegex(store_mod.StoreRefused, "unsafe selection directory"):
+            store_mod.selection(self.store, alias)
+
+    def test_cached_pair_requires_the_worker_path_to_resolve(self) -> None:
+        self.seed()
+        store_mod.ensure_pair(self.store, self.gate, OTHER_HUB, now=self.now)
+        (self.store / "current").unlink()
+        os.symlink("selections/missing", self.store / "current")
+        with self.assertRaises(store_mod.StoreRefused):
+            store_mod.ensure_pair(self.store, self.gate, OTHER_HUB, now=self.now)
+
+    def test_recent_selections_are_kept_for_a_week(self) -> None:
+        self.seed("2.1.316")
+        clock = self.now
+        for version in ("2.1.328", "2.1.329", "2.1.330"):
+            self.admit(version, clock - 2 * DAY)
+            self.promote(now=clock)
+            clock += DAY
+        newest = store_mod.current(self.store)
+        assert newest is not None
+        for _ in range(3):  # three operator rollbacks, then one promotion
+            self.rollback(at=clock)
+        self.admit("2.1.331", clock - 2 * DAY)
+        self.assertEqual(self.promote(now=clock)["outcome"], "promoted")
+        store_mod.prune(self.store, now=clock + DAY)
+        # A worker may still hold the path it resolved before the rollbacks.
+        self.assertTrue(store_mod.object_path(self.store, newest["sha256"]).is_file())
+
+
 class PairAndPruneTests(StoreFixture):
     def test_ensure_pair_runs_gate_once_per_release(self) -> None:
         self.seed()
@@ -466,13 +567,13 @@ class PairAndPruneTests(StoreFixture):
             self.promote(now=clock)
             clock += DAY
         fresh = self.admit("2.1.307", clock - 3600)
-        store_mod.prune(self.store, now=clock)
+        store_mod.prune(self.store, now=clock + 10 * DAY)
         stored = {
             json.loads(p.read_text())["version"] for p in (self.store / "candidates").glob("*.json")
         }
         self.assertIn("2.1.306", stored)  # active
         self.assertIn("2.1.305", stored)  # previous
-        self.assertIn("2.1.307", stored)  # still soaking
+        self.assertIn("2.1.307", stored)  # newer and not quarantined
         self.assertNotIn("2.1.300", stored)
         self.assertNotIn("2.1.301", stored)
         self.assertTrue(store_mod.object_path(self.store, fresh["sha256"]).is_file())
