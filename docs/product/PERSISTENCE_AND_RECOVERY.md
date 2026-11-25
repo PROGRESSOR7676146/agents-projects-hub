@@ -122,15 +122,22 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     MUST NOT resend, and only proven rejection permits bounded retry.
   - Unsafe existing evidence MUST be retained and refused; Dismiss MUST bind the delivered card and
     owner without recovery/update/approval authority, and shutdown MUST leave no competing writer.
-- **REQ-OPS-015 (Planned; ADR 0048):** Managed components MUST use immutable versions and a private
-  stack manifest with passive drift detection; an independent deterministic updater MUST apply only
-  an exact owner-confirmed plan.
+- **REQ-OPS-015 (Planned; ADR 0048; Claude CLI part implemented, ADR 0113):** Managed components
+  MUST use immutable versions and a private stack manifest with passive drift detection; an
+  independent deterministic updater MUST apply only an exact owner-confirmed plan.
   - Staging/check failure MUST leave links unchanged; failed health MUST restore them, with
     serialized apply/rollback and Hermes last.
   - Owner controls MUST be bounded, single-use, bound to current links/plan and invalid after
     restart; model turns MUST NOT stage/apply/rollback.
   - A Hermes-restarting switch MUST arm independent recovery of its previous version; Hub releases
     retain their own verified procedure.
+  - Under the owner's standing authorization (ADR 0113), the Claude CLI of unconfined Hub workers
+    MAY instead be promoted unattended, only in a configured nightly window and only to a digest
+    that matches the publisher's version manifest, is stored once outside releases, aged one day
+    on Hub's admission clock and passed the active release's model-free gate for that pair.
+  - That switch MUST be one atomic pointer change serialized with deploy; a failed post-check MUST
+    restore and recheck the previous selection, and every Hub release switch MUST keep gate
+    evidence for the active pair. Confined profiles keep release-embedded binaries.
 
 Only completed persisted state is recoverable after process/machine loss; history
 cannot recreate unsaved context or guarantee an in-flight turn.

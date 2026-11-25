@@ -250,3 +250,55 @@ The result codes are those of a window, with `REVERTED` (2) for a restored
 amendment. The tool runs from the repository checkout, not from the release
 wheel, so it needs no Hub release. It is covered by offline fixture tests,
 not yet by installed use.
+
+## Claude CLI store
+
+With [ADR 0113](../decisions/0113-claude-cli-store-and-nightly-promotion.md),
+an installation for the `host` Claude profile replaces `native_claude` and
+`native_sha256` by two fields:
+
+```json
+{
+  "claude_store": "/home/example/.local/share/example/claude-cli",
+  "claude_window": "02:30-05:30"
+}
+```
+
+The store is a dedicated user-owned directory without group or other write
+access: empty at first use, then marked by `store.json`. `claude_window` is
+local time and may cross midnight. Releases deployed in this
+mode embed no Claude binary. Their worker configuration runs
+`<claude_store>/current/claude`. The first such deploy copies the binary of the
+active release into the store, runs the new release's gate for it and points
+`current` at it. Every later deploy runs the new release's gate for the active
+CLI, again right before the switch, and refuses the deploy when it fails.
+`rollback --window` to a store release runs that release's gate for the active
+CLI when it has no evidence and refuses when it fails.
+
+```text
+python3.12 -I scripts/hub_deploy.py claude-status --installation /home/example/private/installation.json
+python3.12 -I scripts/hub_deploy.py claude-promote --installation /home/example/private/installation.json --candidate /home/example/.local/share/claude/versions/1.2.3 --candidate-version 1.2.3
+python3.12 -I scripts/hub_deploy.py claude-rollback --installation /home/example/private/installation.json
+```
+
+The host update tool calls `claude-promote` in its nightly window, after it has
+installed the host CLI, with the installed file as the candidate. Hub hashes a
+copy and admits it only when its digest and size match the publisher's
+manifest for that version. It then promotes the newest admitted candidate that
+is at least one day old (23 hours on Hub's admission clock) and passes the
+active release's gate, checks the switch and restores the previous selection on
+failure. Outside the window `claude-promote` refuses; there is no bypass.
+`claude-rollback` runs at any time, walks back one selection per call and
+quarantines the build it leaves, so the next night does not promote it again.
+
+Each run prints one JSON object with `outcome` and saves it under
+`<claude_store>/results/`. Exit codes: 0 `promoted`, `rolled_back`, `current`
+or `skipped`; 1 `gate_failed` (nothing switched) or `failed_rolled_back`
+(previous selection restored and verified); 2 `needs_inspection` (an
+unfinished switch could not be decided; nothing more is changed); 3 `refused`.
+The commands take the deploy lock and refuse while a deploy window is
+unfinished. A backup needs the selection record that `current` points to and
+the object it names; status lists both.
+
+Covered by offline fixture tests and a real-CLI gate test run on request
+(`HUB_NATIVE_CLAUDE`, `HUB_NATIVE_CLAUDE_VERSION`); not yet by installed use.
