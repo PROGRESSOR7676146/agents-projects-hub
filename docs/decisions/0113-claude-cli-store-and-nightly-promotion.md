@@ -41,8 +41,9 @@ workers without a per-run confirmation, within these bounds:
   size match the publisher's per-version release manifest, fetched over HTTPS
   from the official Claude Code download origin without redirects. The candidate is hashed
   as a copy inside the store before anything executes it.
-- **Nightly window only.** Unattended promotion refuses outside the configured
-  local window. Rollback is allowed at any time.
+- **Nightly window only.** Promotion refuses outside the configured local
+  window and rechecks it right before each switch; there is no bypass.
+  Rollback is allowed at any time.
 - **Soak of one day.** Hub records when it admitted each candidate, on its own
   clock, never from file times. Every new version becomes a candidate; a
   promotion takes the newest candidate that has aged one day and passed the
@@ -59,7 +60,9 @@ the host update tool, or by an agent on the owner's explicit request.
 
 ### Store and selection
 
-The installation names one user-owned store directory. Its layout:
+The installation names one user-owned store directory, either empty or
+carrying the store marker `store.json`; Hub refuses any other directory. Its
+layout:
 
 | Path | Content |
 | --- | --- |
@@ -67,9 +70,9 @@ The installation names one user-owned store directory. Its layout:
 | `candidates/<sha256>.json` | Admission receipt: version, digest, size, source, admission time |
 | `pairs/<hub_git_sha>-<sha256>.json` | Gate receipt for one Hub release and one digest |
 | `quarantine/<hub_git_sha>-<sha256>.json` | Failed gate for a pair; not retried |
-| `selections/<id>/` | Immutable: `selection.json` and a `claude` link to its object |
+| `selections/<id>/` | Immutable: `selection.json`, with the rollback target as `previous`, and a `claude` link to its object |
 | `current` | The only mutable pointer: a link to one selection |
-| `pending.json` | Present only while a switch is unfinished |
+| `pending.json` | Present only while a switch is unfinished, with the quarantine its success or revert must leave |
 | `results/<run>.json` | One receipt per run |
 
 Hub workers run `<store>/current/claude`. A switch replaces `current` with one
@@ -93,8 +96,10 @@ Every switch keeps the invariant that the active pair has evidence:
 - a promotion runs the active release's gate for the candidate;
 - a Hub deploy runs the new release's gate for the active CLI before the
   switch and refuses the deploy on failure;
-- a Hub rollback to a store release refuses when that release has no evidence
-  for the active CLI; the owner's agent rolls the CLI back first.
+- applying a deploy plan rechecks, under the deploy lock, every release the
+  window may run against the CLI that is active at that moment;
+- a Hub rollback to a store release runs that release's gate for the active
+  CLI when it has no evidence, and refuses when the gate fails.
 
 A minimum version is not evidence and is not used.
 
@@ -102,16 +107,24 @@ A minimum version is not evidence and is not used.
 
 The gate ships in every Hub release (`python -m hermes_codex_router.claude_cli_gate`),
 so it tests that release's own code. It runs inside a `bwrap` namespace with its
-own network namespace and an empty home, in which a fictional local Messages
-API answers. It drives the production adapter of the host profile: production
+own network namespace, a read-only allowlist of system directories plus the
+release's interpreter and package, and an empty home; no `/run`, `/var`, `/mnt`
+or host sockets. The actor first verifies that isolation and otherwise reports
+that it could not run, which is not a verdict. A fictional local Messages API
+answers each turn with that turn's unique challenge. It drives the production adapter of the host profile: production
 argv, environment construction and stream parser. It requires:
 
 - `--version` names the admitted version;
 - the production capability check passes for the host and text-only controls;
 - a new session completes with the expected result, session identity and usage;
-- a session written by the previous CLI resumes under the candidate;
-- an overloaded rejection ends as a classified terminal failure, not success
-  or an unparsed stream.
+- a session written by the previous CLI resumes under the candidate, and the
+  resumed request carries the earlier exchange;
+- an overloaded rejection the server actually returned ends as Hub's overload
+  failure, not success or an unparsed stream.
+
+Evidence for a pair records the CLI that wrote the resumed session; a
+promotion reuses it only for the same predecessor. A gate that could not run
+records nothing. A failed gate quarantines the pair, which is not retried.
 
 The byte-exact native corpus stays a characterization of one version, not a
 gate. Tool allow and deny effects, cancellation and background tasks are not
@@ -127,7 +140,7 @@ promotion never races a deploy, rollback or another promotion:
 | --- | --- |
 | `claude-status` | Read-only: active selection, previous, candidates and their eligibility, pair evidence, unfinished switch |
 | `claude-promote [--candidate PATH --candidate-version V]` | Admit the candidate if new; then promote the newest eligible candidate |
-| `claude-rollback` | Switch back to the previous selection after its pair check |
+| `claude-rollback` | Switch back to the rollback target after its pair check; repeated rollbacks walk further back |
 
 Exit codes match the host tool: 0 promoted, current or skipped; 1 failed and
 the previous selection restored and verified; 2 needs inspection; 3 refused.
@@ -143,14 +156,18 @@ release, gates the pair and points the new worker configuration at
 binaries, so a Hub rollback to them restores their original pair. New releases
 no longer embed the binary, and deploy no longer reads a cache path.
 
-Retention keeps the objects of the current and previous selection, of two
-more recent selections and of candidates younger than three days, and prunes
-the rest with their dangling receipts.
+Retention keeps the objects of the current selection and three rollback
+ancestors, of the four most recent selections, of candidates younger than three
+days and of newer candidates that are not quarantined, and prunes the rest with
+their dangling receipts. Quarantine records stay.
 
 ## Consequences
 
 - Hub bots run a CLI at most about two days behind the host, without a Hub
   release, and each digest is stored once.
+- A worker resolves and starts the binary within one turn start; retention
+  keeps every recently selected object, so pruning cannot remove a binary
+  between those two steps unless several nightly switches happen in between.
 - A switch can reach a turn that starts between the switch and the
   post-check. The gate already ran on the same digest, so the post-check only
   confirms the pointer, the digest, the version and the advertised controls.

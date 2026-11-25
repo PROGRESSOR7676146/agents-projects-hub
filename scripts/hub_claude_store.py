@@ -1,9 +1,13 @@
-"""Claude CLI store for unconfined Hub workers (ADR 0113); standard library only.
+"""Claude CLI store for host-profile Hub workers (ADR 0113); standard library only.
 
 One read-only object per digest, immutable selections and one ``current``
 pointer. Callers hold the deploy lock and inject the release gate, the
 post-switch check, the clock and the manifest fetch, so every decision here is
 deterministic and testable without a network or a CLI.
+
+A switch is journaled in ``pending.json`` with the quarantine records that its
+success or its revert must leave, so a crash at any point is completed or
+reverted by ``recover`` with the same effect as an uninterrupted run.
 """
 
 from __future__ import annotations
@@ -21,17 +25,20 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCHEMA = 1
+MARKER = {"schema": SCHEMA, "component": "claude-cli-store"}
 SOAK_SECONDS = 24 * 3600
 # Nightly runs start minutes apart; last night's candidate must be eligible tonight.
 JITTER_SECONDS = 3600
 FRESH_CANDIDATE_SECONDS = 3 * 24 * 3600
 KEPT_SELECTIONS = 4
+KEPT_ANCESTORS = 3
 KEPT_RESULTS = 100
 MANIFEST_BASE = "https://downloads.claude.ai/claude-code-releases"
 PLATFORM = "linux-x64"
 MAX_MANIFEST = 64 * 1024
 GATE_TIMEOUT = 300
 _HEX = re.compile(r"[0-9a-f]{64}")
+_GIT = re.compile(r"[0-9a-f]{40}")
 _VERSION = re.compile(r"([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,6})")
 _SELECTION = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}(?:-[0-9]{1,3})?")
 _DIRS = ("objects", "candidates", "pairs", "quarantine", "selections", "results")
@@ -119,25 +126,52 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def open_store(store: Path) -> Path:
-    """Validate the store root and create its fixed subdirectories."""
+def _private_dir(path: Path, label: str) -> None:
+    info = path.lstat()
+    need(
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) & 0o022 == 0,
+        "unsafe store directory: " + label,
+    )
+
+
+def check_store(store: Path) -> Path:
+    """Read-only validation: a dedicated store, or an empty directory to initialize."""
     need(
         store.is_absolute() and str(store) == os.path.normpath(store),
         "store path must be canonical",
     )
     need(str(store.resolve()) == str(store), "store path must be canonical")
-    info = store.lstat()
-    need(
-        stat.S_ISDIR(info.st_mode)
-        and info.st_uid == os.geteuid()
-        and stat.S_IMODE(info.st_mode) & 0o022 == 0,
-        "store must be a user-owned directory without group or other write",
-    )
+    _private_dir(store, "store")
+    for parent in store.parents:
+        info = parent.stat()
+        need(
+            info.st_uid in {0, os.geteuid()}
+            and (not info.st_mode & 0o002 or info.st_mode & stat.S_ISVTX),
+            "unsafe store ancestor",
+        )
+    marker = store / "store.json"
+    if marker.exists() or marker.is_symlink():
+        need(_read_json(marker) == MARKER, "directory is not a Claude CLI store")
+        for name in _DIRS:
+            if (store / name).exists() or (store / name).is_symlink():
+                _private_dir(store / name, name)
+    else:
+        need(not any(store.iterdir()), "directory is not a Claude CLI store")
+    return store
+
+
+def open_store(store: Path) -> Path:
+    """Validate the store and create its marker and fixed directories (under the lock)."""
+    check_store(store)
     for name in _DIRS:
         path = store / name
         if not path.exists():
             path.mkdir(mode=0o700)
-        need(path.is_dir() and not path.is_symlink(), "unsafe store directory: " + name)
+        _private_dir(path, name)
+    if not (store / "store.json").exists():
+        _write_json(store / "store.json", MARKER)
     return store
 
 
@@ -146,11 +180,36 @@ def object_path(store: Path, digest: str) -> Path:
     return store / "objects" / digest / "claude"
 
 
+def verify_object(store: Path, digest: str) -> Path:
+    """The object must be a read-only regular file whose content has this digest."""
+    path = object_path(store, digest)
+    try:
+        info = path.lstat()
+        parent = path.parent.lstat()
+    except OSError:
+        raise StoreRefused("stored Claude CLI is missing") from None
+    need(
+        stat.S_ISREG(info.st_mode)
+        and stat.S_ISDIR(parent.st_mode)
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) == 0o555
+        and stat.S_IMODE(parent.st_mode) == 0o555,
+        "stored Claude CLI is unsafe",
+    )
+    need(sha256_file(path) == digest, "stored Claude CLI is corrupt")
+    return path
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        raise StoreRefused("manifest redirected")
+
+
 def fetch_url(url: str) -> bytes:
     need(url.startswith(MANIFEST_BASE + "/"), "unexpected manifest origin")
+    opener = urllib.request.build_opener(_NoRedirect())
     request = urllib.request.Request(url, headers={"User-Agent": "agents-projects-hub"})
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed HTTPS origin
-        need(response.geturl() == url, "manifest redirected")
+    with opener.open(request, timeout=30) as response:
         data: bytes = response.read(MAX_MANIFEST + 1)
     need(len(data) <= MAX_MANIFEST, "manifest too large")
     return data
@@ -205,13 +264,14 @@ def _copy_in(store: Path, source: Path) -> tuple[Path, str, int]:
 
 def _publish(store: Path, temporary: Path, digest: str) -> None:
     target = object_path(store, digest)
-    if target.exists():
+    if target.exists() or target.is_symlink():
         os.unlink(temporary)
-        need(target.is_file() and sha256_file(target) == digest, "stored object is corrupt")
+        verify_object(store, digest)
         return
     directory = target.parent
     if directory.exists():
-        need(not any(directory.iterdir()), "unexpected object directory content")
+        need(directory.is_dir() and not any(directory.iterdir()), "unexpected object directory")
+        os.chmod(directory, 0o700)
     else:
         directory.mkdir(mode=0o700)
     os.chmod(temporary, 0o555)
@@ -219,6 +279,19 @@ def _publish(store: Path, temporary: Path, digest: str) -> None:
     os.chmod(directory, 0o555)
     _fsync_dir(directory)
     _fsync_dir(directory.parent)
+
+
+def _admitted(store: Path, digest: str, version: str) -> dict[str, Any] | None:
+    path = store / "candidates" / (digest + ".json")
+    if not path.exists():
+        return None
+    receipt = _read_json(path)
+    need(
+        receipt.get("sha256") == digest and receipt.get("version") == version,
+        "digest admitted under another version",
+    )
+    verify_object(store, digest)
+    return receipt
 
 
 def admit(
@@ -230,18 +303,16 @@ def admit(
     try:
         entry = publisher_entry(version, fetch)
         need(
-            entry["sha256"] == digest and entry["size"] == size, "candidate does not match manifest"
+            entry["sha256"] == digest and entry["size"] == size,
+            "candidate does not match manifest",
         )
+        existing = _admitted(store, digest, version)
     except BaseException:
         os.unlink(temporary)
         raise
-    receipt_path = store / "candidates" / (digest + ".json")
-    if receipt_path.exists():
+    if existing is not None:
         os.unlink(temporary)
-        receipt = _read_json(receipt_path)
-        need(receipt.get("version") == version, "digest admitted under another version")
-        need(object_path(store, digest).is_file(), "admitted object is missing")
-        return receipt
+        return existing  # the admission time never restarts
     _publish(store, temporary, digest)
     receipt = {
         "schema": SCHEMA,
@@ -252,7 +323,7 @@ def admit(
         "manifest_url": entry["url"],
         "admitted_at": int(now),
     }
-    _write_json(receipt_path, receipt)
+    _write_json(store / "candidates" / (digest + ".json"), receipt)
     return receipt
 
 
@@ -260,10 +331,14 @@ def seed(store: Path, source: Path, version: str, origin: str, *, now: float) ->
     """Admit the binary sealed in the active release; it is what production runs today."""
     version_key(version)
     temporary, digest, size = _copy_in(store, source)
-    receipt_path = store / "candidates" / (digest + ".json")
-    if receipt_path.exists():
+    try:
+        existing = _admitted(store, digest, version)
+    except BaseException:
         os.unlink(temporary)
-        return _read_json(receipt_path)
+        raise
+    if existing is not None:
+        os.unlink(temporary)
+        return existing
     _publish(store, temporary, digest)
     receipt = {
         "schema": SCHEMA,
@@ -273,7 +348,7 @@ def seed(store: Path, source: Path, version: str, origin: str, *, now: float) ->
         "source": "sealed-release:" + origin,
         "admitted_at": int(now),
     }
-    _write_json(receipt_path, receipt)
+    _write_json(store / "candidates" / (digest + ".json"), receipt)
     return receipt
 
 
@@ -287,7 +362,12 @@ def selection(store: Path, identifier: str) -> dict[str, Any]:
     record = _read_json(directory / "selection.json")
     digest = record.get("sha256")
     need(
-        record.get("id") == identifier and isinstance(digest, str) and _HEX.fullmatch(digest),
+        record.get("id") == identifier
+        and isinstance(digest, str)
+        and _HEX.fullmatch(digest)
+        and isinstance(record.get("version"), str)
+        and _VERSION.fullmatch(record["version"])
+        and (record.get("previous") is None or _SELECTION.fullmatch(str(record["previous"]))),
         "invalid selection record",
     )
     link = directory / "claude"
@@ -322,8 +402,9 @@ def write_selection(
     hub_git_sha: str,
     now: float,
 ) -> str:
+    """``previous`` is the rollback target, not merely the last switch."""
     digest = candidate["sha256"]
-    need(object_path(store, digest).is_file(), "selected object is missing")
+    verify_object(store, digest)
     base = _stamp(now) + "-" + digest[:12]
     identifier = base
     for index in range(1, 1000):
@@ -333,7 +414,7 @@ def write_selection(
     directory = store / "selections" / identifier
     staging = store / "selections" / ("." + identifier)
     if staging.exists():
-        shutil.rmtree(staging)
+        _remove_tree(staging)
     staging.mkdir(mode=0o700)
     record = {
         "schema": SCHEMA,
@@ -365,54 +446,116 @@ def _point(store: Path, identifier: str) -> None:
     _fsync_dir(store)
 
 
-def switch(store: Path, identifier: str, *, now: float) -> None:
-    """Record the transaction, then move ``current`` with one rename."""
+def _pending(store: Path) -> dict[str, Any] | None:
+    path = store / "pending.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        pending = _read_json(path)
+        need(
+            pending.get("phase") in {"switching", "reverting"}
+            and _SELECTION.fullmatch(str(pending.get("to")))
+            and (pending.get("from") is None or _SELECTION.fullmatch(str(pending["from"])))
+            and _GIT.fullmatch(str(pending.get("hub_git_sha")))
+            and all(
+                isinstance(pending.get(key), list)
+                and all(isinstance(d, str) and _HEX.fullmatch(d) for d in pending[key])
+                for key in ("on_success", "on_revert")
+            ),
+            "invalid pending switch",
+        )
+    except (OSError, ValueError, StoreRefused) as exc:
+        raise NeedsInspection("unfinished switch record is unreadable: " + str(exc)) from None
+    return pending
+
+
+def switch(
+    store: Path,
+    identifier: str,
+    *,
+    hub_git_sha: str,
+    now: float,
+    on_success: tuple[str, ...] = (),
+    on_revert: tuple[str, ...] = (),
+) -> None:
+    """Journal the switch and its quarantine effects, then move ``current`` once."""
     selection(store, identifier)
+    need(_pending(store) is None, "an unfinished switch exists")
     _write_json(
-        store / "pending.json", {"from": current_id(store), "to": identifier, "at": int(now)}
+        store / "pending.json",
+        {
+            "phase": "switching",
+            "from": current_id(store),
+            "to": identifier,
+            "hub_git_sha": hub_git_sha,
+            "on_success": list(on_success),
+            "on_revert": list(on_revert),
+            "at": int(now),
+        },
     )
     _point(store, identifier)
 
 
-def finish(store: Path) -> None:
-    pending = store / "pending.json"
-    if pending.exists():
-        pending.unlink()
-        _fsync_dir(store)
+def _revert(store: Path, pending: dict[str, Any]) -> None:
+    _write_json(store / "pending.json", dict(pending, phase="reverting"))
+    _point(store, pending["from"])
 
 
-def recover(store: Path, post_check: PostCheck) -> str | None:
+def _finish(store: Path, pending: dict[str, Any], outcome: str | None, *, now: float) -> None:
+    """Leave the journaled quarantine records, then close the transaction."""
+    digests = {"success": pending["on_success"], "revert": pending["on_revert"]}.get(outcome, [])
+    for digest in digests:
+        _record(
+            store,
+            "quarantine",
+            pending["hub_git_sha"],
+            digest,
+            {
+                "schema": SCHEMA,
+                "failure": "abandoned_by_switch",
+                "outcome": outcome,
+                "at": int(now),
+            },
+        )
+    (store / "pending.json").unlink()
+    _fsync_dir(store)
+
+
+def recover(store: Path, post_check: PostCheck, *, now: float) -> str | None:
     """Complete or revert an unfinished switch before anything else."""
-    path = store / "pending.json"
-    if not path.exists():
+    pending = _pending(store)
+    if pending is None:
         return None
-    pending = _read_json(path)
-    source, target, active = pending.get("from"), pending.get("to"), current_id(store)
-    if active == source:
-        finish(store)
-        return "switch_not_started"
-    if active != target:
-        raise NeedsInspection("current matches neither side of the unfinished switch")
-    if _checked(store, target, post_check):
-        finish(store)
-        return "switch_completed"
-    if source is None:
-        raise NeedsInspection("unfinished first switch failed its check")
-    _point(store, source)
-    if _checked(store, source, post_check):
-        finish(store)
-        return "switch_reverted"
-    raise NeedsInspection("neither side of the unfinished switch passes its check")
+    source, target = pending["from"], pending["to"]
+    try:
+        active = current_id(store)
+    except StoreRefused as exc:
+        raise NeedsInspection(str(exc)) from None
+    if active == target and pending["phase"] == "switching":
+        if _checked(store, target, post_check):
+            _finish(store, pending, "success", now=now)
+            return "switch_completed"
+        if source is None:
+            raise NeedsInspection("unfinished first switch failed its check")
+        _revert(store, pending)
+        active = source
+        pending = dict(pending, phase="reverting")
+    if active == source and source is not None:
+        if not _checked(store, source, post_check):
+            raise NeedsInspection("the selection before the unfinished switch fails its check")
+        # A switch that never moved the pointer leaves no quarantine.
+        reverted = pending["phase"] == "reverting"
+        _finish(store, pending, "revert" if reverted else None, now=now)
+        return "switch_reverted" if reverted else "switch_not_started"
+    raise NeedsInspection("current matches neither side of the unfinished switch")
 
 
 def _checked(store: Path, identifier: str, post_check: PostCheck) -> bool:
     try:
         record = selection(store, identifier)
         path = stable_path(store)
-        return (
-            os.path.realpath(path) == str(object_path(store, record["sha256"]))
-            and sha256_file(path) == record["sha256"]
-            and post_check(path, record["version"])
+        return os.path.realpath(path) == str(verify_object(store, record["sha256"])) and post_check(
+            path, record["version"]
         )
     except (OSError, ValueError, StoreRefused):
         return False
@@ -423,17 +566,31 @@ def _checked(store: Path, identifier: str, post_check: PostCheck) -> bool:
 
 
 def _pair_name(hub_git_sha: str, digest: str) -> str:
-    need(re.fullmatch(r"[0-9a-f]{40}", hub_git_sha) is not None, "invalid Hub revision")
+    need(_GIT.fullmatch(hub_git_sha) is not None, "invalid Hub revision")
     need(_HEX.fullmatch(digest) is not None, "invalid digest")
     return hub_git_sha + "-" + digest + ".json"
 
 
+def pair(store: Path, hub_git_sha: str, digest: str) -> dict[str, Any] | None:
+    path = store / "pairs" / _pair_name(hub_git_sha, digest)
+    if not path.exists():
+        return None
+    record = _read_json(path)
+    need(
+        record.get("hub_git_sha") == hub_git_sha
+        and record.get("sha256") == digest
+        and record.get("passed") is True,
+        "invalid pair evidence",
+    )
+    return record
+
+
 def has_pair(store: Path, hub_git_sha: str, digest: str) -> bool:
-    return (store / "pairs" / _pair_name(hub_git_sha, digest)).is_file()
+    return pair(store, hub_git_sha, digest) is not None
 
 
 def quarantined(store: Path, hub_git_sha: str, digest: str) -> bool:
-    return (store / "quarantine" / _pair_name(hub_git_sha, digest)).is_file()
+    return (store / "quarantine" / _pair_name(hub_git_sha, digest)).exists()
 
 
 def _record(store: Path, kind: str, hub_git_sha: str, digest: str, value: dict[str, Any]) -> None:
@@ -449,40 +606,56 @@ def run_pair_gate(
     *,
     now: float,
 ) -> dict[str, Any]:
-    """Run the release gate once and record its verdict for the pair."""
-    previous_path = (
-        object_path(store, previous["sha256"])
-        if previous is not None and previous["sha256"] != candidate["sha256"]
-        else None
+    """Run the release gate once and record its verdict for the pair.
+
+    ``previous`` wrote the session the candidate must resume. A gate that could
+    not run raises ``StoreRefused`` and records nothing.
+    """
+    path = verify_object(store, candidate["sha256"])
+    writer = (
+        previous if previous is not None and previous["sha256"] != candidate["sha256"] else None
     )
-    report = gate(object_path(store, candidate["sha256"]), candidate["version"], previous_path)
+    writer_path = None if writer is None else verify_object(store, writer["sha256"])
+    report = gate(path, candidate["version"], writer_path)
     passed = report.get("passed") is True
     summary = {
         "schema": SCHEMA,
         "hub_git_sha": hub_git_sha,
         "sha256": candidate["sha256"],
         "version": candidate["version"],
-        "previous_sha256": None if previous_path is None else previous["sha256"],  # type: ignore[index]
+        "previous_sha256": None if writer is None else writer["sha256"],
         "gate_version": report.get("gate_version"),
         "checks": report.get("checks"),
         "failure": report.get("failure"),
+        "passed": passed,
         "at": int(now),
     }
     _record(store, "pairs" if passed else "quarantine", hub_git_sha, candidate["sha256"], summary)
-    return summary | {"passed": passed}
+    return summary
+
+
+def _transition_verified(
+    store: Path, hub_git_sha: str, candidate: dict[str, Any], writer: dict[str, Any]
+) -> bool:
+    """Cached evidence counts only for the same writer→reader digests."""
+    record = pair(store, hub_git_sha, candidate["sha256"])
+    expected = None if writer["sha256"] == candidate["sha256"] else writer["sha256"]
+    return record is not None and record.get("previous_sha256") == expected
 
 
 def ensure_pair(store: Path, gate: Gate, hub_git_sha: str, *, now: float) -> dict[str, Any]:
-    """Require gate evidence for a Hub release and the active CLI (deploy path)."""
+    """Require gate evidence for a Hub release and the active CLI (deploy paths)."""
+    need(_pending(store) is None, "an unfinished Claude CLI switch exists")
     active = current(store)
     need(active is not None, "Claude CLI store has no active selection")
     assert active is not None
-    if has_pair(store, hub_git_sha, active["sha256"]):
-        return active
     need(
         not quarantined(store, hub_git_sha, active["sha256"]),
         "release failed the gate for the active Claude CLI",
     )
+    verify_object(store, active["sha256"])
+    if has_pair(store, hub_git_sha, active["sha256"]):
+        return active
     result = run_pair_gate(store, gate, hub_git_sha, active, None, now=now)
     need(result["passed"], "release failed the gate for the active Claude CLI")
     return active
@@ -528,10 +701,11 @@ def promote(
     hub_git_sha: str,
     gate: Gate,
     post_check: PostCheck,
-    now: float,
+    now: Callable[[], float],
+    window_open: Callable[[], bool],
 ) -> dict[str, Any]:
     """Promote the newest candidate that soaked and passed the gate for this release."""
-    note = recover(store, post_check)
+    note = recover(store, post_check, now=now())
     active = current(store)
     need(active is not None, "Claude CLI store has no active selection")
     assert active is not None
@@ -539,26 +713,39 @@ def promote(
         c for c in candidates(store) if version_key(c["version"]) > version_key(active["version"])
     ]
     usable = [c for c in newer if not quarantined(store, hub_git_sha, c["sha256"])]
-    ready = [c for c in usable if eligible_at(c) <= now]
+    ready = [c for c in usable if eligible_at(c) <= now()]
     rejected: list[dict[str, Any]] = []
     for candidate in ready:
-        if not has_pair(store, hub_git_sha, candidate["sha256"]):
-            gated = run_pair_gate(store, gate, hub_git_sha, candidate, active, now=now)
+        if not _transition_verified(store, hub_git_sha, candidate, active):
+            gated = run_pair_gate(store, gate, hub_git_sha, candidate, active, now=now())
             if not gated["passed"]:
                 rejected.append({"version": candidate["version"], "failure": gated["failure"]})
                 continue
+        if not window_open():
+            prune(store, now=now())
+            return _result(
+                "skipped",
+                active=_brief(active),
+                reason="window_closed",
+                rejected=rejected,
+                recovered=note,
+            )
         identifier = write_selection(
             store,
             candidate,
             previous=active["id"],
             reason="promote",
             hub_git_sha=hub_git_sha,
-            now=now,
+            now=now(),
         )
-        switch(store, identifier, now=now)
+        switch(
+            store, identifier, hub_git_sha=hub_git_sha, now=now(), on_revert=(candidate["sha256"],)
+        )
+        pending = _pending(store)
+        assert pending is not None
         if _checked(store, identifier, post_check):
-            finish(store)
-            prune(store, now=now)
+            _finish(store, pending, "success", now=now())
+            prune(store, now=now())
             return _result(
                 "promoted",
                 active=_brief(selection(store, identifier)),
@@ -566,16 +753,10 @@ def promote(
                 rejected=rejected,
                 recovered=note,
             )
-        _record(
-            store,
-            "quarantine",
-            hub_git_sha,
-            candidate["sha256"],
-            {"schema": SCHEMA, "failure": "post_check_failed", "at": int(now)},
-        )
-        _point(store, active["id"])
+        _revert(store, pending)
+        pending = dict(pending, phase="reverting")
         if _checked(store, active["id"], post_check):
-            finish(store)
+            _finish(store, pending, "revert", now=now())
             return _result(
                 "failed_rolled_back",
                 active=_brief(active),
@@ -584,10 +765,10 @@ def promote(
                 recovered=note,
             )
         raise NeedsInspection("post-check failed for the candidate and for the previous selection")
-    prune(store, now=now)
+    prune(store, now=now())
     if rejected:
         return _result("gate_failed", active=_brief(active), rejected=rejected, recovered=note)
-    soaking = [c for c in usable if eligible_at(c) > now]
+    soaking = [c for c in usable if eligible_at(c) > now()]
     if soaking:
         return _result(
             "skipped",
@@ -603,41 +784,45 @@ def promote(
 def rollback(
     store: Path, *, hub_git_sha: str, gate: Gate, post_check: PostCheck, now: float
 ) -> dict[str, Any]:
-    """Return to the previous selection; quarantine the digest that is left."""
-    note = recover(store, post_check)
+    """Return to the rollback target; quarantine the build that is left."""
+    note = recover(store, post_check, now=now)
     active = current(store)
     need(active is not None, "Claude CLI store has no active selection")
     assert active is not None
     need(active.get("previous") is not None, "no previous selection")
-    previous = selection(store, active["previous"])
-    need(previous["sha256"] != active["sha256"], "previous selection has the same CLI")
-    if not has_pair(store, hub_git_sha, previous["sha256"]):
-        gated = run_pair_gate(store, gate, hub_git_sha, previous, active, now=now)
-        need(gated["passed"], "previous Claude CLI fails the gate for the active release")
-    target = {"version": previous["version"], "sha256": previous["sha256"]}
-    identifier = write_selection(
-        store, target, previous=active["id"], reason="rollback", hub_git_sha=hub_git_sha, now=now
+    target = selection(store, active["previous"])
+    need(target["sha256"] != active["sha256"], "previous selection has the same CLI")
+    need(
+        not quarantined(store, hub_git_sha, target["sha256"]),
+        "previous Claude CLI is quarantined for the active release",
     )
-    switch(store, identifier, now=now)
+    # Sessions written by the abandoned CLI must resume under the target.
+    if not _transition_verified(store, hub_git_sha, target, active):
+        gated = run_pair_gate(store, gate, hub_git_sha, target, active, now=now)
+        need(gated["passed"], "previous Claude CLI fails the gate for the active release")
+    identifier = write_selection(
+        store,
+        target,
+        previous=target.get("previous"),
+        reason="rollback",
+        hub_git_sha=hub_git_sha,
+        now=now,
+    )
+    switch(store, identifier, hub_git_sha=hub_git_sha, now=now, on_success=(active["sha256"],))
+    pending = _pending(store)
+    assert pending is not None
     if _checked(store, identifier, post_check):
-        finish(store)
-        # Promotion must not bring the abandoned build back next night.
-        _record(
-            store,
-            "quarantine",
-            hub_git_sha,
-            active["sha256"],
-            {"schema": SCHEMA, "failure": "rolled_back", "at": int(now)},
-        )
+        _finish(store, pending, "success", now=now)
         return _result(
             "rolled_back",
             active=_brief(selection(store, identifier)),
             previous=_brief(active),
             recovered=note,
         )
-    _point(store, active["id"])
+    _revert(store, pending)
+    pending = dict(pending, phase="reverting")
     if _checked(store, active["id"], post_check):
-        finish(store)
+        _finish(store, pending, "revert", now=now)
         return _result("failed_rolled_back", active=_brief(active), recovered=note)
     raise NeedsInspection("post-check failed for both selections")
 
@@ -650,15 +835,20 @@ def first_selection(
     identifier = write_selection(
         store, candidate, previous=None, reason="seed", hub_git_sha=hub_git_sha, now=now
     )
-    switch(store, identifier, now=now)
+    switch(store, identifier, hub_git_sha=hub_git_sha, now=now)
+    pending = _pending(store)
+    assert pending is not None
     if not _checked(store, identifier, post_check):
         raise NeedsInspection("seeded selection failed its check")
-    finish(store)
+    _finish(store, pending, "success", now=now)
     return selection(store, identifier)
 
 
 def status(store: Path, *, hub_git_sha: str | None, now: float) -> dict[str, Any]:
     """Read-only view for the host tool, backup and monitor."""
+    check_store(store)
+    if not (store / "store.json").exists():
+        return _result("refused", store=str(store), reason="store is not initialized")
     active = current(store)
     previous = selection(store, active["previous"]) if active and active.get("previous") else None
     listed = []
@@ -683,13 +873,15 @@ def status(store: Path, *, hub_git_sha: str | None, now: float) -> dict[str, Any
                 "state": state,
             }
         )
+    pending = (store / "pending.json").exists()
     return _result(
-        "current" if active else "refused",
+        "needs_inspection" if pending else ("current" if active else "refused"),
         store=str(store),
         executable=str(stable_path(store)),
+        selection=None if active is None else str(store / "selections" / active["id"]),
         active=_brief(active),
         previous=_brief(previous),
-        pending=(store / "pending.json").exists(),
+        pending=pending,
         pair_verified=(
             None
             if active is None or hub_git_sha is None
@@ -707,7 +899,7 @@ def _remove_tree(path: Path) -> None:
 
 
 def prune(store: Path, *, now: float) -> list[str]:
-    """Delete objects that no kept selection or fresh candidate references."""
+    """Delete objects that no kept selection or usable candidate references."""
     active = current(store)
     selections_dir = store / "selections"
     records = []
@@ -720,14 +912,25 @@ def prune(store: Path, *, now: float) -> list[str]:
             continue
     records.sort(key=lambda r: (r.get("selected_at", 0), r["id"]), reverse=True)
     kept_ids = {r["id"] for r in records[:KEPT_SELECTIONS]}
-    if active is not None:
-        kept_ids.add(active["id"])
-        if active.get("previous"):
-            kept_ids.add(active["previous"])
+    ancestor = active
+    for _ in range(KEPT_ANCESTORS + 1):
+        if ancestor is None:
+            break
+        kept_ids.add(ancestor["id"])
+        try:
+            ancestor = selection(store, ancestor["previous"]) if ancestor.get("previous") else None
+        except (OSError, ValueError, StoreRefused):
+            ancestor = None
     kept = {r["sha256"] for r in records if r["id"] in kept_ids}
+    revoked = {
+        p.name.split("-", 1)[1].removesuffix(".json") for p in (store / "quarantine").glob("*.json")
+    }
     for record in candidates(store):
+        newer = active is not None and version_key(record["version"]) > version_key(
+            active["version"]
+        )
         if now - record["admitted_at"] < FRESH_CANDIDATE_SECONDS or (
-            active is not None and version_key(record["version"]) > version_key(active["version"])
+            newer and record["sha256"] not in revoked
         ):
             kept.add(record["sha256"])
     removed = []
@@ -737,14 +940,14 @@ def prune(store: Path, *, now: float) -> list[str]:
     for directory in (store / "objects").iterdir():
         if directory.name.startswith(".") or directory.name in kept:
             continue
-        if _HEX.fullmatch(directory.name):
+        if _HEX.fullmatch(directory.name) and directory.is_dir() and not directory.is_symlink():
             _remove_tree(directory)
             removed.append(directory.name)
             receipt = store / "candidates" / (directory.name + ".json")
             if receipt.exists():
                 receipt.unlink()
-            for pair in (store / "pairs").glob("*-" + directory.name + ".json"):
-                pair.unlink()
+            for evidence in (store / "pairs").glob("*-" + directory.name + ".json"):
+                evidence.unlink()
     results = sorted((store / "results").glob("*.json"))
     for old in results[:-KEPT_RESULTS]:
         old.unlink()
@@ -779,21 +982,22 @@ def in_window(window: str, now: float) -> bool:
 # Release-bound gate and post-check
 
 
+def _gate_command(root: Path, *arguments: str) -> list[str]:
+    return [
+        str(root / "venv/bin/python"),
+        "-I",
+        "-B",
+        "-m",
+        "hermes_codex_router.claude_cli_gate",
+        *arguments,
+    ]
+
+
 def release_gate(root: Path) -> Gate:
     """Run the gate shipped in one sealed Hub release."""
 
     def gate(candidate: Path, version: str, previous: Path | None) -> dict[str, Any]:
-        argv = [
-            str(root / "venv/bin/python"),
-            "-I",
-            "-B",
-            "-m",
-            "hermes_codex_router.claude_cli_gate",
-            "--candidate",
-            str(candidate),
-            "--version",
-            version,
-        ]
+        argv = _gate_command(root, "--candidate", str(candidate), "--version", version)
         if previous is not None:
             argv += ["--previous", str(previous)]
         try:
@@ -808,9 +1012,11 @@ def release_gate(root: Path) -> Gate:
             report = json.loads(completed.stdout)
         except (OSError, ValueError, subprocess.SubprocessError):
             raise StoreRefused("release gate could not run") from None
-        need(isinstance(report, dict), "release gate could not run")
-        if completed.returncode == 3:
-            raise StoreRefused("release gate could not run: " + str(report.get("failure")))
+        need(
+            isinstance(report, dict) and completed.returncode in {0, 1},
+            "release gate could not run: "
+            + str(report.get("failure") if isinstance(report, dict) else None),
+        )
         report["passed"] = report.get("passed") is True and completed.returncode == 0
         return report
 
@@ -821,18 +1027,7 @@ def release_post_check(root: Path) -> PostCheck:
     """Version and advertised controls of the stable path, as a worker sees it."""
 
     def check(path: Path, version: str) -> bool:
-        argv = [
-            str(root / "venv/bin/python"),
-            "-I",
-            "-B",
-            "-m",
-            "hermes_codex_router.claude_cli_gate",
-            "--post-check",
-            "--candidate",
-            str(path),
-            "--version",
-            version,
-        ]
+        argv = _gate_command(root, "--post-check", "--candidate", str(path), "--version", version)
         try:
             completed = subprocess.run(
                 argv,

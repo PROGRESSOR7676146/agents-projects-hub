@@ -574,7 +574,7 @@ def load_installation(path: Path) -> dict[str, Any]:
             "invalid path: claude_store",
         )
         try:
-            claude_store.open_store(Path(value))
+            claude_store.check_store(Path(value))
             claude_store.in_window(data["claude_window"], time.time())
         except (claude_store.StoreRefused, OSError, TypeError) as exc:
             raise Refused(str(exc)) from None
@@ -1026,7 +1026,7 @@ def prepare_stage(
         )
     prepared = _prepare_runtime(installation, candidate, candidate_dir, wheel, runner, python)
     if store_mode(installation):
-        prepared["claude_executable"] = prepare_claude_store(installation, old, prepared, runner)
+        prepared["claude_executable"] = prepare_claude_store(installation, old, prepared)
     prepared.update(
         {
             "state_schema_before": live,
@@ -1046,7 +1046,7 @@ def prepare_stage(
             installation, rollback_info, rollback_dir, rollback_wheel, runner, python
         )
         if store_mode(installation):
-            target["claude_executable"] = prepare_claude_store(installation, old, target, runner)
+            target["claude_executable"] = prepare_claude_store(installation, old, target)
         target.update(
             {
                 "old_wheel": prepared["old_wheel"],
@@ -1084,7 +1084,6 @@ def prepare_claude_store(
     installation: dict[str, Any],
     old: dict[str, Any],
     new: dict[str, Any],
-    runner: Callable[..., Any],
     *,
     now: Callable[[], float] = time.time,
 ) -> str:
@@ -1094,7 +1093,11 @@ def prepare_claude_store(
     check = claude_store.release_post_check(root)
     try:
         store = claude_store.open_store(Path(installation["claude_store"]))
-        claude_store.recover(store, check)
+        # An unfinished switch belongs to the active release; settle it with its checker.
+        if old["claude_executable"] == str(claude_store.stable_path(store)):
+            claude_store.recover(
+                store, claude_store.release_post_check(Path(old["root"])), now=now()
+            )
         if claude_store.current_id(store) is None:
             executable = Path(old["claude_executable"])
             need(
@@ -2506,6 +2509,9 @@ def apply_window(
             "plan must be in the ops directory",
         )
         plan = verify_saved_plan(plan_dir)
+        _check_store_pairs(
+            installation, plan_dir, plan, ("new_runtime", "old_runtime", "rollback_runtime")
+        )
         missing_rollback = "schema-59 plan requires a bound rollback artifact"
         same_schema = plan.get("state_schema_before", plan["state_schema"]) == plan["state_schema"]
         if same_schema:
@@ -2682,35 +2688,47 @@ def apply_window(
             return _recover(window, metadata, manager, runner, sleep)
 
 
-def _check_store_rollback(
-    installation: dict[str, Any], plan_dir: Path, plan: dict[str, Any]
+def _check_store_pairs(
+    installation: dict[str, Any], plan_dir: Path, plan: dict[str, Any], roles: tuple[str, ...]
 ) -> None:
-    """A store release may run only a Claude CLI it has gate evidence for (ADR 0113)."""
+    """Every release a window may run on the store needs evidence for the active CLI.
+
+    Runs under the deploy lock right before a switch, so a promotion after the
+    plan cannot leave an ungated pair (ADR 0113). Releases with an embedded CLI
+    are skipped; they never run the store.
+    """
     if not store_mode(installation):
         return
     store = Path(installation["claude_store"])
     stable = str(claude_store.stable_path(store))
+    executables: dict[str, set[object]] = {}
     for entry in plan["files"]:
-        if entry["kind"] != "claude_config" or entry.get("before") is None:
+        if entry["kind"] != "claude_config":
             continue
-        config = json.loads(_private_bytes(plan_dir / entry["before"]["copy"]))
-        executables = {
-            agent.get("executable")
-            for agent in config.get("agents", [])
-            if isinstance(agent, dict) and agent.get("runtime") == "claude"
-        }
-        if stable not in executables:
-            continue  # an older release runs its own embedded CLI
-        try:
-            active = claude_store.current(store)
-        except claude_store.StoreRefused as exc:
-            raise Refused(str(exc)) from None
-        need(
-            active is not None
-            and claude_store.has_pair(store, plan["old_runtime"]["git_sha"], active["sha256"]),
-            "previous release has no gate evidence for the active Claude CLI; "
-            "run claude-rollback first",
-        )
+        for label, role in (("before", "old_runtime"), ("after", "new_runtime")):
+            if entry.get(label) is not None:
+                config = json.loads(_private_bytes(plan_dir / entry[label]["copy"]))
+                executables.setdefault(role, set()).update(
+                    agent.get("executable")
+                    for agent in config.get("agents", [])
+                    if isinstance(agent, dict) and agent.get("runtime") == "claude"
+                )
+    executables.setdefault("rollback_runtime", executables.get("new_runtime", set()))
+    try:
+        claude_store.check_store(store)
+        for role in roles:
+            if role in plan and stable in executables.get(role, set()):
+                runtime = plan[role]
+                claude_store.ensure_pair(
+                    store,
+                    claude_store.release_gate(Path(runtime["root"])),
+                    runtime["git_sha"],
+                    now=time.time(),
+                )
+    except claude_store.StoreRefused as exc:
+        raise Refused(str(exc)) from None
+    except claude_store.NeedsInspection as exc:
+        raise Refused("Claude CLI store needs inspection: " + str(exc)) from None
 
 
 def rollback_window(
@@ -2732,7 +2750,7 @@ def rollback_window(
         previous = last_window(installation)
         need(previous is not None and previous["id"] == window_id, "superseded window")
         assert previous is not None
-        _check_store_rollback(installation, Path(metadata["plan_dir"]), plan)
+        _check_store_pairs(installation, Path(metadata["plan_dir"]), plan, ("old_runtime",))
         # Owner decision 2026-11-23: a release rollback restores the pre-deploy
         # Hub config; amendments made after the window are dropped and listed,
         # and the caller acknowledges that with --drop-amendments. A rolled-back
@@ -3236,15 +3254,15 @@ def claude_action(
     *,
     candidate: Path | None = None,
     candidate_version: str | None = None,
-    outside_window: bool = False,
     now: Callable[[], float] = time.time,
     fetch: Callable[[str], bytes] = claude_store.fetch_url,
 ) -> dict[str, Any]:
     """One store operation for the active release; the caller holds the deploy lock."""
-    store = claude_store.open_store(Path(installation["claude_store"]))
-    root = Path(active["root"])
+    store = Path(installation["claude_store"])
     if action == "claude-status":
         return claude_store.status(store, hub_git_sha=active["git_sha"], now=now())
+    claude_store.open_store(store)
+    root = Path(active["root"])
     need(
         active["claude_executable"] == str(claude_store.stable_path(store)),
         "active release does not run the Claude CLI store",
@@ -3252,14 +3270,13 @@ def claude_action(
     gate = claude_store.release_gate(root)
     check = claude_store.release_post_check(root)
     if action == "claude-rollback":
-        need(candidate is None and not outside_window, "claude-rollback takes no candidate")
+        need(candidate is None and candidate_version is None, "claude-rollback takes no candidate")
         return claude_store.rollback(
             store, hub_git_sha=active["git_sha"], gate=gate, post_check=check, now=now()
         )
-    need(
-        outside_window or claude_store.in_window(installation["claude_window"], now()),
-        "outside the nightly Claude promotion window",
-    )
+    # Standing authorization covers only the nightly window (ADR 0113); no bypass.
+    window = installation["claude_window"]
+    need(claude_store.in_window(window, now()), "outside the nightly Claude promotion window")
     admitted = None
     if candidate is not None:
         version = candidate_version or candidate.resolve().name
@@ -3267,7 +3284,12 @@ def claude_action(
     else:
         need(candidate_version is None, "--candidate-version requires --candidate")
     result = claude_store.promote(
-        store, hub_git_sha=active["git_sha"], gate=gate, post_check=check, now=now()
+        store,
+        hub_git_sha=active["git_sha"],
+        gate=gate,
+        post_check=check,
+        now=now,
+        window_open=lambda: claude_store.in_window(window, now()),
     )
     if admitted is not None:
         result["admitted"] = {
@@ -3286,6 +3308,7 @@ def claude_main(
     """Exit codes for the host update tool: 0 ok, 1 failed, 2 needs inspection, 3 refused."""
     result: dict[str, Any]
     store: Path | None = None
+    hub_git_sha = None
     try:
         installation = load_installation(Path(args.installation))
         need(store_mode(installation), "installation does not use the Claude CLI store")
@@ -3295,11 +3318,9 @@ def claude_main(
             "unsupported option for " + args.action,
         )
         need(
-            args.action == "claude-promote"
-            or not (args.candidate or args.candidate_version or args.outside_window),
-            "--candidate, --candidate-version and --outside-window belong to claude-promote",
+            args.action == "claude-promote" or not (args.candidate or args.candidate_version),
+            "--candidate and --candidate-version belong to claude-promote",
         )
-        store = Path(installation["claude_store"])
         service = manager or ServiceManager(runner)
         inspector = inspect_process or (lambda unit, root: inspect_unit(unit, root, runner))
         with _lock(installation):
@@ -3308,17 +3329,16 @@ def claude_main(
             active = discover_installation(
                 installation, runner, inspector, runtime_owner, manager=service
             )
+            hub_git_sha = active["git_sha"]
+            if args.action != "claude-status":
+                store = Path(installation["claude_store"])
             result = claude_action(
                 installation,
                 args.action,
                 active,
                 candidate=None if args.candidate is None else Path(args.candidate),
                 candidate_version=args.candidate_version,
-                outside_window=args.outside_window,
             )
-            result["hub_git_sha"] = active["git_sha"]
-            if args.action != "claude-status":
-                result["receipt"] = str(claude_store.save_result(store, result, now=time.time()))
     except claude_store.NeedsInspection as exc:
         result = {"component": "claude", "outcome": "needs_inspection", "reason": str(exc)}
     except (
@@ -3329,6 +3349,13 @@ def claude_main(
         subprocess.SubprocessError,
     ) as exc:
         result = {"component": "claude", "outcome": "refused", "reason": str(exc)}
+    result["hub_git_sha"] = hub_git_sha
+    if store is not None and (store / "store.json").exists():
+        try:
+            result["receipt"] = str(claude_store.save_result(store, result, now=time.time()))
+        except OSError as exc:
+            # The outcome above is durable; a missing receipt never changes it.
+            result["receipt_error"] = type(exc).__name__
     print(json.dumps(result, sort_keys=True))
     return claude_store.EXIT[result["outcome"]]
 
@@ -3368,7 +3395,6 @@ def main(
     parser.add_argument("--drop-amendments", action="store_true")
     parser.add_argument("--candidate")
     parser.add_argument("--candidate-version")
-    parser.add_argument("--outside-window", action="store_true")
     args = parser.parse_args(argv)
     if args.action in CLAUDE_ACTIONS:
         return claude_main(args, runner, inspect_process, runtime_owner, manager)

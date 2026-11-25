@@ -264,15 +264,16 @@ an installation for the `host` Claude profile replaces `native_claude` and
 }
 ```
 
-The store is a user-owned directory without group or other write access;
-`claude_window` is local time and may cross midnight. Releases deployed in this
+The store is a dedicated user-owned directory without group or other write
+access: empty at first use, then marked by `store.json`. `claude_window` is
+local time and may cross midnight. Releases deployed in this
 mode embed no Claude binary. Their worker configuration runs
 `<claude_store>/current/claude`. The first such deploy copies the binary of the
 active release into the store, runs the new release's gate for it and points
 `current` at it. Every later deploy runs the new release's gate for the active
-CLI before the switch and refuses the deploy when it fails. `rollback --window`
-to a store release refuses when that release has no gate evidence for the
-active CLI; run `claude-rollback` first.
+CLI, again right before the switch, and refuses the deploy when it fails.
+`rollback --window` to a store release runs that release's gate for the active
+CLI when it has no evidence and refuses when it fails.
 
 ```text
 python3.12 -I scripts/hub_deploy.py claude-status --installation /home/example/private/installation.json
@@ -286,10 +287,9 @@ copy and admits it only when its digest and size match the publisher's
 manifest for that version. It then promotes the newest admitted candidate that
 is at least one day old (23 hours on Hub's admission clock) and passes the
 active release's gate, checks the switch and restores the previous selection on
-failure. Outside the window `claude-promote` refuses unless
-`--outside-window` is given on the owner's explicit request. `claude-rollback`
-runs at any time and quarantines the build it leaves, so the next night does
-not promote it again.
+failure. Outside the window `claude-promote` refuses; there is no bypass.
+`claude-rollback` runs at any time, walks back one selection per call and
+quarantines the build it leaves, so the next night does not promote it again.
 
 Each run prints one JSON object with `outcome` and saves it under
 `<claude_store>/results/`. Exit codes: 0 `promoted`, `rolled_back`, `current`

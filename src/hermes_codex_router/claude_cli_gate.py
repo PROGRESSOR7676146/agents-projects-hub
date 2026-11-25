@@ -20,14 +20,13 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 GATE_VERSION = 1
 BWRAP = Path("/usr/bin/bwrap")
 CANDIDATE = "/tmp/hub-claude-gate/candidate/claude"
 PREVIOUS = "/tmp/hub-claude-gate/previous/claude"
 MODEL = "claude-example-gate"
-MARKER = "hub-claude-gate-ok"
 MAX_OUTPUT = 64 * 1024
 MAX_REQUESTS = 32
 _VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}")
@@ -64,8 +63,8 @@ def _regular(path: Path) -> Path:
     return resolved
 
 
-def _symlink_hops(path: Path, home: Path) -> list[tuple[str, str]]:
-    """Return (link, target) for every symlink under ``home`` on the way to ``path``."""
+def _symlink_hops(path: Path, within: Path) -> list[tuple[str, str]]:
+    """Return (target, link) for every symlink under ``within`` on the way to ``path``."""
     hops: list[tuple[str, str]] = []
     pending = Path(os.path.normpath(os.path.abspath(path)))
     for _ in range(32):
@@ -74,7 +73,7 @@ def _symlink_hops(path: Path, home: Path) -> list[tuple[str, str]]:
             current = current / part
             if current.is_symlink():
                 target = os.readlink(current)
-                if current.is_relative_to(home):
+                if current.is_relative_to(within):
                     hops.append((target, str(current)))
                 rest = pending.relative_to(current)
                 pending = Path(os.path.normpath(current.parent / target / rest))
@@ -84,8 +83,12 @@ def _symlink_hops(path: Path, home: Path) -> list[tuple[str, str]]:
     raise ClaudeCliGateError("gate_interpreter_invalid")
 
 
+# Only system code and configuration; no /home, /mnt, /run, /var, /srv or /opt.
+_SYSTEM_ROOTS = ("/usr", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
+
+
 def gate_argv(candidate: Path, previous: Path | None, version: str) -> list[str]:
-    """Return the namespace argv; the whole host is read-only and HOME is empty."""
+    """Return the namespace argv: an allowlisted read-only filesystem and no network."""
     home = Path.home()
     python = Path(os.path.normpath(os.path.abspath(sys.executable)))
     package = Path(__file__).resolve().parent
@@ -94,9 +97,6 @@ def gate_argv(candidate: Path, previous: Path | None, version: str) -> list[str]
         "--unshare-all",
         "--die-with-parent",
         "--new-session",
-        "--ro-bind",
-        "/",
-        "/",
         "--dev",
         "/dev",
         "--proc",
@@ -106,22 +106,27 @@ def gate_argv(candidate: Path, previous: Path | None, version: str) -> list[str]
         "--tmpfs",
         str(home),
     ]
-    runtime = Path("/run/user") / str(os.geteuid())
-    if runtime.is_dir():
-        argv += ["--tmpfs", str(runtime)]
-    # Code under HOME is hidden by the tmpfs above; show exactly what the actor imports.
     shown: list[Path] = []
-    hops = _symlink_hops(python, home)
+    for root in _SYSTEM_ROOTS:
+        path = Path(root)
+        if path.is_symlink():
+            argv += ["--symlink", os.readlink(path), root]
+        elif path.is_dir():
+            argv += ["--ro-bind", root, root]
+            shown.append(path)
+    # Show exactly the interpreter and the package this release imports.
+    hops = _symlink_hops(python, Path("/"))
     sources = (Path(sys.prefix), Path(sys.base_prefix), package.parent, python.resolve().parent)
+    extra: list[Path] = []
     for path in sources:
         normal = Path(os.path.normpath(os.path.abspath(path)))
         for item in (normal, normal.resolve()):
-            if item.is_relative_to(home) and not any(item.is_relative_to(p) for p in shown):
-                shown.append(item)
-    for path in shown:
+            if not any(item.is_relative_to(p) for p in (*shown, *extra)):
+                extra.append(item)
+    for path in extra:
         argv += ["--ro-bind", str(path), str(path)]
     for target, link in hops:
-        if not any(Path(link).is_relative_to(p) for p in shown):
+        if not any(Path(link).is_relative_to(p) for p in (*shown, *extra)):
             argv += ["--symlink", target, link]
     argv += ["--ro-bind", str(_regular(candidate)), CANDIDATE]
     if previous is not None:
@@ -137,6 +142,12 @@ def gate_argv(candidate: Path, previous: Path | None, version: str) -> list[str]
         "--setenv",
         "LANG",
         "C.UTF-8",
+        "--setenv",
+        "HUB_GATE_SOURCES",
+        ":".join(
+            [str(p) for p in extra if p.is_relative_to(home)]
+            + [link for _, link in hops if Path(link).is_relative_to(home)]
+        ),
         "--",
         str(python),
         "-I",
@@ -178,7 +189,10 @@ def run_gate(
     except ValueError:
         report = None
     if not isinstance(report, dict) or report.get("gate_version") != GATE_VERSION:
-        return {"gate_version": GATE_VERSION, "passed": False, "failure": "gate_report_invalid"}
+        # The namespace or the actor did not run: no verdict about the candidate.
+        raise ClaudeCliGateError("gate_report_invalid")
+    if report.get("unavailable") is True:
+        raise ClaudeCliGateError(str(report.get("failure"))[:64])
     report["passed"] = report.get("passed") is True and completed.returncode == 0
     return report
 
@@ -235,6 +249,21 @@ def post_check(executable: Path, version: str) -> dict[str, Any]:
 # Namespace side
 
 
+_NONCE = re.compile(r"hub-gate-nonce-[0-9a-f]{16}")
+
+
+def _texts(content: object) -> list[str]:
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+    return []
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -242,14 +271,19 @@ class _Server(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _Handler)
         self.lock = threading.Lock()
         self.overloaded = False
-        self.posts = 0
         self.requests = 0
+        self.rejections = 0
         self.models: list[str] = []
+        # Per answered request: nonces in user turns and replies in assistant turns.
+        self.history: list[tuple[frozenset[str], frozenset[str]]] = []
 
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server: _Server
+
+    @property
+    def gate(self) -> _Server:
+        return cast(_Server, self.server)
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -265,9 +299,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
 
     def _count(self) -> bool:
-        with self.server.lock:
-            self.server.requests += 1
-            return self.server.requests <= MAX_REQUESTS
+        with self.gate.lock:
+            self.gate.requests += 1
+            return self.gate.requests <= MAX_REQUESTS
 
     def do_HEAD(self) -> None:
         self._respond(200 if self._count() else 429, "application/json", b"")
@@ -286,17 +320,34 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             body = None
         path = self.path.split("?", 1)[0]
-        if path != "/v1/messages" or not isinstance(body, dict):
+        messages = body.get("messages") if isinstance(body, dict) else None
+        if path != "/v1/messages" or not isinstance(body, dict) or not isinstance(messages, list):
             self._respond(404, "application/json", b"{}")
             return
-        with self.server.lock:
-            self.server.posts += 1
-            self.server.models.append(str(body.get("model")))
-            overloaded = self.server.overloaded
+        asked: set[str] = set()
+        answered: set[str] = set()
+        last: list[str] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            found = [n for text in _texts(message.get("content")) for n in _NONCE.findall(text)]
+            if message.get("role") == "user":
+                asked.update(found)
+                last = found or last
+            elif message.get("role") == "assistant":
+                answered.update(found)
+        with self.gate.lock:
+            self.gate.models.append(str(body.get("model")))
+            overloaded = self.gate.overloaded
+            if overloaded:
+                self.gate.rejections += 1
+            else:
+                self.gate.history.append((frozenset(asked), frozenset(answered)))
         if overloaded:
             error = {"type": "error", "error": {"type": "overloaded_error", "message": "example"}}
             self._respond(529, "application/json", json.dumps(error).encode())
             return
+        reply = "ack " + (last[-1] if last else "none")
         usage = {
             "input_tokens": 3,
             "cache_creation_input_tokens": 0,
@@ -309,7 +360,7 @@ class _Handler(BaseHTTPRequestHandler):
             "type": "message",
             "role": "assistant",
             "model": str(body.get("model")),
-            "content": [{"type": "text", "text": MARKER}],
+            "content": [{"type": "text", "text": reply}],
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": usage,
@@ -328,7 +379,7 @@ class _Handler(BaseHTTPRequestHandler):
             {
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": {"type": "text_delta", "text": MARKER},
+                "delta": {"type": "text_delta", "text": reply},
             },
             {"type": "content_block_stop", "index": 0},
             {
@@ -344,6 +395,39 @@ class _Handler(BaseHTTPRequestHandler):
         self._respond(200, "text/event-stream", data.encode())
 
 
+def _isolated() -> bool:
+    """The actor runs only where it cannot reach a provider or the owner's files."""
+    try:
+        interfaces = [
+            line.split(":", 1)[0].strip()
+            for line in Path("/proc/net/dev").read_text().splitlines()[2:]
+        ]
+        home = Path(os.environ.get("HOME", "/nonexistent"))
+        shown = [Path(p) for p in os.environ.get("HUB_GATE_SOURCES", "").split(":") if p]
+        return (
+            interfaces == ["lo"]
+            and home.is_dir()
+            and _only_mount_points(home, shown)
+            and not any(Path(p).exists() for p in ("/run", "/mnt", "/var", "/srv", "/opt"))
+        )
+    except OSError:
+        return False
+
+
+def _only_mount_points(directory: Path, shown: list[Path]) -> bool:
+    """Below HOME only the parents of the bound release sources may exist."""
+    for entry in directory.iterdir():
+        if any(entry == source for source in shown):
+            continue
+        if not entry.is_dir() or entry.is_symlink():
+            return False
+        if not any(source.is_relative_to(entry) for source in shown):
+            return False
+        if not _only_mount_points(entry, shown):
+            return False
+    return True
+
+
 def _actor(version: str, with_previous: bool) -> dict[str, Any]:
     from .claude_cli_capabilities import ClaudeCliCapabilities
     from .claude_host_profile import ClaudeHostConfig
@@ -352,6 +436,14 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
 
     checks: list[str] = []
     report: dict[str, Any] = {"gate_version": GATE_VERSION, "passed": False, "checks": checks}
+
+    def fail(code: str) -> dict[str, Any]:
+        report["failure"] = code
+        return report
+
+    if not _isolated():
+        report["unavailable"] = True
+        return fail("gate_not_isolated")
     server = _Server()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     work = Path(tempfile.mkdtemp(prefix="hub-claude-gate-"))
@@ -365,10 +457,6 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
         DISABLE_AUTOUPDATER="1",
     )
-
-    def fail(code: str) -> dict[str, Any]:
-        report["failure"] = code
-        return report
 
     try:
         completed = subprocess.run(
@@ -400,11 +488,11 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
             return fail("capability_host" if host else "capability_text_only")
     checks.append("capabilities")
 
-    def turn(executable: str, **kwargs: Any) -> Any:
+    def turn(executable: str, nonce: str, **kwargs: Any) -> Any:
         adapter = ExternalCliAdapter("claude", executable=executable, claude_auth_route="cpa")
         return adapter.run_turn(
             cwd=project,
-            prompt="Hub gate check.",
+            prompt="Hub gate check " + nonce + ".",
             model=MODEL,
             effort="high",
             timeout=90,
@@ -416,11 +504,11 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
             **kwargs,
         )
 
-    def successful(result: Any, session: str) -> bool:
+    def successful(result: Any, session: str, nonce: str) -> bool:
         usage = result.usage if isinstance(result.usage, dict) else {}
         # Bounded booleans only; never native text.
         observed = {
-            "text": result.text.strip() == MARKER,
+            "text": result.text.strip() == "ack " + nonce,
             "session": result.provider_session_id == session,
             # The status footer needs per-request context (REQ-CMD-001, ADR 0098).
             "usage": isinstance(usage.get("requests"), int)
@@ -430,30 +518,44 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
         report["observed"] = observed
         return all(observed.values())
 
+    def nonce() -> str:
+        return "hub-gate-nonce-" + uuid.uuid4().hex[:16]
+
     session = str(uuid.uuid4())
     writer = PREVIOUS if with_previous else CANDIDATE
+    first_nonce = nonce()
     try:
-        first = turn(writer, new_session_id=session)
+        first = turn(writer, first_nonce, new_session_id=session)
     except Exception:
         return fail("previous_session_failed" if with_previous else "new_session_failed")
-    if not successful(first, session):
+    if not successful(first, session, first_nonce):
         return fail("previous_session_invalid" if with_previous else "new_session_invalid")
     if not with_previous:
         checks.append("new_session")
+    with server.lock:
+        before = len(server.history)
+    second_nonce = nonce()
     try:
-        resumed = turn(CANDIDATE, session_id=session)
+        resumed = turn(CANDIDATE, second_nonce, session_id=session)
     except Exception:
         return fail("resume_failed")
-    if not successful(resumed, session):
+    if not successful(resumed, session, second_nonce):
         return fail("resume_invalid")
+    with server.lock:
+        sent = server.history[before:]
+    # The resumed request must carry the earlier exchange, not just reuse its identity.
+    if not any(
+        {first_nonce, second_nonce} <= asked and first_nonce in answered for asked, answered in sent
+    ):
+        return fail("resume_history_missing")
     checks.append("resume_previous" if with_previous else "resume")
     if with_previous:
-        second = str(uuid.uuid4())
+        fresh_session, fresh_nonce = str(uuid.uuid4()), nonce()
         try:
-            fresh = turn(CANDIDATE, new_session_id=second)
+            fresh = turn(CANDIDATE, fresh_nonce, new_session_id=fresh_session)
         except Exception:
             return fail("new_session_failed")
-        if not successful(fresh, second):
+        if not successful(fresh, fresh_session, fresh_nonce):
             return fail("new_session_invalid")
         checks.append("new_session")
     with server.lock:
@@ -465,7 +567,7 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
     # Production retries an overload with backoff; the gate checks only the terminal shape.
     os.environ["CLAUDE_CODE_MAX_RETRIES"] = "0"
     try:
-        turn(CANDIDATE, new_session_id=str(uuid.uuid4()))
+        turn(CANDIDATE, nonce(), new_session_id=str(uuid.uuid4()))
     except (ClaudeTerminalFailure, ProviderUnavailableError) as error:
         # Hub shows a distinct overload notice; any other classification is drift.
         if getattr(error, "code", None) != OVERLOADED_CODE:
@@ -475,6 +577,10 @@ def _actor(version: str, with_previous: bool) -> dict[str, Any]:
         return fail("overloaded_unclassified")
     else:
         return fail("overloaded_succeeded")
+    with server.lock:
+        rejected = server.rejections
+    if rejected < 1:
+        return fail("overloaded_not_requested")
     checks.append("overloaded")
     report["passed"] = True
     return report

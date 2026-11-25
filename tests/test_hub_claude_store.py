@@ -96,12 +96,23 @@ class StoreFixture(unittest.TestCase):
         )
 
     def promote(self, **kwargs: Any) -> dict[str, Any]:
+        at = kwargs.get("now", self.now)
         return store_mod.promote(
             self.store,
             hub_git_sha=kwargs.get("hub", HUB),
             gate=self.gate,
             post_check=self.post_check,
-            now=kwargs.get("now", self.now),
+            now=lambda: at,
+            window_open=kwargs.get("window_open", lambda: True),
+        )
+
+    def rollback(self, hub: str = HUB, at: float | None = None) -> dict[str, Any]:
+        return store_mod.rollback(
+            self.store,
+            hub_git_sha=hub,
+            gate=self.gate,
+            post_check=self.post_check,
+            now=self.now if at is None else at,
         )
 
 
@@ -236,8 +247,14 @@ class RecoveryAndRollbackTests(StoreFixture):
             hub_git_sha=HUB,
             now=self.now,
         )
-        store_mod.switch(self.store, identifier, now=self.now)  # crash before the post-check
-        self.assertEqual(store_mod.recover(self.store, self.post_check), "switch_completed")
+        # Crash before the post-check.
+        store_mod.switch(
+            self.store, identifier, hub_git_sha=HUB, now=self.now, on_revert=(candidate["sha256"],)
+        )
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_completed"
+        )
+        self.assertFalse(store_mod.quarantined(self.store, HUB, candidate["sha256"]))
         self.assertEqual(store_mod.current_id(self.store), identifier)
         self.assertFalse((self.store / "pending.json").exists())
 
@@ -252,10 +269,16 @@ class RecoveryAndRollbackTests(StoreFixture):
             hub_git_sha=HUB,
             now=self.now,
         )
-        store_mod.switch(self.store, identifier, now=self.now)
+        store_mod.switch(
+            self.store, identifier, hub_git_sha=HUB, now=self.now, on_revert=(candidate["sha256"],)
+        )
         self.post_failures.add("2.1.330")
-        self.assertEqual(store_mod.recover(self.store, self.post_check), "switch_reverted")
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_reverted"
+        )
         self.assertEqual(store_mod.current_id(self.store), active["id"])
+        # The journaled revert effect survives the crash.
+        self.assertTrue(store_mod.quarantined(self.store, HUB, candidate["sha256"]))
 
     def test_rollback_returns_previous_and_blocks_re_promotion(self) -> None:
         self.seed()
@@ -298,6 +321,130 @@ class RecoveryAndRollbackTests(StoreFixture):
                 post_check=self.post_check,
                 now=self.now,
             )
+
+
+class ReviewRegressionTests(StoreFixture):
+    """Failure scenarios from the independent review of ADR 0113."""
+
+    def test_failed_revert_stays_inspectable_on_retry(self) -> None:
+        self.seed()
+        self.admit("2.1.330", self.now - 2 * DAY)
+        self.post_failures.update({"2.1.330", "2.1.316"})
+        with self.assertRaises(store_mod.NeedsInspection):
+            self.promote()
+        # A retry must not treat the reverted pointer as a switch that never started.
+        with self.assertRaises(store_mod.NeedsInspection):
+            store_mod.recover(self.store, self.post_check, now=self.now)
+        self.post_failures.clear()
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_reverted"
+        )
+
+    def test_crash_after_rollback_rename_still_quarantines_abandoned_build(self) -> None:
+        self.seed()
+        promoted = self.admit("2.1.330", self.now - 2 * DAY)
+        self.promote()
+        original = store_mod._finish
+        with patch.object(store_mod, "_finish", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                self.rollback(at=self.now + 60)
+        self.assertFalse(store_mod.quarantined(self.store, HUB, promoted["sha256"]))
+        self.assertIs(store_mod._finish, original)
+        self.assertEqual(
+            store_mod.recover(self.store, self.post_check, now=self.now), "switch_completed"
+        )
+        self.assertTrue(store_mod.quarantined(self.store, HUB, promoted["sha256"]))
+        self.assertEqual(self.promote(now=self.now + DAY)["outcome"], "current")
+
+    def test_repeated_rollback_walks_back_instead_of_oscillating(self) -> None:
+        self.seed("2.1.316")
+        self.admit("2.1.329", self.now - 4 * DAY)
+        self.promote(now=self.now - 2 * DAY)
+        self.admit("2.1.330", self.now - 2 * DAY)
+        self.promote()
+        self.assertEqual(self.rollback()["active"]["version"], "2.1.329")
+        self.assertEqual(self.rollback()["active"]["version"], "2.1.316")
+        with self.assertRaisesRegex(store_mod.StoreRefused, "no previous"):
+            self.rollback()
+
+    def test_restored_record_without_object_is_refused(self) -> None:
+        active = self.seed()
+        directory = store_mod.object_path(self.store, active["sha256"]).parent
+        os.chmod(directory, 0o700)
+        store_mod.object_path(self.store, active["sha256"]).unlink()
+        with self.assertRaisesRegex(store_mod.StoreRefused, "missing"):
+            store_mod.ensure_pair(self.store, self.gate, HUB, now=self.now)
+
+    def test_corrupt_object_is_never_gated(self) -> None:
+        self.seed()
+        candidate = self.admit("2.1.330", self.now - 2 * DAY)
+        path = store_mod.object_path(self.store, candidate["sha256"])
+        os.chmod(path.parent, 0o700)
+        os.chmod(path, 0o700)
+        path.write_bytes(binary("6.6.6"))
+        os.chmod(path, 0o555)
+        os.chmod(path.parent, 0o555)
+        with self.assertRaisesRegex(store_mod.StoreRefused, "corrupt"):
+            self.promote()
+        self.assertEqual(self.gate_calls, [])
+
+    def test_window_closing_after_gate_skips_the_switch(self) -> None:
+        active = self.seed()
+        self.admit("2.1.330", self.now - 2 * DAY)
+        result = self.promote(window_open=lambda: False)
+        self.assertEqual((result["outcome"], result["reason"]), ("skipped", "window_closed"))
+        self.assertEqual(store_mod.current_id(self.store), active["id"])
+
+    def test_unrelated_directory_is_not_a_store(self) -> None:
+        other = self.base / "other"
+        (other / "objects" / ("f" * 64)).mkdir(parents=True)
+        with self.assertRaisesRegex(store_mod.StoreRefused, "not a Claude CLI store"):
+            store_mod.open_store(other)
+        self.assertTrue((other / "objects" / ("f" * 64)).is_dir())
+
+    def test_writable_evidence_directory_is_refused(self) -> None:
+        os.chmod(self.store / "pairs", 0o777)
+        with self.assertRaisesRegex(store_mod.StoreRefused, "unsafe store directory"):
+            store_mod.check_store(self.store)
+
+    def test_cached_evidence_for_another_writer_is_regated(self) -> None:
+        self.seed("2.1.316")
+        candidate = self.admit("2.1.330", self.now - 2 * DAY)
+        other_writer = self.admit("2.1.300", self.now - 9 * DAY)
+        store_mod.run_pair_gate(self.store, self.gate, HUB, candidate, other_writer, now=self.now)
+        self.gate_calls.clear()
+        self.promote()
+        self.assertEqual(len(self.gate_calls), 1)  # resume from the actual predecessor
+
+    def test_gate_that_cannot_run_records_no_verdict(self) -> None:
+        self.seed()
+        candidate = self.admit("2.1.330", self.now - 2 * DAY)
+
+        def broken(*args: Any) -> dict[str, Any]:
+            raise store_mod.StoreRefused("release gate could not run")
+
+        with self.assertRaisesRegex(store_mod.StoreRefused, "could not run"):
+            store_mod.run_pair_gate(self.store, broken, HUB, candidate, None, now=self.now)
+        self.assertFalse(store_mod.quarantined(self.store, HUB, candidate["sha256"]))
+
+    def test_redirects_are_refused_before_following(self) -> None:
+        with self.assertRaisesRegex(store_mod.StoreRefused, "redirected"):
+            store_mod._NoRedirect().redirect_request(None, None, 302, "", {}, "https://example.com")
+
+    def test_quarantined_candidates_age_out_of_storage(self) -> None:
+        self.seed()
+        bad = self.admit("2.1.330", self.now - 5 * DAY)
+        self.gate_failures.add("2.1.330")
+        self.promote()
+        self.assertFalse(store_mod.object_path(self.store, bad["sha256"]).exists())
+        self.assertTrue(store_mod.quarantined(self.store, HUB, bad["sha256"]))
+
+    def test_status_never_initializes_a_directory(self) -> None:
+        empty = self.base / "empty"
+        empty.mkdir(mode=0o700)
+        result = store_mod.status(empty, hub_git_sha=HUB, now=self.now)
+        self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(list(empty.iterdir()), [])
 
 
 class PairAndPruneTests(StoreFixture):
@@ -385,13 +532,11 @@ class DeployIntegrationTests(StoreFixture):
             patch.object(store_mod, "release_gate", return_value=self.gate),
             patch.object(store_mod, "release_post_check", return_value=self.post_check),
         ):
-            stable = hub_deploy.prepare_claude_store(installation, old, new, None)
-            again = hub_deploy.prepare_claude_store(installation, old, new, None)
+            stable = hub_deploy.prepare_claude_store(installation, old, new)
+            again = hub_deploy.prepare_claude_store(installation, old, new)
             self.gate_failures.add("2.1.316")
             with self.assertRaisesRegex(hub_deploy.Refused, "failed the gate"):
-                hub_deploy.prepare_claude_store(
-                    installation, old, dict(new, git_sha="d" * 40), None
-                )
+                hub_deploy.prepare_claude_store(installation, old, dict(new, git_sha="d" * 40))
         self.assertEqual(stable, again)
         self.assertEqual(Path(stable).read_bytes(), binary("2.1.316"))
         # Seeded pair once, nothing for the repeated deploy, once for the other release.
@@ -413,7 +558,7 @@ class DeployIntegrationTests(StoreFixture):
         ):
             with self.assertRaisesRegex(hub_deploy.Refused, "embedded Claude CLI"):
                 hub_deploy.prepare_claude_store(
-                    installation, old, {"root": "/home/example/new", "git_sha": HUB}, None
+                    installation, old, {"root": "/home/example/new", "git_sha": HUB}
                 )
 
     def test_promotion_refuses_outside_window_and_maps_exit_codes(self) -> None:
@@ -431,10 +576,14 @@ class DeployIntegrationTests(StoreFixture):
         ):
             with self.assertRaisesRegex(hub_deploy.Refused, "outside the nightly"):
                 hub_deploy.claude_action(installation, "claude-promote", active, now=lambda: noon)
+            night = time.mktime((2026, 11, 25, 3, 0, 0, 0, 0, -1))
             result = hub_deploy.claude_action(
-                installation, "claude-promote", active, now=lambda: noon, outside_window=True
+                installation, "claude-promote", active, now=lambda: night
             )
             self.assertEqual(result["outcome"], "current")
+            # Rollback is recovery and runs at any time.
+            with self.assertRaisesRegex(store_mod.StoreRefused, "no previous"):
+                hub_deploy.claude_action(installation, "claude-rollback", active, now=lambda: noon)
             legacy = dict(active, claude_executable="/home/example/release/bin/claude")
             with self.assertRaisesRegex(hub_deploy.Refused, "does not run the Claude CLI store"):
                 hub_deploy.claude_action(installation, "claude-rollback", legacy)
@@ -445,6 +594,46 @@ class DeployIntegrationTests(StoreFixture):
             },
             {"promoted": 0, "failed_rolled_back": 1, "needs_inspection": 2, "refused": 3},
         )
+
+    def test_apply_regates_a_release_for_the_cli_promoted_after_its_plan(self) -> None:
+        self.seed()
+        stable = str(store_mod.stable_path(self.store))
+        plan_dir = self.base / "plan"
+        plan_dir.mkdir(mode=0o700)
+        configs = {
+            "000-before": {"agents": [{"runtime": "claude", "executable": "/home/example/bin"}]},
+            "000-after": {"agents": [{"runtime": "claude", "executable": stable}]},
+        }
+        for name, config in configs.items():
+            (plan_dir / name).write_text(json.dumps(config))
+            (plan_dir / name).chmod(0o600)
+        plan = {
+            "files": [
+                {
+                    "kind": "claude_config",
+                    "before": {"copy": "000-before"},
+                    "after": {"copy": "000-after"},
+                }
+            ],
+            "old_runtime": {"root": "/home/example/old", "git_sha": "c" * 40},
+            "new_runtime": {"root": "/home/example/new", "git_sha": OTHER_HUB},
+        }
+        installation = {"claude_store": str(self.store)}
+        roles = ("new_runtime", "old_runtime", "rollback_runtime")
+        with patch.object(store_mod, "release_gate", return_value=self.gate):
+            hub_deploy._check_store_pairs(installation, plan_dir, plan, roles)
+            self.assertEqual(len(self.gate_calls), 1)  # the embedded old release is skipped
+            self.assertTrue(store_mod.has_pair(self.store, OTHER_HUB, self.seed_digest()))
+            # A promotion between plan and apply: the new release has no evidence yet.
+            plan["new_runtime"]["git_sha"] = "d" * 40
+            self.gate_failures.add("2.1.316")
+            with self.assertRaisesRegex(hub_deploy.Refused, "failed the gate"):
+                hub_deploy._check_store_pairs(installation, plan_dir, plan, roles)
+
+    def seed_digest(self) -> str:
+        record = store_mod.current(self.store)
+        assert record is not None
+        return str(record["sha256"])
 
     def test_command_refuses_legacy_installation_with_exit_three(self) -> None:
         legacy = self.base / "installation.json"
@@ -466,6 +655,9 @@ class GateArgvTests(unittest.TestCase):
             with patch.object(claude_cli_gate, "_bwrap", return_value=Path("/usr/bin/bwrap")):
                 argv = claude_cli_gate.gate_argv(candidate, None, "2.1.330")
         self.assertIn("--unshare-all", argv)
+        binds = [argv[i + 1] for i, part in enumerate(argv) if part == "--ro-bind"]
+        self.assertNotIn("/", binds)  # an allowlist, never the whole host
+        self.assertFalse(any(b == "/mnt" or b.startswith(("/mnt/", "/run", "/var")) for b in binds))
         self.assertIn("--clearenv", argv)
         home = str(Path.home())
         self.assertEqual(argv[argv.index("--tmpfs", argv.index("/tmp")) + 1], home)
