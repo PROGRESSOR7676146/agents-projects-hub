@@ -15,6 +15,8 @@ from typing import Any
 
 from .diagnostic_log import survived
 from .reply_choices import parse_choice_callback, session_binding
+from .session_handoff import HANDOFF_CALLBACK_PREFIX
+from .session_handoff_callback import handle_session_handoff
 from .telegram import TelegramError, TopicCallback, _InternalSyntheticTopicUpdate
 
 
@@ -22,6 +24,8 @@ def handle_reply_choice(
     service: Any, callback: TopicCallback, project_id: str, topic_id: int
 ) -> bool:
     """Turn one pressed choice into the sender's ordinary reply, once."""
+    if callback.data.startswith(HANDOFF_CALLBACK_PREFIX):
+        return handle_session_handoff(service, callback, project_id, topic_id)
     parsed = parse_choice_callback(callback.data)
     labels = callback.choice_labels
     # The data must be exactly one button of the pressed message: a client can

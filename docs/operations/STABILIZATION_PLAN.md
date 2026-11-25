@@ -141,6 +141,12 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 - Claude CLI store (ADR 0113): pending the migration deploy, the host update
   tool's nightly `claude-promote` call and the first promotion and rollback in
   the installed system. Offline tests and a real-CLI gate run cover the source.
+- One-tap new session with handoff (ADR 0114): pending release, enabling
+  `session_handoff` and owner acceptance from a phone in a Claude and a Codex
+  topic: the control appears after an answer ending with `[[handoff]]`; a press
+  opens one new session whose first turn reads that answer; a «▶ option» press
+  carries the option; a second press, a press during a turn and a press after
+  `/new` are refused.
 - Agent mail (ADR 0112): owner live-accepted on 0.11.31 (2026-11-24) for both
   directions of the first route. Each letter appeared in the other topic as a
   Hub-bot document with «Обработать», and one phone press started exactly one

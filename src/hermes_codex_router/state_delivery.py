@@ -15,6 +15,15 @@ from .delivery_hold_predicates import nonblocking_execution_notice, outbox_deliv
 from .delivery_receipts import DeliveryReceipts
 from .delivery_wait import prepare_delivery_waits
 from .reply_choices import choice_part_html, session_binding, split_choice_suffix
+from .session_handoff import TOO_LONG_NOTICE_HTML as HANDOFF_TOO_LONG_NOTICE_HTML
+from .session_handoff import enabled as handoff_enabled
+from .session_handoff import (
+    extract_handoff,
+    handoff_binding,
+    handoff_part_html,
+    split_handoff_suffix,
+)
+from .session_handoff import fits as handoff_fits
 from .telegram_multipart import split_telegram_html
 
 if TYPE_CHECKING:
@@ -228,6 +237,9 @@ class DeliveryStateFacade:
         artifacts: tuple[ValidatedArtifact, ...] = (),
     ) -> None:
         visible_html, choices = split_choice_suffix(telegram_html)
+        handoff: tuple[str, ...] | None = None
+        if not choices:
+            visible_html, handoff = split_handoff_suffix(visible_html)
         parts = split_telegram_html(visible_html)
         for part_index, part in enumerate(parts, start=1):
             self._connection.execute(
@@ -280,6 +292,36 @@ class DeliveryStateFacade:
                     choice_part_html(choices, session_binding(str(session[0]))),
                 ),
             )
+        if handoff is not None:
+            control = self._handoff_control(outbox_id, handoff)
+            if control is not None:
+                # Like choices, the control follows every visible part and file.
+                self._connection.execute(
+                    """INSERT INTO telegram_outbox_parts
+                       (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
+                        file_size, file_sha256)
+                       VALUES (?, ?, ?, 'text', NULL, NULL, NULL, NULL)""",
+                    (outbox_id, start_index + len(artifacts), control),
+                )
+
+    def _handoff_control(self, outbox_id: str, labels: tuple[str, ...]) -> str | None:
+        """The bound handoff control part, a size notice, or nothing (ADR 0114)."""
+        if not handoff_enabled(self):
+            return None
+        row = self._connection.execute(
+            """SELECT outbox.job_id, results.visible_response FROM telegram_outbox outbox
+               JOIN provider_job_results results ON results.job_id = outbox.job_id
+               WHERE outbox.outbox_id = ?""",
+            (outbox_id,),
+        ).fetchone()
+        # The press rebuilds the request from the saved answer, so the control
+        # is offered only when that answer parses to the same options.
+        extracted = extract_handoff(str(row[1])) if row is not None else None
+        if row is None or extracted is None or extracted[1] != labels:
+            return None
+        if not handoff_fits(*extracted):
+            return HANDOFF_TOO_LONG_NOTICE_HTML
+        return handoff_part_html(labels, handoff_binding(str(row[0])))
 
     def get_outbox(self, outbox_id: str) -> TelegramOutboxRecord:
         row = self._connection.execute(

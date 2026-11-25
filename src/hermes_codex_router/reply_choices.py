@@ -26,9 +26,9 @@ CHOICE_PROMPT_HTML = "Выберите вариант:"
 _MARKER = re.compile(r"^\[\[\s*choices\s*:(?P<body>[^\[\]\n]*)\]\]$", re.IGNORECASE)
 
 
-def _valid_labels(raw: list[str]) -> tuple[str, ...] | None:
+def _valid_labels(raw: list[str], *, minimum: int = MIN_CHOICES) -> tuple[str, ...] | None:
     labels = tuple(label.strip() for label in raw)
-    if not MIN_CHOICES <= len(labels) <= MAX_CHOICES:
+    if not minimum <= len(labels) <= MAX_CHOICES:
         return None
     if any(not label or len(label) > MAX_LABEL_CHARACTERS for label in labels):
         return None

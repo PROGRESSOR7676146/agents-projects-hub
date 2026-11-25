@@ -173,8 +173,8 @@ addressing (ADR 0111).
 - **REQ-CTX-002 (Implemented; supersedes automatic handoff):** Sharing MUST be explicit through the
   unadvertised `/context [agent_id] [1..20]` command using a bounded repeatable current-topic
   snapshot; ordinary turns receive no automatic journal injection. Omitting the agent selects all
-  other agents' prior turns. Agent letters (REQ-CTX-008) reach a turn only through the owner's
-  press, never as journal sharing.
+  other agents' prior turns. Agent letters (REQ-CTX-008) and session handoffs (REQ-CTX-009) reach
+  a turn only through the owner's press, never as journal sharing.
 - **REQ-CTX-003 (Implemented):** Provider/model switches MUST change local state only, without model
   calls, summaries, handoffs, journal-cursor movement or token spend.
 - **REQ-CTX-004 (Implemented):** Passive observation MUST NOT invoke providers, force responses or
@@ -202,6 +202,22 @@ addressing (ADR 0111).
     roots, policy, approvals or writers. Only the configured owner's press on the exact displayed
     letter, while its topic still belongs to the target project, MAY admit it, once, as the
     owner's ordinary message with the letter attached, to the topic's current agent.
+- **REQ-CTX-009 (Implemented, ADR 0114; default-off):** With the Hub bot, external queue/outbox
+  and a local opt-in, an agent MAY end a final answer with the exact last line `[[handoff]]` or
+  `[[handoff: A | B]]` (one to six options) outside code fences. After every part and file of
+  that answer, the Hub bot MUST then show «Новая сессия с handoff» and one «▶ <option>» per option.
+  - The handoff is the saved visible answer without the marker, at most 16,000 characters; a
+    longer answer gets a notice instead of the control and a malformed line stays visible. Files
+    and earlier turns are not carried.
+  - Only the configured owner's press on the exact recorded delivery of that control, in its
+    numeric topic of the same project, MAY act. It is the owner's `/new` plus one ordinary
+    message: one transaction MUST archive the session that wrote the answer, open its successor
+    and admit a fixed owner request with that answer and the chosen option, both rebuilt from
+    saved state, as the successor's first input; any refusal commits nothing.
+  - The press MUST refuse while that session is not the topic's active one, after later input
+    reached it, during pending or running work or while a local writer owns it; a repeat MUST
+    report the first use. The marker, delivery, retries and restarts MUST NOT admit input, and
+    the control grants no approval, stop, writer or routing authority.
 
 ### Explicit Claude Code/Codex collaboration
 

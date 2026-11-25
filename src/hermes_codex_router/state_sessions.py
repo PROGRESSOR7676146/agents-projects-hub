@@ -561,20 +561,30 @@ class SessionsStateFacade:
         self, topic_id: int, *, expected_session_id: str | None = None
     ) -> SessionRecord:
         with self._transaction():
-            self._require_control_snapshot(topic_id, expected_session_id)
-            previous = self.active_session(topic_id)
-            if previous is None:
-                raise self._state_error("topic has no active session")
-            if previous.writer_mode != "telegram":
-                raise self._state_error("return the local writer before changing session settings")
-            self._connection.execute(
-                "UPDATE agent_sessions SET status = 'archived', updated_at = ? WHERE session_id = ?",
-                (self._now(), previous.session_id),
-            )
-            replacement = self._insert_session(
-                topic_id, previous.agent_id, previous.model, previous.effort, "active"
+            replacement = self.rotate_active_session_in_transaction(
+                topic_id, expected_session_id=expected_session_id
             )
         return self.get_session(replacement.session_id)
+
+    def rotate_active_session_in_transaction(
+        self, topic_id: int, *, expected_session_id: str | None
+    ) -> SessionRecord:
+        """Archive the active session and open its successor inside the caller's transaction."""
+        if not self._connection.in_transaction:
+            raise self._state_error("session rotation requires its owner transaction")
+        self._require_control_snapshot(topic_id, expected_session_id)
+        previous = self.active_session(topic_id)
+        if previous is None:
+            raise self._state_error("topic has no active session")
+        if previous.writer_mode != "telegram":
+            raise self._state_error("return the local writer before changing session settings")
+        self._connection.execute(
+            "UPDATE agent_sessions SET status = 'archived', updated_at = ? WHERE session_id = ?",
+            (self._now(), previous.session_id),
+        )
+        return self._insert_session(
+            topic_id, previous.agent_id, previous.model, previous.effort, "active"
+        )
 
     def replace_active_session(
         self,

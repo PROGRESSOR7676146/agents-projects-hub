@@ -53,6 +53,7 @@ class ProviderAdmissionState:
         control_input: str | None = None,
         attach_forwarded_materials: bool = True,
         telegram_ingress_identity: str | None = None,
+        rotate_after: int | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Admit one input without committing or opening a nested transaction."""
 
@@ -88,6 +89,8 @@ class ProviderAdmissionState:
             if int(existing["chat_id"]) != chat_id or int(existing["message_id"]) != message_id:
                 raise StateError("idempotency key belongs to another Telegram message")
             return self.state._provider_job(existing), False
+        if rotate_after is not None:  # ADR 0114
+            target_session, session_generation = self._rotate(topic_id, session_id, rotate_after)
 
         session = self._require_binding_in_transaction(
             topic_id=topic_id,
@@ -222,6 +225,25 @@ class ProviderAdmissionState:
                 job_id, now=datetime.fromisoformat(now), capacity=queue_capacity
             )
         return job, True
+
+    def _rotate(self, topic_id: int, session_id: str, after_sequence: int) -> tuple[str, int]:
+        """ADR 0114: archive this exact active session and admit into its successor.
+
+        Runs in the admission transaction, so either both happen or neither
+        does. Input that reached the session after the source answer (topic
+        sequence ``after_sequence``) refuses. The successor keeps the agent,
+        model and effort and has no provider session yet, as the request must.
+        """
+        later = self.state._connection.execute(
+            "SELECT 1 FROM provider_jobs WHERE session_id = ? AND topic_sequence > ? LIMIT 1",
+            (session_id, after_sequence),
+        ).fetchone()
+        if later is not None:
+            raise StateError("later input reached the session")
+        successor = self.state._sessions_state.rotate_active_session_in_transaction(
+            topic_id, expected_session_id=session_id
+        )
+        return successor.session_id, successor.generation
 
     def _require_binding_in_transaction(
         self,

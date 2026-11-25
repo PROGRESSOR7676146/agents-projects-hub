@@ -143,12 +143,10 @@ Owner requests of 2026-11-18, taken up after the 0.11.24 deployment, in order:
 3. Unconfirmed-delivery notice: offer the owner a Telegram decision in plain
    Russian instead of a local command, tracked in
    [owner-step defects](OWNER_STEP_DEFECTS.md).
-4. Fresh-session handoff: when a session is ready to close, the agent or the
-   Hub opens a new session and passes the handoff into it, so long sessions do
-   not keep re-reading their whole history. The Hub side stays model-free and
-   owner-initiated, for example a «Новая сессия с handoff» button that resets the
-   session and submits the bounded handoff as the first input. Needs an owning
-   requirement, an ADR and an Astra consult before code.
+4. Fresh-session handoff: implemented in source as REQ-CTX-009 and
+   [ADR 0114](../decisions/0114-one-tap-new-session-with-handoff.md) after an
+   Astra consult. Release, enabling `session_handoff` and owner live acceptance
+   remain; see the [stabilization plan](STABILIZATION_PLAN.md).
 5. One verified update path for provider CLIs (owner, 2026-11-20), after the
    reliability work: store each native CLI build once per digest outside the
    sealed Hub release, keep a small atomic "active selection" record with the

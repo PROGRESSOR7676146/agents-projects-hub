@@ -13,6 +13,8 @@ from .codex_failure import owner_resolution_action
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .receipt_commit import commit_receipt
 from .reply_choices import CHOICE_PROMPT_HTML, keyboard, parse_choice_part
+from .session_handoff import HANDOFF_PROMPT_HTML, parse_handoff_part
+from .session_handoff import keyboard as handoff_keyboard
 from .state_delivery import DeliveryStateFacade, TelegramOutboxRecord
 from .telegram import TelegramError
 from .uncertain_decision import PROMPT_HTML as UNCERTAIN_PROMPT_HTML
@@ -130,6 +132,14 @@ def deliver_final_part(
                 outbox.thread_id,
                 CHOICE_PROMPT_HTML,
                 reply_markup=keyboard(*choice),
+            )
+        elif (handoff := parse_handoff_part(part.telegram_html)) is not None and handoff[1]:
+            # The Hub bot receives the press (ADR 0114), as for choices.
+            message_id = (choice_telegram or telegram).send_html(
+                outbox.chat_id,
+                outbox.thread_id,
+                HANDOFF_PROMPT_HTML,
+                reply_markup=handoff_keyboard(*handoff),
             )
         elif (snapshot := parse_prompt_part(part.telegram_html)) is not None:
             # Only the Hub bot receives the press (ADR 0107); without it the

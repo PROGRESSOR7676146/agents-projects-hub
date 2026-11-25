@@ -153,6 +153,8 @@ class HubConfig:
     topic_panel: bool = False
     # Default-off agent mail routes (ADR 0112); empty keeps mail off.
     agent_mail: tuple[MailRoute, ...] = ()
+    # Default-off one-tap new session with the previous answer (ADR 0114).
+    session_handoff: bool = False
     # The file this configuration was loaded from, for local hand-off commands.
     source_path: Path | None = None
     # Consecutive productive messages with identical routing are collected
@@ -1083,6 +1085,24 @@ def claude_image_input_supported(
     return permissions is not None and permissions.profile == "host" and stream_input
 
 
+def _hub_bot_queue_flag(
+    root: dict[str, Any], key: str, hub_bot: HubTelegramBot | None, topology: Any
+) -> bool:
+    """A default-off owner feature that the Hub bot serves through the external queue."""
+    value = root.get(key, False)
+    if type(value) is not bool:
+        raise HubConfigError(f"{key} must be a boolean")
+    if value and (
+        hub_bot is None
+        or hub_bot.telegram_user_id is None
+        or topology.dispatch_mode != "queue"
+        or topology.queue_runtime != "external"
+        or topology.outbox_runtime != "external"
+    ):
+        raise HubConfigError(f"{key} requires the Hub bot and the external queue and outbox")
+    return value
+
+
 def load_hub_config(
     path: Path,
     *,
@@ -1161,17 +1181,8 @@ def load_hub_config(
         raise HubConfigError("claude_stream_input requires an external Claude worker")
     if type(claude_image_input) is not bool:
         raise HubConfigError("claude_image_input must be a boolean")
-    topic_panel = root.get("topic_panel", False)
-    if type(topic_panel) is not bool:
-        raise HubConfigError("topic_panel must be a boolean")
-    if topic_panel and (
-        hub_bot is None
-        or hub_bot.telegram_user_id is None
-        or topology.dispatch_mode != "queue"
-        or topology.queue_runtime != "external"
-        or topology.outbox_runtime != "external"
-    ):
-        raise HubConfigError("topic_panel requires the Hub bot and the external queue and outbox")
+    topic_panel = _hub_bot_queue_flag(root, "topic_panel", hub_bot, topology)
+    session_handoff = _hub_bot_queue_flag(root, "session_handoff", hub_bot, topology)
     try:
         agent_mail = parse_agent_mail(
             root.get("agent_mail"),
@@ -1252,6 +1263,7 @@ def load_hub_config(
         claude_stream_input=claude_stream_input,
         topic_panel=topic_panel,
         agent_mail=agent_mail,
+        session_handoff=session_handoff,
         message_batch_quiet_ms=topology.message_batch_quiet_ms,
         message_batch_max_ms=topology.message_batch_max_ms,
         task_no_progress_seconds=_task_progress_seconds(root, "task_no_progress_seconds", 300),
