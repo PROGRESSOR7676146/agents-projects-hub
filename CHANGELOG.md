@@ -5,6 +5,16 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Claude CLI store and nightly promotion (ADR 0113, owner's standing
+  authorization). For the `host` profile, `hub_deploy` can keep each Claude CLI
+  build once per digest outside releases behind one `current` pointer.
+  `claude-promote` admits a host-installed build only when it matches the
+  publisher manifest, promotes the newest build that is one day old and passes
+  the release's model-free gate, and restores the previous build when the
+  post-switch check fails. `claude-status` and `claude-rollback` complete the
+  interface for the host update tool. Off until an installation names
+  `claude_store`.
+
 ## [0.11.31] - 2026-11-24
 
 - Install target for the agent mail release, with the same code as 0.11.30,

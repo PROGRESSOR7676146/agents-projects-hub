@@ -24,6 +24,19 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from scripts import hub_claude_store as claude_store
+except ImportError:  # run as `python3.12 -I scripts/hub_deploy.py`: no script dir on sys.path
+    import importlib.util
+
+    _spec = importlib.util.spec_from_file_location(
+        "hub_claude_store", Path(__file__).with_name("hub_claude_store.py")
+    )
+    assert _spec is not None and _spec.loader is not None
+    claude_store = importlib.util.module_from_spec(_spec)
+    sys.modules["hub_claude_store"] = claude_store
+    _spec.loader.exec_module(claude_store)
+
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _VERSION = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
@@ -278,7 +291,12 @@ def _root_text(value: object, old: str) -> bool:
 
 
 def rewrite_claude_config(
-    config: dict[str, Any], old: str, new: str, tree_sha256: str
+    config: dict[str, Any],
+    old: str,
+    new: str,
+    tree_sha256: str,
+    *,
+    claude_executable: str | None = None,
 ) -> dict[str, Any]:
     need(isinstance(config, dict), "Claude config must be an object")
     need(old.startswith("/") and new.startswith("/") and old != new, "invalid runtime roots")
@@ -291,7 +309,11 @@ def rewrite_claude_config(
     for agent in agents:
         need(isinstance(agent, dict), "invalid agent")
         if agent.get("runtime") == "claude" and "executable" in agent:
-            agent["executable"] = _path_rewrite(agent["executable"], old, new)
+            agent["executable"] = (
+                claude_executable
+                if claude_executable is not None
+                else _path_rewrite(agent["executable"], old, new)
+            )
     if _host_permissions(permissions):
         return result  # host carries no runtime paths or pin beyond the CLI executable
     roots = permissions.get("runtime_roots")
@@ -453,7 +475,15 @@ _INPUT_FIELDS = set(_PATH_FIELDS) | {
     "monitor_timer",
     "github_repo",
 }
+# ADR 0113: an installation either embeds one Claude CLI in each release or uses the store.
+_LEGACY_CLAUDE_FIELDS = {"native_claude", "native_sha256"}
+_STORE_CLAUDE_FIELDS = {"claude_store", "claude_window"}
+_STORE_INPUT_FIELDS = (_INPUT_FIELDS - _LEGACY_CLAUDE_FIELDS) | _STORE_CLAUDE_FIELDS
 _UNIT = re.compile(r"[A-Za-z0-9_.@:-]+\.(?:service|timer)\Z")
+
+
+def store_mode(installation: dict[str, Any]) -> bool:
+    return "claude_store" in installation
 
 
 def load_installation(path: Path) -> dict[str, Any]:
@@ -478,12 +508,15 @@ def load_installation(path: Path) -> dict[str, Any]:
         "installation must be outside Git",
     )
     data = json.loads(path.read_text(encoding="utf-8"))
-    need(isinstance(data, dict) and set(data) == _INPUT_FIELDS, "invalid installation fields")
+    need(
+        isinstance(data, dict) and set(data) in (_INPUT_FIELDS, _STORE_INPUT_FIELDS),
+        "invalid installation fields",
+    )
     need(
         type(data["schema_version"]) is int and data["schema_version"] == 1,
         "unsupported installation schema",
     )
-    for key in _PATH_FIELDS:
+    for key in (k for k in _PATH_FIELDS if k in data):
         value = data[key]
         need(
             isinstance(value, str) and value.startswith("/") and "\x00" not in value,
@@ -534,10 +567,22 @@ def load_installation(path: Path) -> dict[str, Any]:
         and data["controller_unit"] == data["restart_order"][-1],
         "controller must be last",
     )
-    need(
-        isinstance(data["native_sha256"], str) and _HEX.fullmatch(data["native_sha256"]),
-        "invalid native digest",
-    )
+    if store_mode(data):
+        value = data["claude_store"]
+        need(
+            isinstance(value, str) and value.startswith("/") and "\x00" not in value,
+            "invalid path: claude_store",
+        )
+        try:
+            claude_store.open_store(Path(value))
+            claude_store.in_window(data["claude_window"], time.time())
+        except (claude_store.StoreRefused, OSError, TypeError) as exc:
+            raise Refused(str(exc)) from None
+    else:
+        need(
+            isinstance(data["native_sha256"], str) and _HEX.fullmatch(data["native_sha256"]),
+            "invalid native digest",
+        )
     need(
         isinstance(data["github_repo"], str)
         and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", data["github_repo"])
@@ -818,13 +863,26 @@ def discover_installation(
     if not isinstance(agents, list) or not isinstance(permissions, dict):
         raise Refused("invalid Claude config")
     claude = [a for a in agents if isinstance(a, dict) and a.get("runtime") == "claude"]
+    stable = (
+        str(claude_store.stable_path(Path(installation["claude_store"])))
+        if store_mode(installation)
+        else None
+    )
     need(
         bool(claude)
         and all(
-            isinstance(a.get("executable"), str) and a["executable"].startswith(root + "/")
+            isinstance(a.get("executable"), str)
+            and (a["executable"].startswith(root + "/") or a["executable"] == stable)
             for a in claude
-        ),
+        )
+        and len({a["executable"] for a in claude}) == 1,
         "mixed Claude runtime",
+    )
+    # The store serves only the unconfined host profile; confined profiles mount
+    # trusted code from sealed release trees (REQ-SEC-008, ADR 0113).
+    need(
+        not store_mode(installation) or _host_permissions(permissions),
+        "Claude CLI store requires the host profile",
     )
     # The host profile (ADR 0095) carries no hook runtime paths or pin.
     if not _host_permissions(permissions):
@@ -876,6 +934,7 @@ def discover_installation(
         "git_sha": sha,
         "package_version": info["package_version"],
         "claude_config": str(referenced[0]),
+        "claude_executable": claude[0]["executable"],
         "tree_sha256": (permissions.get("user_releases") or [{}])[0].get("sha256"),
         "dropins": [str(path) for path in held],
         "unit_runtime_modes": modes,
@@ -966,6 +1025,8 @@ def prepare_stage(
             "rollback release must be distinct",
         )
     prepared = _prepare_runtime(installation, candidate, candidate_dir, wheel, runner, python)
+    if store_mode(installation):
+        prepared["claude_executable"] = prepare_claude_store(installation, old, prepared, runner)
     prepared.update(
         {
             "state_schema_before": live,
@@ -984,6 +1045,8 @@ def prepare_stage(
         target = _prepare_runtime(
             installation, rollback_info, rollback_dir, rollback_wheel, runner, python
         )
+        if store_mode(installation):
+            target["claude_executable"] = prepare_claude_store(installation, old, target, runner)
         target.update(
             {
                 "old_wheel": prepared["old_wheel"],
@@ -999,6 +1062,64 @@ def prepare_stage(
     return prepared
 
 
+def claude_cli_version(executable: Path) -> str:
+    with tempfile.TemporaryDirectory(prefix="hub-claude-version-") as home:
+        output = subprocess.run(
+            [str(executable), "--version"],
+            env={"PATH": "/usr/bin:/bin", "HOME": home, "DISABLE_AUTOUPDATER": "1"},
+            cwd=home,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        ).stdout
+    match = re.fullmatch(r"([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}) \(Claude Code\)", output.strip())
+    need(match is not None, "unrecognized Claude CLI version")
+    assert match is not None
+    return match.group(1)
+
+
+def prepare_claude_store(
+    installation: dict[str, Any],
+    old: dict[str, Any],
+    new: dict[str, Any],
+    runner: Callable[..., Any],
+    *,
+    now: Callable[[], float] = time.time,
+) -> str:
+    """Seed the store once and require gate evidence for the new release (ADR 0113)."""
+    root = Path(new["root"])
+    gate = claude_store.release_gate(root)
+    check = claude_store.release_post_check(root)
+    try:
+        store = claude_store.open_store(Path(installation["claude_store"]))
+        claude_store.recover(store, check)
+        if claude_store.current_id(store) is None:
+            executable = Path(old["claude_executable"])
+            need(
+                executable == Path(old["root"]) / "bin/claude",
+                "store seed requires the active release's embedded Claude CLI",
+            )
+            receipt = claude_store.seed(
+                store, executable, claude_cli_version(executable), old["git_sha"], now=now()
+            )
+            gated = claude_store.run_pair_gate(
+                store, gate, new["git_sha"], receipt, None, now=now()
+            )
+            need(gated["passed"], "release failed the gate for the seeded Claude CLI")
+            claude_store.first_selection(
+                store, receipt, hub_git_sha=new["git_sha"], post_check=check, now=now()
+            )
+        else:
+            claude_store.ensure_pair(store, gate, new["git_sha"], now=now())
+    except claude_store.StoreRefused as exc:
+        raise Refused(str(exc)) from None
+    except claude_store.NeedsInspection as exc:
+        raise Refused("Claude CLI store needs inspection: " + str(exc)) from None
+    return str(claude_store.stable_path(store))
+
+
 def _prepare_runtime(
     installation: dict[str, Any],
     candidate: dict[str, Any],
@@ -1007,9 +1128,11 @@ def _prepare_runtime(
     runner: Callable[..., Any],
     python: Path,
 ) -> dict[str, Any]:
-    native = Path(installation["native_claude"])
+    embedded = not store_mode(installation)
+    native = Path(installation.get("native_claude", "/nonexistent"))
     need(
-        hashlib.sha256(native.read_bytes()).hexdigest() == installation["native_sha256"],
+        not embedded
+        or hashlib.sha256(native.read_bytes()).hexdigest() == installation["native_sha256"],
         "native Claude digest mismatch",
     )
     root = Path(installation["releases_dir"]) / candidate["git_sha"]
@@ -1025,11 +1148,14 @@ def _prepare_runtime(
             all(info.get(k) == candidate[k] for k in identity_keys),
             "existing runtime identity mismatch",
         )
-        need(
-            hashlib.sha256((root / "bin/claude").read_bytes()).hexdigest()
-            == installation["native_sha256"],
-            "existing native Claude digest mismatch",
-        )
+        if embedded:
+            need(
+                hashlib.sha256((root / "bin/claude").read_bytes()).hexdigest()
+                == installation["native_sha256"],
+                "existing native Claude digest mismatch",
+            )
+        else:
+            need(not (root / "bin/claude").exists(), "store release embeds a Claude CLI")
     else:
         root.mkdir(mode=0o755)
         runtime_python = root / "venv/bin/python"
@@ -1054,9 +1180,10 @@ def _prepare_runtime(
         (root / "venv/bin/python3.12").chmod(0o755)
         for name in ("python", "python3"):
             (root / "venv/bin" / name).symlink_to("python3.12")
-        (root / "bin").mkdir(mode=0o755)
-        shutil.copyfile(native, root / "bin/claude")
-        (root / "bin/claude").chmod(0o755)
+        if embedded:
+            (root / "bin").mkdir(mode=0o755)
+            shutil.copyfile(native, root / "bin/claude")
+            (root / "bin/claude").chmod(0o755)
         for cache in root.rglob("__pycache__"):
             shutil.rmtree(cache)
         info = _json_command(runner, [str(root / "venv/bin/agents-projects-hub"), "release-info"])
@@ -1171,7 +1298,13 @@ def create_plan(
     if config_bytes is None:
         raise Refused("missing Claude config")
     config = json.loads(config_bytes)
-    candidate_config = rewrite_claude_config(config, old["root"], new["root"], new["tree_sha256"])
+    candidate_config = rewrite_claude_config(
+        config,
+        old["root"],
+        new["root"],
+        new["tree_sha256"],
+        claude_executable=new.get("claude_executable"),
+    )
     manifest_path = Path(installation["codex_manifest"])
     manifest_bytes = _file_bytes(manifest_path)
     if manifest_bytes is None:
@@ -2549,6 +2682,37 @@ def apply_window(
             return _recover(window, metadata, manager, runner, sleep)
 
 
+def _check_store_rollback(
+    installation: dict[str, Any], plan_dir: Path, plan: dict[str, Any]
+) -> None:
+    """A store release may run only a Claude CLI it has gate evidence for (ADR 0113)."""
+    if not store_mode(installation):
+        return
+    store = Path(installation["claude_store"])
+    stable = str(claude_store.stable_path(store))
+    for entry in plan["files"]:
+        if entry["kind"] != "claude_config" or entry.get("before") is None:
+            continue
+        config = json.loads(_private_bytes(plan_dir / entry["before"]["copy"]))
+        executables = {
+            agent.get("executable")
+            for agent in config.get("agents", [])
+            if isinstance(agent, dict) and agent.get("runtime") == "claude"
+        }
+        if stable not in executables:
+            continue  # an older release runs its own embedded CLI
+        try:
+            active = claude_store.current(store)
+        except claude_store.StoreRefused as exc:
+            raise Refused(str(exc)) from None
+        need(
+            active is not None
+            and claude_store.has_pair(store, plan["old_runtime"]["git_sha"], active["sha256"]),
+            "previous release has no gate evidence for the active Claude CLI; "
+            "run claude-rollback first",
+        )
+
+
 def rollback_window(
     installation: dict[str, Any],
     window_id: str,
@@ -2568,6 +2732,7 @@ def rollback_window(
         previous = last_window(installation)
         need(previous is not None and previous["id"] == window_id, "superseded window")
         assert previous is not None
+        _check_store_rollback(installation, Path(metadata["plan_dir"]), plan)
         # Owner decision 2026-11-23: a release rollback restores the pre-deploy
         # Hub config; amendments made after the window are dropped and listed,
         # and the caller acknowledges that with --drop-amendments. A rolled-back
@@ -3061,6 +3226,113 @@ def _revert_amendment(
     return {**result, "outcome": "REVERTED"}
 
 
+CLAUDE_ACTIONS = ("claude-status", "claude-promote", "claude-rollback")
+
+
+def claude_action(
+    installation: dict[str, Any],
+    action: str,
+    active: dict[str, Any],
+    *,
+    candidate: Path | None = None,
+    candidate_version: str | None = None,
+    outside_window: bool = False,
+    now: Callable[[], float] = time.time,
+    fetch: Callable[[str], bytes] = claude_store.fetch_url,
+) -> dict[str, Any]:
+    """One store operation for the active release; the caller holds the deploy lock."""
+    store = claude_store.open_store(Path(installation["claude_store"]))
+    root = Path(active["root"])
+    if action == "claude-status":
+        return claude_store.status(store, hub_git_sha=active["git_sha"], now=now())
+    need(
+        active["claude_executable"] == str(claude_store.stable_path(store)),
+        "active release does not run the Claude CLI store",
+    )
+    gate = claude_store.release_gate(root)
+    check = claude_store.release_post_check(root)
+    if action == "claude-rollback":
+        need(candidate is None and not outside_window, "claude-rollback takes no candidate")
+        return claude_store.rollback(
+            store, hub_git_sha=active["git_sha"], gate=gate, post_check=check, now=now()
+        )
+    need(
+        outside_window or claude_store.in_window(installation["claude_window"], now()),
+        "outside the nightly Claude promotion window",
+    )
+    admitted = None
+    if candidate is not None:
+        version = candidate_version or candidate.resolve().name
+        admitted = claude_store.admit(store, candidate, version, now=now(), fetch=fetch)
+    else:
+        need(candidate_version is None, "--candidate-version requires --candidate")
+    result = claude_store.promote(
+        store, hub_git_sha=active["git_sha"], gate=gate, post_check=check, now=now()
+    )
+    if admitted is not None:
+        result["admitted"] = {
+            key: admitted[key] for key in ("version", "sha256", "admitted_at", "source")
+        }
+    return result
+
+
+def claude_main(
+    args: argparse.Namespace,
+    runner: Callable[..., Any],
+    inspect_process: Callable[[str, str], bool] | None,
+    runtime_owner: Callable[[Path], int],
+    manager: Any,
+) -> int:
+    """Exit codes for the host update tool: 0 ok, 1 failed, 2 needs inspection, 3 refused."""
+    result: dict[str, Any]
+    store: Path | None = None
+    try:
+        installation = load_installation(Path(args.installation))
+        need(store_mode(installation), "installation does not use the Claude CLI store")
+        need(
+            not any((args.release, args.rollback_release, args.window, args.plan, args.config))
+            and not (args.adopt or args.recover or args.drop_amendments),
+            "unsupported option for " + args.action,
+        )
+        need(
+            args.action == "claude-promote"
+            or not (args.candidate or args.candidate_version or args.outside_window),
+            "--candidate, --candidate-version and --outside-window belong to claude-promote",
+        )
+        store = Path(installation["claude_store"])
+        service = manager or ServiceManager(runner)
+        inspector = inspect_process or (lambda unit, root: inspect_unit(unit, root, runner))
+        with _lock(installation):
+            if args.action != "claude-status":
+                _unfinished(installation, args.installation)
+            active = discover_installation(
+                installation, runner, inspector, runtime_owner, manager=service
+            )
+            result = claude_action(
+                installation,
+                args.action,
+                active,
+                candidate=None if args.candidate is None else Path(args.candidate),
+                candidate_version=args.candidate_version,
+                outside_window=args.outside_window,
+            )
+            result["hub_git_sha"] = active["git_sha"]
+            if args.action != "claude-status":
+                result["receipt"] = str(claude_store.save_result(store, result, now=time.time()))
+    except claude_store.NeedsInspection as exc:
+        result = {"component": "claude", "outcome": "needs_inspection", "reason": str(exc)}
+    except (
+        Refused,
+        claude_store.StoreRefused,
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        result = {"component": "claude", "outcome": "refused", "reason": str(exc)}
+    print(json.dumps(result, sort_keys=True))
+    return claude_store.EXIT[result["outcome"]]
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -3074,7 +3346,16 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("plan", "apply", "deploy", "rollback", "status", "reconfigure")
+        "action",
+        choices=(
+            "plan",
+            "apply",
+            "deploy",
+            "rollback",
+            "status",
+            "reconfigure",
+            *CLAUDE_ACTIONS,
+        ),
     )
     parser.add_argument("--installation", required=True)
     parser.add_argument("--release")
@@ -3085,7 +3366,12 @@ def main(
     parser.add_argument("--adopt", action="store_true")
     parser.add_argument("--recover", action="store_true")
     parser.add_argument("--drop-amendments", action="store_true")
+    parser.add_argument("--candidate")
+    parser.add_argument("--candidate-version")
+    parser.add_argument("--outside-window", action="store_true")
     args = parser.parse_args(argv)
+    if args.action in CLAUDE_ACTIONS:
+        return claude_main(args, runner, inspect_process, runtime_owner, manager)
     try:
         installation = load_installation(Path(args.installation))
         service = manager or ServiceManager(runner)

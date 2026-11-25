@@ -138,6 +138,9 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 
 ## Live-acceptance backlog
 
+- Claude CLI store (ADR 0113): pending the migration deploy, the host update
+  tool's nightly `claude-promote` call and the first promotion and rollback in
+  the installed system. Offline tests and a real-CLI gate run cover the source.
 - Agent mail (ADR 0112): owner live-accepted on 0.11.31 (2026-11-24) for both
   directions of the first route. Each letter appeared in the other topic as a
   Hub-bot document with «Обработать», and one phone press started exactly one

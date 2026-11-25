@@ -158,7 +158,10 @@ Owner requests of 2026-11-18, taken up after the 0.11.24 deployment, in order:
    caches, and let the owner's host update tool call this command as one step.
    Supersedes the update part of ADR 0048 through a new ADR; the backup and
    monitor read the selection record. Code may be written early; installation
-   waits for a verified host backup.
+   waits for a verified host backup. Claude part implemented in source
+   ([ADR 0113](../decisions/0113-claude-cli-store-and-nightly-promotion.md),
+   owner's standing authorization for nightly promotion); Codex stays on its
+   pinned app-server, and Hub monitor drift reporting is a later step.
 
 ### Fixed progress checkpoints for this goal
 

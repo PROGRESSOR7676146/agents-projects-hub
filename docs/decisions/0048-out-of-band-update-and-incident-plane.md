@@ -1,6 +1,7 @@
 # ADR 0048: Out-of-band update and incident plane
 
-Status: accepted; implementation planned in four stages
+Status: accepted; implementation planned in four stages. For the Claude CLI of Hub
+workers, sections 4 and 5 are superseded by [ADR 0113](0113-claude-cli-store-and-nightly-promotion.md).
 Date: 2026-09-30
 
 ## Context

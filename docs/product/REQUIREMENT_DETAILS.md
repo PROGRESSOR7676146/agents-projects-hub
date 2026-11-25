@@ -436,6 +436,8 @@ Immutable version dirs, switchable links, private stack manifest; doctor/monitor
 passive drift. Independent read-only plan→stage→check→dependency-order switch,
 Hermes last, one recorded rollback. Control expires on gateway restart. Watchdog
 restores previous Hermes if unit/heartbeat fails; Hub retains REQ-OPS-010/011.
+Claude CLI (ADR 0113): digest store, `current` selection pointer, pair evidence,
+`hub_deploy` claude-status/promote/rollback, exit codes 0/1/2/3, nightly window.
 
 Section context: Git/Telegram cannot recreate unsaved native context; old queue
 subsection redirects to section22.
