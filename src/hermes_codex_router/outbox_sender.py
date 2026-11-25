@@ -24,6 +24,7 @@ from .progress_delivery_sender import deliver_progress
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import ProjectResolutionError, resolve_project_context
 from .session_connect import SessionConnectStore
+from .session_handoff import project_setting as project_handoff_setting
 from .state import HubState, StateError
 from .task_activity import TaskActivityState
 from .task_notice_sender import deliver_task_notice
@@ -181,6 +182,7 @@ class TelegramOutboxSender:
         # Workers may read another configuration copy, so the Hub-config
         # reader projects agent mail routes into the database (ADR 0112).
         AgentLetterStore(self.state).sync_routes(config.agent_mail)
+        project_handoff_setting(self.state, config.session_handoff)  # Likewise (ADR 0114).
         self.letters = (
             AgentLetterSender(
                 self.state,

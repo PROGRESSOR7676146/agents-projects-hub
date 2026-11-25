@@ -53,6 +53,7 @@ class ProviderAdmissionState:
         control_input: str | None = None,
         attach_forwarded_materials: bool = True,
         telegram_ingress_identity: str | None = None,
+        rotate_session: bool = False,
     ) -> tuple[ProviderJobRecord, bool]:
         """Admit one input without committing or opening a nested transaction."""
 
@@ -88,6 +89,8 @@ class ProviderAdmissionState:
             if int(existing["chat_id"]) != chat_id or int(existing["message_id"]) != message_id:
                 raise StateError("idempotency key belongs to another Telegram message")
             return self.state._provider_job(existing), False
+        if rotate_session:  # ADR 0114
+            target_session, session_generation = self._rotate(topic_id, session_id, target_agent)
 
         session = self._require_binding_in_transaction(
             topic_id=topic_id,
@@ -222,6 +225,20 @@ class ProviderAdmissionState:
                 job_id, now=datetime.fromisoformat(now), capacity=queue_capacity
             )
         return job, True
+
+    def _rotate(self, topic_id: int, session_id: str, agent_id: str) -> tuple[str, int]:
+        """ADR 0114: archive this exact active session and admit into its successor.
+
+        Runs in the admission transaction, so either both happen or neither
+        does. The successor keeps the agent, model and effort and has no
+        provider session yet, which the caller's request must match.
+        """
+        successor = self.state._sessions_state.rotate_active_session_in_transaction(
+            topic_id, expected_session_id=session_id
+        )
+        if successor.agent_id != agent_id:
+            raise StateError("session rotation changed the agent")
+        return successor.session_id, successor.generation
 
     def _require_binding_in_transaction(
         self,

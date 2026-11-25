@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- One-tap new session with handoff (ADR 0114), off until an installation sets
+  `session_handoff`. An agent that recommends a fresh session ends its answer
+  with `[[handoff]]` or `[[handoff: A | B]]`; the Hub bot then shows «Новая
+  сессия с handoff» and «▶ <option>». One owner press archives that session,
+  opens the next one and gives it the answer and the chosen option as its first
+  message, in one transaction. Stale, repeated and mid-work presses are refused.
 - Claude CLI store and nightly promotion (ADR 0113, owner's standing
   authorization). For the `host` profile, `hub_deploy` can keep each Claude CLI
   build once per digest outside releases behind one `current` pointer.

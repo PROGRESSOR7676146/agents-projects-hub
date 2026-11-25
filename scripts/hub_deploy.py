@@ -85,6 +85,9 @@ RECONFIGURABLE_KEYS = frozenset(
         "agent_mail",
         "message_batch_max_ms",
         "message_batch_quiet_ms",
+        # Workers read the handoff setting from the database, where the
+        # sender projects it at start (ADR 0114).
+        "session_handoff",
         "task_no_progress_seconds",
         "topic_panel",
     }

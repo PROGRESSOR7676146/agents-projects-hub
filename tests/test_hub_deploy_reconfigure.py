@@ -140,6 +140,10 @@ class ReconfigureTests(WindowFixture):
         self.assertEqual(self.hub.read_bytes(), self.original)
         self.assertEqual(list((self.ops / self.require_window()["id"]).glob("*amendment*")), [])
 
+    def test_controller_and_sender_settings_are_reconfigurable(self):
+        # Workers read these from the database projection, never their own copy.
+        self.assertLessEqual({"agent_mail", "session_handoff"}, hub_deploy.RECONFIGURABLE_KEYS)
+
     def test_unsafe_or_empty_candidates_are_refused(self):
         self.accept()
         with self.assertRaisesRegex(hub_deploy.Refused, "no Hub config change"):

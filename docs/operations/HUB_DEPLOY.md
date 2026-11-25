@@ -180,9 +180,11 @@ mode `0600`, absolute path) and pass it with `--config`. The tool compares
 top-level keys with exact JSON values and refuses an unchanged config,
 duplicate keys, non-JSON numbers and any changed key outside
 `RECONFIGURABLE_KEYS`: `agent_mail`, `message_batch_max_ms`,
-`message_batch_quiet_ms`, `task_no_progress_seconds` and `topic_panel`. Workers
-read agent mail routes from the database, where the sender projects them
-at start ([ADR 0112](../decisions/0112-agent-mail-between-topics.md)). Numbers compare as exact
+`message_batch_quiet_ms`, `session_handoff`, `task_no_progress_seconds` and
+`topic_panel`. Workers read agent mail routes and the handoff setting from the
+database, where the sender projects them at start
+([ADR 0112](../decisions/0112-agent-mail-between-topics.md),
+[ADR 0114](../decisions/0114-one-tap-new-session-with-handoff.md)). Numbers compare as exact
 decimals, and `1`, `1.0` and `true` differ. Only the Controller and sender read
 these keys, from the Hub config. Other keys stay outside `reconfigure`: Claude
 workers read some from their own copy, a destination such as the alert topic

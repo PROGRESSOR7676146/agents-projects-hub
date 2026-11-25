@@ -35,8 +35,8 @@ from .controller_admission import (
     DuplicateAdmission,
     DurableAdmissionFailure,
     DurableAdmissionRequest,
-    DurableProviderAdmission,
     RejectedAdmission,
+    controller_provider_admission,
 )
 from .controller_commands import (
     ControllerCommandOrchestrator,
@@ -605,32 +605,7 @@ class ProjectHubService:
             raise QueueAcceptanceError(
                 "managed-external provider admission belongs to its native gateway"
             )
-        from .provider_queue_capacity import QueueCapacityConfig
-
-        admission = DurableProviderAdmission(
-            state=self.state,
-            telegram=self.telegram,
-            state_path=self.config.state_path,
-            observer_agent_id=self.agent.agent_id,
-            telegram_ingress_identity=self._telegram_group_ingress(message),
-            message_batch_quiet_ms=self.config.message_batch_quiet_ms,
-            message_batch_max_ms=self.config.message_batch_max_ms,
-            queue_capacity=QueueCapacityConfig(
-                self.config.max_parallel_roots,
-                self.config.external_worker_agent_ids
-                if session.agent_id in self.config.external_worker_agent_ids
-                else (),
-                {"codex": self.config.codex_worker_count, "claude": self.config.claude_worker_count}
-                if session.agent_id in self.config.external_worker_agent_ids
-                else {},
-            ),
-            prepare_task_notices=(
-                self.config.hub_bot is not None
-                and self.config.dispatch_mode == "queue"
-                and self.config.queue_runtime == "external"
-                and self.config.outbox_runtime == "external"
-            ),
-        )
+        admission = controller_provider_admission(self, message, session)
 
         def writer_transfer_preflight():
             try:
@@ -1925,7 +1900,7 @@ class ProjectHubService:
             text="",
             reply_to_username=None,
         )
-        if callback.data.startswith("ch:"):  # Ordinary input, not a session control.
+        if callback.data.startswith(("ch:", "ho:")):  # Owner input; "ho:" is ADR 0114.
             return handle_reply_choice(self, callback, binding.project_id, topic.topic_id)
         try:
             data, expected_control_session = validate_control(

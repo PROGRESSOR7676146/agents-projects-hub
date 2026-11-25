@@ -54,6 +54,7 @@ from .registry import ExecutionRootError, ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .session_connect import ConnectCandidate, SessionConnectStore
+from .session_handoff import turn_note as handoff_turn_note
 from .state import HubState, ProviderJobRecord, StateError
 from .state_errors import ConnectPermissionSelectionChanged
 from .state_runtime_health import REPEATED_REFUSAL_LIMIT, REQUEST_REFUSAL_CODES
@@ -1007,6 +1008,11 @@ class ExternalQueueWorker:
         except OSError as exc:
             self._record_event("warning", "incoming_staging_cleanup_error", type(exc).__name__)
 
+    def _turn_notes(self, job: ProviderJobRecord) -> str:
+        """Per-turn mail addresses (ADR 0112) and the session handoff note (ADR 0114)."""
+        notes = (self.letters.contacts_prompt(job), handoff_turn_note(self.state))
+        return "\n\n".join(note for note in notes if note)
+
     def _needs_full_telegram_contract(self, job: ProviderJobRecord) -> bool:
         return worker_needs_full_telegram_contract(self.state, job, self.agent.runtime)
 
@@ -1127,7 +1133,7 @@ class ExternalQueueWorker:
                 thread,
                 project,
                 prompt=codex_provider_prompt(
-                    turn_text, staging_dir=staging_dir, contacts=self.letters.contacts_prompt(job)
+                    turn_text, staging_dir=staging_dir, contacts=self._turn_notes(job)
                 ),
                 local_image_paths=prepared.local_image_paths,
             )
@@ -1317,7 +1323,7 @@ class ExternalQueueWorker:
                         runtime=self.agent.runtime,
                         full_contract=self._needs_full_telegram_contract(job),
                         staging_dir=staging_dir,
-                        contacts=self.letters.contacts_prompt(job),
+                        contacts=self._turn_notes(job),
                     ),
                     interrupt_prepared=interrupt_prepared,
                     staging_dir=staging_dir,

@@ -134,6 +134,7 @@ Release acceptance requires automated evidence; marked live checks remain separa
 | Compact controls | Implemented | Scoped supported menus. |
 | Topic status panel | Implemented (ADR 0110), default-off; owner live-accepted | Read-only snapshot plus owner refresh. |
 | Agent mail between topics | Implemented (ADR 0112), default-off; owner live-accepted | Configured routes; owner press processes a letter. |
+| One-tap new session with handoff | Implemented (ADR 0114), default-off; live acceptance pending | Owner press opens the next session with the previous answer. |
 | Saved Codex connect | Implemented; live Telegram acceptance pending | One exact-thread workflow. |
 | Summary-free Codex return | Implemented | Lease only. |
 | Codex rotation events | Retired | No pool integration. |

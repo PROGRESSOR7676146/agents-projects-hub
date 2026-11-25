@@ -8,6 +8,7 @@ from .codex_appserver import LimitWindow, RateLimits, TurnResult, context_remain
 from .codex_turn_modes import goal_mode_label
 from .quota_windows import quota_window_label
 from .reply_choices import append_choice_suffix, extract_reply_choices
+from .session_handoff import append_handoff_suffix, extract_handoff
 
 _ABSENT_DETAIL_VALUES = {"", "unavailable", "unknown", "none", "n/a"}
 _MONTH_LABELS = (
@@ -96,10 +97,15 @@ def _compact_details(details: dict[str, str]) -> str:
 
 def format_agent_response(answer: str, details: dict[str, str]) -> str:
     answer, choices = extract_reply_choices(answer or "")
+    handoff = None if choices else extract_handoff(answer)
+    if handoff is not None:
+        answer = handoff[0]
     visible = html.escape(answer or "The agent completed without a visible text response.")
     block = _compact_details(details)
     if block:
         visible = f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
+    if handoff is not None:
+        return append_handoff_suffix(visible, handoff[1])
     return append_choice_suffix(visible, choices)
 
 

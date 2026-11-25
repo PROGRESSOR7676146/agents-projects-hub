@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from .incoming_materials import (
     ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
@@ -33,6 +33,7 @@ AdmissionRejection = Literal[
     "local_transfer_changed",
     "persistent_root_blocker",
     "codex_permission_selection_changed",
+    "session_changed",
 ]
 AdmissionFailureReason = Literal["material_download", "enqueue_uncommitted"]
 
@@ -48,6 +49,9 @@ class DurableAdmissionRequest:
     batchable_user_text: str | None = None
     take_local_writer: bool = False
     writer_transfer_snapshot: WriterTransferSnapshot | None = None
+    # ADR 0114: archive ``session`` and admit this input as its successor's
+    # first one in the same transaction. Text only, never batched.
+    rotate_session: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +115,15 @@ class DurableProviderAdmission:
         if self.state.message_already_observed(message.chat_id, message.message_id):
             return DuplicateAdmission()
 
-        if request.session.agent_id == "codex":
+        if request.rotate_session and (
+            request.batchable_user_text is not None
+            or message.attachments
+            or message.unavailable_materials
+            or request.take_local_writer
+        ):
+            raise ValueError("session rotation admits one plain text input")
+        # A rotated input runs in a new generation with the current selection.
+        if request.session.agent_id == "codex" and not request.rotate_session:
             refusal = self._permission_refusal(request)
             if refusal is not None:
                 return refusal
@@ -126,13 +138,18 @@ class DurableProviderAdmission:
             return RejectedAdmission("input_too_long")
 
         if not request.take_local_writer:
-            blocked = self.state.reject_blocked_provider_input(
-                chat_id=message.chat_id,
-                message_id=message.message_id,
-                topic_id=request.topic.topic_id,
-                session_id=request.session.session_id,
-                session_generation=request.session.generation,
-            )
+            try:
+                blocked = self.state.reject_blocked_provider_input(
+                    chat_id=message.chat_id,
+                    message_id=message.message_id,
+                    topic_id=request.topic.topic_id,
+                    session_id=request.session.session_id,
+                    session_generation=request.session.generation,
+                )
+            except StateError:
+                if request.rotate_session:
+                    return RejectedAdmission("session_changed")
+                raise
             if blocked is not None:
                 return RejectedAdmission("persistent_root_blocker")
 
@@ -221,7 +238,9 @@ class DurableProviderAdmission:
                     agent_id=request.session.agent_id,
                     session_id=request.session.session_id,
                     session_generation=request.session.generation,
-                    provider_session_id=request.session.provider_session_id,
+                    provider_session_id=(
+                        None if request.rotate_session else request.session.provider_session_id
+                    ),
                     model=request.session.model,
                     effort=request.session.effort,
                     payload_text=payload,
@@ -231,6 +250,7 @@ class DurableProviderAdmission:
                     input_group_key=group_key,
                     take_local_writer=request.take_local_writer,
                     expected_transfer=expected_transfer,
+                    rotate_session=request.rotate_session,
                     prepare_task_notices=self.prepare_task_notices,
                     queue_capacity=self.queue_capacity,
                     telegram_ingress_identity=self.telegram_ingress_identity,
@@ -262,6 +282,9 @@ class DurableProviderAdmission:
                 return RejectedAdmission("input_before_session_activation")
             if request.take_local_writer:
                 return RejectedAdmission("local_transfer_changed")
+            if request.rotate_session:
+                # The session or its guards changed: nothing committed or claimed.
+                return RejectedAdmission("session_changed")
             return DurableAdmissionFailure("enqueue_uncommitted", exc)
         except Exception as exc:
             return DurableAdmissionFailure("enqueue_uncommitted", exc)
@@ -303,3 +326,33 @@ class DurableProviderAdmission:
             "utf-8"
         )
         return "telegram-album:" + hashlib.sha256(raw_group).hexdigest()
+
+
+def controller_provider_admission(
+    service: Any, message: TopicMessage, session: SessionRecord
+) -> DurableProviderAdmission:
+    """The Controller's durable admission for one Telegram input (ingress and buttons)."""
+    config = service.config
+    external = session.agent_id in config.external_worker_agent_ids
+    return DurableProviderAdmission(
+        state=service.state,
+        telegram=service.telegram,
+        state_path=config.state_path,
+        observer_agent_id=service.agent.agent_id,
+        telegram_ingress_identity=service._telegram_group_ingress(message),
+        message_batch_quiet_ms=config.message_batch_quiet_ms,
+        message_batch_max_ms=config.message_batch_max_ms,
+        queue_capacity=QueueCapacityConfig(
+            config.max_parallel_roots,
+            config.external_worker_agent_ids if external else (),
+            {"codex": config.codex_worker_count, "claude": config.claude_worker_count}
+            if external
+            else {},
+        ),
+        prepare_task_notices=(
+            config.hub_bot is not None
+            and config.dispatch_mode == "queue"
+            and config.queue_runtime == "external"
+            and config.outbox_runtime == "external"
+        ),
+    )

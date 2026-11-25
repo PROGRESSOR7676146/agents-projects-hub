@@ -583,6 +583,30 @@ class HubConfigTests(unittest.TestCase):
         )
         self.assertTrue(config.project_provisioning.enabled)
 
+    def test_session_handoff_is_default_off_and_needs_the_hub_bot_queue(self) -> None:
+        self.assertFalse(load_hub_config(self.write_config()).session_handoff)
+        with self.assertRaisesRegex(HubConfigError, "session_handoff must be a boolean"):
+            load_hub_config(self.write_config(session_handoff="yes"))
+        with self.assertRaisesRegex(HubConfigError, "session_handoff requires the Hub bot"):
+            load_hub_config(self.write_config(session_handoff=True))
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+        config = load_hub_config(
+            self.write_config(
+                hub_bot={
+                    "telegram_username": "project_hub_bot",
+                    "token_file": str(hub_token),
+                    "telegram_user_id": 654321,
+                },
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
+                session_handoff=True,
+            )
+        )
+        self.assertTrue(config.session_handoff)
+
     def test_hub_bot_remains_optional_for_backward_compatible_configs(self) -> None:
         self.assertIsNone(load_hub_config(self.write_config()).hub_bot)
 
