@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -27,6 +28,43 @@ from tests.native_runtime_mounts import native_runtime_mounts
 
 class NativeTransportFixtureError(RuntimeError):
     """A bounded fixed-code compatibility failure, never native raw output."""
+
+
+def package_import_closure(module: Path) -> tuple[Path, ...]:
+    """Return ``module`` and every same-package module it imports, transitively.
+
+    Namespace fixtures mount only these files, so a new relative import in the
+    production parser must not silently break the native corpus.
+    """
+    package = module.parent
+    seen: dict[str, Path] = {}
+    pending = [module.stem]
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        path = package / (name + ".py")
+        if not path.is_file():
+            raise NativeTransportFixtureError("package_import_closure_missing:" + name)
+        seen[name] = path
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), str(path))):
+            if not isinstance(node, ast.ImportFrom) or node.level == 0:
+                continue
+            if node.level != 1:
+                raise NativeTransportFixtureError("package_import_closure_unsupported:" + name)
+            if node.module:
+                pending.append(node.module.split(".")[0])
+            else:
+                pending.extend(alias.name for alias in node.names)
+    return tuple(seen[name] for name in sorted(seen))
+
+
+def package_import_binds(module: Path, destination: str) -> list[str]:
+    """Read-only bwrap binds of the import closure into ``destination``."""
+    binds: list[str] = []
+    for path in package_import_closure(module):
+        binds.extend(("--ro-bind", str(path), destination + "/" + path.name))
+    return binds
 
 
 def _copy_native_binary(source: Path, destination: Path) -> str:
@@ -344,9 +382,7 @@ def _run_native_case(
                 "--ro-bind",
                 str(empty),
                 "/opt/example/tests/__init__.py",
-                "--ro-bind",
-                str(parser),
-                "/opt/example/hermes_codex_router/claude_stream.py",
+                *package_import_binds(parser, "/opt/example/hermes_codex_router"),
                 "--ro-bind",
                 str(empty),
                 "/opt/example/hermes_codex_router/__init__.py",

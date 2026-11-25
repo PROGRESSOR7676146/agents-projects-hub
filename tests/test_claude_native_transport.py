@@ -24,6 +24,7 @@ from tests.claude_native_transport_fixture import (
     NativeTransportFixtureError,
     _copy_native_binary,
     build_native_fixture_argv,
+    package_import_closure,
     run_native_transport_case,
     validate_native_identity,
     validate_transport_evidence,
@@ -412,6 +413,43 @@ os._exit(0)
                 self.assertIsNotNone(process.poll())
                 self.assertTrue(process.stdout is not None and process.stdout.closed)
                 self.assertTrue(process.stderr is not None and process.stderr.closed)
+
+
+class NativeFixtureImportClosureTests(unittest.TestCase):
+    """Runs without a native binary, so CI catches a parser the namespace cannot import."""
+
+    def test_parser_closure_imports_in_isolation(self) -> None:
+        from hermes_codex_router import claude_stream
+
+        closure = package_import_closure(Path(claude_stream.__file__))
+        self.assertIn("claude_stream.py", {path.name for path in closure})
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "hermes_codex_router"
+            package.mkdir()
+            (package / "__init__.py").write_bytes(b"")
+            for path in closure:
+                (package / path.name).write_bytes(path.read_bytes())
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; sys.path.insert(0, sys.argv[1]); "
+                    "import hermes_codex_router.claude_stream",
+                    directory,
+                ],
+                cwd=directory,
+                capture_output=True,
+                timeout=60,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace")[-2000:])
+
+    def test_closure_rejects_a_missing_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "example.py"
+            module.write_text("from .absent import value\n", encoding="utf-8")
+            with self.assertRaisesRegex(NativeTransportFixtureError, "missing:absent"):
+                package_import_closure(module)
 
 
 class NativeClaudeTransportTests(unittest.TestCase):
