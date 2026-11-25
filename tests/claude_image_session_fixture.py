@@ -13,6 +13,7 @@ from tests.claude_native_transport_fixture import (
     NativeTransportFixtureError,
     _copy_native_binary,
     build_native_fixture_argv,
+    package_import_binds,
     validate_native_identity,
 )
 from tests.native_process_capture import capture_owned_process
@@ -179,9 +180,13 @@ def run_image_session_fixture(
             for source, destination in (
                 (empty, "/opt/example/tests/__init__.py"),
                 (empty, "/opt/example/hermes_codex_router/__init__.py"),
-                (Path(claude_stream.__file__), "/opt/example/hermes_codex_router/claude_stream.py"),
             ):
                 argv.extend(("--ro-bind", str(source), destination))
+            argv.extend(
+                package_import_binds(
+                    Path(claude_stream.__file__), "/opt/example/hermes_codex_router"
+                )
+            )
             if worker_input:
                 argv.extend(
                     (
