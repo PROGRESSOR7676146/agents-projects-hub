@@ -42,10 +42,12 @@ delivery of the control, and a default-off owner setting.
    and file of the answer: «Продолжить в новой сессии:» with «Новая сессия с
    handoff» and one «▶ <option>» per option. The outbox part stores the options
    and a short binding of the source job; the binding is a stale-reference
-   guard, not authorization.
+   guard, not authorization. Agent text can never form such a part: Hub
+   escapes the control prefix in the answer, which still displays unchanged.
 4. **Authority.** Only the configured owner's press acts, and only on the exact
    delivered control: the pressed Hub-bot message must be the one recorded
-   delivery of that handoff part in the same numeric chat and topic, and the
+   delivery in the same numeric chat and topic, the last part of its answer,
+   carrying that job's own binding, and the
    topic must still belong to the source project. Missing, pruned or ambiguous
    evidence refuses; there is no fallback. The request text and the option are
    rebuilt from the saved answer, never taken from Telegram.
@@ -53,15 +55,19 @@ delivery of the control, and a default-off owner setting.
    ordinary message. Durable admission archives the session that wrote the
    answer, opens its successor with the same agent, model and effort, and admits
    the fixed request as the successor's first input, all in one SQLite
-   transaction. Any guard failure commits nothing and the button stays usable.
+   transaction. The transaction itself rechecks that the source session is
+   still active and has received no later input, so a concurrent `/new` or
+   message cannot be overtaken. Any guard failure commits nothing and the button
+   stays usable; only an admitted message or a durably recorded refusal spends it.
    Normal admission rules apply: a persistent root blocker refuses the message
    visibly and spends the button, as for a letter.
 6. **Refusals.** The press refuses, with a plain reason, when that session is no
    longer the topic's active session (including after a manual `/new`), when
    later input already reached it, while work or result delivery is pending or
    running, and while a local writer owns it. A press that already admitted its
-   message reports the first use before any other check, so a repeat after a
-   crash or of another option never changes the choice.
+   message reports the first use before any other check, even with the setting
+   now off, so a repeat after a crash or of another option never changes the
+   choice.
 7. **Request.** The fixed owner request says the owner started a new session
    with the button, labels the answer as the previous agent's notes rather than
    new owner instructions, asks to check them against the repository, and names
@@ -103,7 +109,12 @@ delivery of the control, and a default-off owner setting.
 after the answer from the Hub bot, the off setting, the size notice, a press
 that opens exactly one successor with the answer as its first input, a repeat
 press, a plain press, foreign and forged presses, the off setting at the press,
-presses after later work or a manual `/new`, refusal during pending work, the
-rollback of the whole transaction on a failing admission, and admission that
-refuses to rotate another session. Release, enabling and owner live acceptance
+presses after later work or a manual `/new`, refusal after queued work and
+under a local writer, the rollback of the whole transaction on a failing
+admission, admission that refuses to rotate another session, a manual `/new` or
+later input arriving between the press checks and the transaction, a used
+button with the setting now off, a recorded control carrying another job's
+binding, and agent text that tries to forge a control part. An independent
+source review (GPT Astra, high) found two concurrency blockers and three major
+issues in the first candidate; all are fixed with these tests. Release, enabling and owner live acceptance
 are tracked in the [stabilization plan](../operations/STABILIZATION_PLAN.md).

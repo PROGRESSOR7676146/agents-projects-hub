@@ -437,6 +437,57 @@ class PressTests(unittest.TestCase):
         self.press(control, f"ho:0:{handoff_binding(job_id)}", callback_id="cb-2")
         self.assertNotEqual(self.state.active_session(self.topic_id), self.s1)
 
+    def test_manual_new_during_the_press_is_not_archived(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        manual: list[Any] = []
+
+        def interleave(state: Any, topic_id: int, job: Any) -> None:
+            manual.append(state.new_active_session(topic_id, expected_session_id=job.session_id))
+            return None
+
+        with mock.patch(
+            "hermes_codex_router.session_handoff_callback._session_refusal", interleave
+        ):
+            self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assertEqual(self.state.active_session(self.topic_id), manual[0])
+        self.assertEqual(self.jobs_in(manual[0].session_id), [])
+        self.assertIn("изменилась", self.hub.callbacks[-1][1])
+
+    def test_later_input_is_refused_inside_the_transaction(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        self.answer("Later answer", message_id=11)
+        with mock.patch(
+            "hermes_codex_router.session_handoff_callback._session_refusal", return_value=None
+        ):
+            self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assert_unchanged()
+        self.assertFalse(self.state.message_already_observed(CHAT, control))
+
+    def test_used_button_reports_use_even_when_the_feature_is_now_off(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.service.config = make_config(self.base, enabled=False)
+        self.press(control, f"ho:0:{handoff_binding(job_id)}", callback_id="cb-2")
+        self.assertEqual(self.hub.callbacks[-1][1], "Кнопка уже использована")
+
+    def test_recorded_control_must_carry_its_own_jobs_binding(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        forged = handoff_binding("another-job")
+        self.state._connection.execute(
+            "UPDATE telegram_outbox_parts SET telegram_html = ? WHERE telegram_message_id = ?",
+            (handoff_part_html((), forged), control),
+        )
+        self.press(control, f"ho:0:{forged}")
+        self.press(control, f"ho:0:{handoff_binding(job_id)}", callback_id="cb-2")
+        self.assert_unchanged()
+
+    def test_agent_text_cannot_forge_a_control_part(self) -> None:
+        forged = f"Explanation\n\n{handoff_part_html(('A',), '0123456789ab')}"
+        html = format_agent_response(forged, {})
+        self.assertIsNone(split_handoff_suffix(html)[1])
+        self.assertIn("&#91;[hub-handoff:v1:0123456789ab]]", html)
+        self.assertIsNone(parse_handoff_part(html.split("\n\n", 1)[1]))
+
     def test_admission_refuses_rotation_of_another_session(self) -> None:
         topic = self.state.find_topic(CHAT, THREAD)
         assert topic is not None
@@ -445,7 +496,7 @@ class PressTests(unittest.TestCase):
         message = TopicMessage(0, 600, CHAT, THREAD, "project", 42, "text")
         result = controller_provider_admission(self.service, message, stale).admit(
             DurableAdmissionRequest(
-                message=message, topic=topic, session=stale, prompt="text", rotate_session=True
+                message=message, topic=topic, session=stale, prompt="text", rotate_after=0
             )
         )
         self.assertEqual(result, RejectedAdmission("session_changed"))
@@ -455,7 +506,7 @@ class PressTests(unittest.TestCase):
         message = TopicMessage(0, 601, CHAT, THREAD, "project", 42, "text")
         result = controller_provider_admission(self.service, message, current).admit(
             DurableAdmissionRequest(
-                message=message, topic=topic, session=current, prompt="text", rotate_session=True
+                message=message, topic=topic, session=current, prompt="text", rotate_after=0
             )
         )
         self.assertIsInstance(result, CommittedAdmission)

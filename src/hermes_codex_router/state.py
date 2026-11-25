@@ -927,7 +927,7 @@ class HubState(HubStateFacade):
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
         telegram_ingress_identity: str | None = None,
-        rotate_session: bool = False,
+        rotate_after: int | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one provider input and its receipt/notices."""
         from .provider_admission_state import ProviderAdmissionState
@@ -956,7 +956,7 @@ class HubState(HubStateFacade):
                 prepare_task_notices=prepare_task_notices,
                 queue_capacity=queue_capacity,
                 telegram_ingress_identity=telegram_ingress_identity,
-                rotate_session=rotate_session,
+                rotate_after=rotate_after,
             )
 
     def enqueue_or_append_provider_job(

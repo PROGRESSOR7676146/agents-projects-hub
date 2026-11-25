@@ -50,8 +50,9 @@ class DurableAdmissionRequest:
     take_local_writer: bool = False
     writer_transfer_snapshot: WriterTransferSnapshot | None = None
     # ADR 0114: archive ``session`` and admit this input as its successor's
-    # first one in the same transaction. Text only, never batched.
-    rotate_session: bool = False
+    # first one in the same transaction, unless input reached ``session``
+    # after this topic sequence (the source answer). Text only, never batched.
+    rotate_after: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,10 +113,11 @@ class DurableProviderAdmission:
         writer_transfer_preflight: WriterTransferPreflight | None = None,
     ) -> DurableAdmissionResult:
         message = request.message
+        rotating = request.rotate_after is not None
         if self.state.message_already_observed(message.chat_id, message.message_id):
             return DuplicateAdmission()
 
-        if request.rotate_session and (
+        if rotating and (
             request.batchable_user_text is not None
             or message.attachments
             or message.unavailable_materials
@@ -123,7 +125,7 @@ class DurableProviderAdmission:
         ):
             raise ValueError("session rotation admits one plain text input")
         # A rotated input runs in a new generation with the current selection.
-        if request.session.agent_id == "codex" and not request.rotate_session:
+        if request.session.agent_id == "codex" and not rotating:
             refusal = self._permission_refusal(request)
             if refusal is not None:
                 return refusal
@@ -147,7 +149,7 @@ class DurableProviderAdmission:
                     session_generation=request.session.generation,
                 )
             except StateError:
-                if request.rotate_session:
+                if rotating:
                     return RejectedAdmission("session_changed")
                 raise
             if blocked is not None:
@@ -238,9 +240,7 @@ class DurableProviderAdmission:
                     agent_id=request.session.agent_id,
                     session_id=request.session.session_id,
                     session_generation=request.session.generation,
-                    provider_session_id=(
-                        None if request.rotate_session else request.session.provider_session_id
-                    ),
+                    provider_session_id=(None if rotating else request.session.provider_session_id),
                     model=request.session.model,
                     effort=request.session.effort,
                     payload_text=payload,
@@ -250,7 +250,7 @@ class DurableProviderAdmission:
                     input_group_key=group_key,
                     take_local_writer=request.take_local_writer,
                     expected_transfer=expected_transfer,
-                    rotate_session=request.rotate_session,
+                    rotate_after=request.rotate_after,
                     prepare_task_notices=self.prepare_task_notices,
                     queue_capacity=self.queue_capacity,
                     telegram_ingress_identity=self.telegram_ingress_identity,
@@ -282,7 +282,7 @@ class DurableProviderAdmission:
                 return RejectedAdmission("input_before_session_activation")
             if request.take_local_writer:
                 return RejectedAdmission("local_transfer_changed")
-            if request.rotate_session:
+            if rotating:
                 # The session or its guards changed: nothing committed or claimed.
                 return RejectedAdmission("session_changed")
             return DurableAdmissionFailure("enqueue_uncommitted", exc)

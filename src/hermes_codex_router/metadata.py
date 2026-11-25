@@ -101,6 +101,8 @@ def format_agent_response(answer: str, details: dict[str, str]) -> str:
     if handoff is not None:
         answer = handoff[0]
     visible = html.escape(answer or "The agent completed without a visible text response.")
+    # Agent text never forms a Hub control part: "&#91;" still shows "[".
+    visible = visible.replace("[[hub-", "&#91;[hub-")
     block = _compact_details(details)
     if block:
         visible = f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
