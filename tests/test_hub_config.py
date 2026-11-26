@@ -1206,7 +1206,7 @@ class HubConfigTests(unittest.TestCase):
             "token_file": str(self.token),
             "terminal_enabled": True,
         }
-        confined = {
+        confined: dict[str, object] = {
             "tlive_config": "/home/example/private/tlive.json",
             "tlive_home": "/home/example/private/tlive",
             "provider_home": "/home/example/provider",
