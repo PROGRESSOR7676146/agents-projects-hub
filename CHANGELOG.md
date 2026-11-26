@@ -5,6 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.34] - 2026-11-26
+
+- Provide a distinct release for the first Claude CLI store deployment
+  (ADR 0113). Both releases support state schema 61, and the previous
+  release retains its embedded CLI for rollback.
+- Record direct Codex continuation through the Telegram handoff button.
+
 ## [0.11.33] - 2026-11-26
 
 - Day deploys only on the owner's request (ADR 0115, amends ADR 0087 rule 3):

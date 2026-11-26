@@ -1,6 +1,6 @@
 # Agents Projects Hub recovery capsule
 
-Maintained for Hub `0.11.33`, state schema `61`. This capsule is a bounded local
+Maintained for Hub `0.11.34`, state schema `61`. This capsule is a bounded local
 recovery guide, not authority to weaken policy, retry ambiguous work, expose
 private state, or perform a rollout.
 
