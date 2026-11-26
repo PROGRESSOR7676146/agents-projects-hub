@@ -5,6 +5,18 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.33] - 2026-11-26
+
+- Day deploys only on the owner's request (ADR 0115, amends ADR 0087 rule 3):
+  other ready releases wait for the installation's scheduled deploy window,
+  and for the owner's request until that unattended entry exists.
+- Local no-tlive mode (ADR 0116), off until an installation sets
+  `"tlive_enabled": false`, which loads only with the Codex `full` profile and
+  no confined Claude permission profile. Hermes is then the only recovery
+  channel; `hub_deploy reconfigure` may change the key.
+- The monitor reads recovery evidence fail-closed: only an explicit healthy
+  result counts, and an enabled recovery plane is always evaluated.
+
 ## [0.11.32] - 2026-11-25
 
 - One-tap new session with handoff (ADR 0114), off until an installation sets

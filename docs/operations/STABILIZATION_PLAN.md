@@ -141,7 +141,7 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
 - Claude CLI store (ADR 0113, v0.11.32): pending the migration deploy, the host update
   tool's nightly `claude-promote` call and the first promotion and rollback in
   the installed system. Offline tests and a real-CLI gate run cover the source.
-- Local no-tlive mode (ADR 0116): pending the switch of an installation in the
+- Local no-tlive mode (ADR 0116, v0.11.33): pending the switch of an installation in the
   order of the [deploy runbook](HUB_DEPLOY.md#switching-tlive-off): the doctor
   reports tlive switched off before the service stops, a monitor run raises no
   tlive alert, the next owner-initiated Codex turn completes, and the way back
@@ -150,9 +150,9 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   Owner acceptance from a phone in a Claude topic at revision `6080628`
   (2026-11-26): the control appeared after an answer ending with
   `[[handoff: ...]]`, and a «▶ option» press opened one new session whose first
-  turn carried that answer and the option. Still open: the refusals of a second
-  press, a press during a turn and a press after `/new`, and the same checks in
-  a Codex topic.
+  turn carried that answer and the option; a second press on the same control
+  was refused with «Кнопка уже использована». Still open: a press during a turn,
+  a press after `/new`, and the same checks in a Codex topic.
 - Agent mail (ADR 0112): owner live-accepted on 0.11.31 (2026-11-24) for both
   directions of the first route. Each letter appeared in the other topic as a
   Hub-bot document with «Обработать», and one phone press started exactly one
