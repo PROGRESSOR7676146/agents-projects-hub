@@ -271,20 +271,27 @@ never after it:
    running meanwhile. Until the window is accepted, recovery of the previous
    window needs the old descriptor: if the new window is not accepted,
    establish which window is current before restoring the matching bytes.
-3. `reconfigure` with `"tlive_enabled": false` added. The installed runtime
-   refuses it unless Codex uses `full` and no confined Claude profile is
-   configured.
-4. Stop and disable only tlive's unit through the service manager. Keep its
+3. `reconfigure` with `"tlive_enabled": false` added. A runtime that knows the
+   key refuses it unless Codex uses `full` and no confined Claude profile is
+   configured; an older runtime accepts and ignores it, and the tool cannot
+   tell the difference.
+4. Before touching the service, run the doctor: it must report `tlive` as
+   switched off by owner configuration and no `recovery:tlive` check. Without
+   that positive result the installed runtime does not apply the switch; stop
+   and revert the amendment instead.
+5. Stop and disable only tlive's unit through the service manager. Keep its
    package, unit files, build and bot token.
-5. Check: the doctor reports `tlive` switched off and `recovery:hermes`
-   healthy, a monitor run raises no tlive alert, an ordinary Codex turn
-   completes, and the consumer's check result goes into the report.
+6. Check passively: `recovery:hermes` is healthy, the next monitor run raises
+   no tlive alert, and the consumer's check result goes into the report. Do not
+   start a model turn for this; the next owner-initiated Codex turn completes
+   the check, and the report lists it as pending until then.
 
 The way back enables and starts tlive and checks that it is active before a
 `reconfigure` sets `"tlive_enabled": true`; the key stays. Until a later
 window puts tlive back into `untouched_units`, the deploy preflight does not
-check it. A release rollback to a release without the key expects tlive again,
-so start tlive before it.
+check it. Before any release rollback, look at the configuration and runtime
+it restores: a release without the key, or a config from before the switch,
+expects tlive again, so enable, start and check tlive first.
 
 ## Claude CLI store
 

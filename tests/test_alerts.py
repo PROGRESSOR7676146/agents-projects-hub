@@ -125,17 +125,19 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertIn("error", {item.severity for item in both_down})
 
     def test_tlive_switched_off_is_neither_alerted_nor_counted_as_a_channel(self) -> None:
-        # ADR 0116: an absent tlive entry means the owner switched it off.
+        # ADR 0116: the configuration, not the report, decides whether tlive is a channel.
         healthy = evaluate_operational_alerts(
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
-            recovery_status={"hermes": True},
+            recovery_status={"hermes": True, "tlive": False},
+            tlive_expected=False,
         )
         self.assertEqual(healthy, ())
         hermes_down = evaluate_operational_alerts(
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             recovery_status={"hermes": False},
+            tlive_expected=False,
         )
         self.assertEqual(
             {(item.code, item.severity) for item in hermes_down},
@@ -146,6 +148,17 @@ class OperationalAlertTests(unittest.TestCase):
         )
         everything = next(item for item in hermes_down if item.key == "recovery:all")
         self.assertIn("only independent recovery channel", everything.message)
+
+    def test_missing_tlive_evidence_is_an_outage_while_tlive_is_on(self) -> None:
+        # A partial doctor report must not read as the owner's switch.
+        for status in ({"hermes": True}, {"hermes": True, "tlive": None}):
+            with self.subTest(status=status):
+                alerts = evaluate_operational_alerts(
+                    state_snapshot={"pending_dispatches": []},
+                    doctor_ok=True,
+                    recovery_status=status,  # type: ignore[arg-type]
+                )
+                self.assertEqual({item.code for item in alerts}, {"tlive_recovery_unavailable"})
 
     def test_hermes_delivery_uses_argv_and_no_shell(self) -> None:
         calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
@@ -367,6 +380,8 @@ class OperationalAlertTests(unittest.TestCase):
                         config, state, None, notify=False, repair=False, cooldown_seconds=0
                     )
                 self.assertEqual(evaluate.call_args.kwargs["codex_listener"], expected)
+                # The tlive channel is expected from configuration, never from the report.
+                self.assertIs(evaluate.call_args.kwargs["tlive_expected"], config.tlive_enabled)
                 state.close()
 
     def test_unreachable_configured_codex_proxy_alert_is_edge_triggered(self) -> None:

@@ -336,6 +336,7 @@ def _run_monitor_once(
             state_snapshot=snapshot,
             doctor_ok=bool(doctor["ok"]),
             recovery_status=recovery_status or None,
+            tlive_expected=config.tlive_enabled,
             telegram_access=access,
             hermes_telegram=hermes_telegram,
             runtime_health=runtime_health,

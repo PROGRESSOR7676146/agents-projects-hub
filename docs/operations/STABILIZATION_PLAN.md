@@ -143,8 +143,9 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   the installed system. Offline tests and a real-CLI gate run cover the source.
 - Local no-tlive mode (ADR 0116): pending the switch of an installation in the
   order of the [deploy runbook](HUB_DEPLOY.md#switching-tlive-off): the doctor
-  reports tlive switched off, a monitor run raises no tlive alert, an ordinary
-  Codex turn completes, and the way back is rehearsed.
+  reports tlive switched off before the service stops, a monitor run raises no
+  tlive alert, the next owner-initiated Codex turn completes, and the way back
+  is rehearsed.
 - One-tap new session with handoff (ADR 0114, v0.11.32): installed and enabled.
   Owner acceptance from a phone in a Claude topic at revision `6080628`
   (2026-11-26): the control appeared after an answer ending with

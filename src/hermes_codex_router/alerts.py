@@ -249,6 +249,7 @@ def evaluate_operational_alerts(
     state_snapshot: Mapping[str, object],
     doctor_ok: bool,
     recovery_status: Mapping[str, bool] | None = None,
+    tlive_expected: bool = True,
     telegram_access: Mapping[tuple[str, str], bool | None] | None = None,
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
@@ -328,9 +329,10 @@ def evaluate_operational_alerts(
             )
         )
     if recovery_status is not None:
-        hermes_ok = recovery_status.get("hermes", False)
-        # Absent: the owner switched tlive off (ADR 0116); it is not a channel then.
-        tlive_ok = recovery_status.get("tlive")
+        hermes_ok = recovery_status.get("hermes", False) is True
+        # The configuration, not the report, says whether tlive is a channel: switched
+        # off (ADR 0116) it is none; switched on, missing evidence is an outage.
+        tlive_ok = recovery_status.get("tlive", False) is True if tlive_expected else None
         if not hermes_ok:
             alerts.append(
                 OperationalAlert(

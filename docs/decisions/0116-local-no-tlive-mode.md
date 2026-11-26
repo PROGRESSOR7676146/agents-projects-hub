@@ -45,6 +45,8 @@ which installations with human approvals still need.
      probing it, and omits `recovery:tlive`.
    - The monitor stops polling the approval surface and retires its open
      episode instead of keeping it as unobserved. It sends no tlive alert.
+     Whether tlive is a channel comes from the configuration, never from the
+     doctor report: while tlive is on, missing evidence counts as an outage.
    - Hermes is then the only independent recovery channel. Losing it raises
      `recovery_plane_unavailable`, as losing both channels did before.
    - The external Codex app-server stays expected exactly as before, with its
@@ -57,7 +59,8 @@ which installations with human approvals still need.
 5. **Reconfigurable.** Only the doctor and the monitor read the switch, and
    the monitor reads the config on every run, so `hub_deploy reconfigure` may
    change it on an accepted window. The installed runtime must know the key:
-   an older release ignores it and still expects tlive.
+   an older release ignores it and still expects tlive. So the service stops
+   only after the doctor positively reports tlive switched off.
 6. **Procedure.** The [deploy runbook](../operations/HUB_DEPLOY.md#switching-tlive-off)
    owns the order. The descriptor change comes before a window, because
    `rollback` and `reconfigure` refuse a descriptor that differs from the one
