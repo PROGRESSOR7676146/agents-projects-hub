@@ -153,9 +153,10 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   turn carried that answer and the option. The owner confirmed that a second
   press, a press during a turn and a press after `/new` were refused.
   In a Codex topic, the owner observed the stale-session refusal after
-  `/new` and `/model`. Direct continuation and the remaining guard checks
-  are open for Codex. Choosing a different model and carrying the handoff
-  in one flow remains an open design question.
+  `/new` and `/model`. An owner press on v0.11.33 started a fresh Codex
+  session with the saved answer, the same model and the same effort.
+  Other live Codex guard checks remain open. Choosing a different model
+  and carrying the handoff in one flow remains an open design question.
 - Agent mail (ADR 0112): owner live-accepted on 0.11.31 (2026-11-24) for both
   directions of the first route. Each letter appeared in the other topic as a
   Hub-bot document with «Обработать», and one phone press started exactly one
