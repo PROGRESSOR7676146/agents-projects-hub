@@ -17,6 +17,13 @@ Project Hub, Hermes Gateway и tlive не должны образовывать 
 - отказ tlive не разрешает действия автоматически: approval остаётся локальным
   и fail-closed.
 
+Установка, где Hub ни у кого не спрашивает решение через tlive (Codex `full`,
+Claude `host` или без Claude-профиля), может выключить tlive ключом
+`tlive_enabled: false` ([ADR 0116](decisions/0116-local-no-tlive-mode.md)).
+Тогда контур восстановления состоит из одного Hermes, и потеря Hermes —
+ошибка `recovery_plane_unavailable`. Порядок переключения описан в
+[runbook деплоя](operations/HUB_DEPLOY.md#switching-tlive-off).
+
 Независимость каналов не отменяет совместимость optional Hub plugin/hook:
 Gateway импортирует Hub-код и потребляет SQLite. Source/environment pin и schema
 нужно согласовать при rollout/rollback по

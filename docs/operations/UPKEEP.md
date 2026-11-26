@@ -1,10 +1,12 @@
 # Routine upkeep sweep
 
 Status: active
-Last updated: 2026-11-02
+Last updated: 2026-11-26
 
 [ADR 0087](../decisions/0087-autonomous-project-upkeep.md) owns what agents
-do on their own and what stays with the owner. This page is the procedure.
+do on their own and what stays with the owner;
+[ADR 0115](../decisions/0115-owner-requested-day-deploys.md) owns when a
+release is deployed. This page is the procedure.
 Run the sweep at the start of every assigned session, after the read order in
 [AGENTS.md](../../AGENTS.md), and again before ending a session that changed
 state. Keep it bounded: a sweep that finds nothing to do should take minutes.
@@ -40,7 +42,13 @@ checks: `status`, `doctor` and the audits. Never run a live model probe.
 3. Resolve stale uncertain jobs and settle stale deliveries as
    [ADR 0087](../decisions/0087-autonomous-project-upkeep.md) rule 5 allows,
    through the supported commands in [queue recovery](QUEUE_RECOVERY.md).
-4. Take the newest release tag on `main` as the target. Deploy it only when it
+4. Take the newest release tag on `main` as the target. Deploy it by day only
+   when the owner explicitly asked to install it or to make a named change
+   live on this installation ([ADR 0115](../decisions/0115-owner-requested-day-deploys.md)).
+   A request to implement, test, merge, release or tag is not such a request.
+   Otherwise list the waiting release in the report with a recommendation: it
+   waits for the installation's scheduled deploy window, or for the owner's
+   request until that unattended entry exists. Deploy only when the target
    is newer than the installed release, is not recorded as a failed target in
    the private handoff, and every condition of rule 3 holds. Follow
    [release preparation](IMMUTABLE_RELEASES.md) and the
@@ -53,9 +61,9 @@ checks: `status`, `doctor` and the audits. Never run a live model probe.
    when the missing condition is one of the reserved steps. A release that
    needs a root-owned runtime installed with `sudo` is such a step: prepare
    the rest and ask for that one command.
-5. On a failed check, roll back and record the target as failed. If the
-   rollback cannot be verified, stop all changes, keep the evidence and tell
-   the owner at once.
+5. On a failed check, roll back at once and record the target as failed. If
+   the rollback cannot be verified, stop all changes, keep the evidence and
+   tell the owner at once.
 
 ### External backup consumers
 
@@ -72,9 +80,11 @@ The private handoff names the owner's read-only check command. That command
 takes no backup lock, copies nothing and contacts no remote storage, so a
 session may run it.
 
-1. After changing any pinned input, run that check in the same session. If it
-   is not ready, tell the owner its reason and that the consumer must re-pin
-   before its next scheduled run.
+1. After changing any pinned input, run that check in the same session and
+   put its result in the report. A consumer that re-pins itself before its
+   next run needs no message. When the check is not ready, the report names
+   its reason and what makes it ready; tell the consumer only what it cannot
+   learn itself, such as a changed service set before the change.
 2. Change the installed configuration only through `hub_deploy reconfigure`
    ([Hub config amendments](HUB_DEPLOY.md#hub-config-amendments)); record an
    edit already made by hand with `reconfigure --adopt`. A hand edit

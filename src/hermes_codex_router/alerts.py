@@ -238,7 +238,7 @@ def _codex_listener_alert(codex_listener: tuple[str, bool, bool] | None) -> Oper
         "codex_app_server_unavailable",
         "warning" if has_fallback else "error",
         f"The external Codex app-server is not listening ({listener_state}); "
-        "tlive cannot attach"
+        "its clients cannot attach"
         + (" and Hub uses the stdio fallback" if has_fallback else "")
         + ". Start it only through a fresh reviewed plan; never remove the socket by hand.",
     )
@@ -249,6 +249,7 @@ def evaluate_operational_alerts(
     state_snapshot: Mapping[str, object],
     doctor_ok: bool,
     recovery_status: Mapping[str, bool] | None = None,
+    tlive_expected: bool = True,
     telegram_access: Mapping[tuple[str, str], bool | None] | None = None,
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
@@ -328,8 +329,10 @@ def evaluate_operational_alerts(
             )
         )
     if recovery_status is not None:
-        hermes_ok = recovery_status.get("hermes", False)
-        tlive_ok = recovery_status.get("tlive", False)
+        hermes_ok = recovery_status.get("hermes", False) is True
+        # The configuration, not the report, says whether tlive is a channel: switched
+        # off (ADR 0116) it is none; switched on, missing evidence is an outage.
+        tlive_ok = recovery_status.get("tlive", False) is True if tlive_expected else None
         if not hermes_ok:
             alerts.append(
                 OperationalAlert(
@@ -339,7 +342,7 @@ def evaluate_operational_alerts(
                     "The independent Hermes Telegram recovery channel is unavailable.",
                 )
             )
-        if not tlive_ok:
+        if tlive_ok is False:
             alerts.append(
                 OperationalAlert(
                     "recovery:tlive",
@@ -354,7 +357,10 @@ def evaluate_operational_alerts(
                     "recovery:all",
                     "recovery_plane_unavailable",
                     "error",
-                    "Both independent recovery channels are unavailable; local intervention is required.",
+                    "Both independent recovery channels are unavailable; local intervention is required."
+                    if tlive_ok is not None
+                    else "The only independent recovery channel, Hermes, is unavailable; "
+                    "local intervention is required.",
                 )
             )
     if telegram_access is not None:

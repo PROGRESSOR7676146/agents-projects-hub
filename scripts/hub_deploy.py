@@ -74,10 +74,11 @@ AMENDMENT_DONE = ("ACCEPTED", "REVERTED", "CORE_HEALTHY_MONITOR_INCOMPLETE")
 AMENDMENT_EFFECTIVE = ("ACCEPTED", "CORE_HEALTHY_MONITOR_INCOMPLETE")
 MANIFEST = "release-manifest.json"
 # Top-level Hub config keys that `reconfigure` may change on an accepted
-# window. Only the Controller and sender read them, from the Hub config. Keys
-# that Claude workers read from their own copy, destinations such as the alert
-# topic, trust, credentials, project registration, security profiles, paths,
-# worker counts and the unit set stay out of reach.
+# window. Only the Controller, the sender and the monitor, which reads the Hub
+# config on every run, read them. Keys that Claude workers read from their own
+# copy, destinations such as the alert topic, trust, credentials, project
+# registration, security profiles, paths, worker counts and the unit set stay
+# out of reach.
 RECONFIGURABLE_KEYS = frozenset(
     {
         # Workers read agent mail routes from the database, where the
@@ -89,6 +90,9 @@ RECONFIGURABLE_KEYS = frozenset(
         # sender projects it at start (ADR 0114).
         "session_handoff",
         "task_no_progress_seconds",
+        # Only the doctor and the monitor read the tlive switch; the config
+        # refuses it unless no Hub work can ask a human through tlive (ADR 0116).
+        "tlive_enabled",
         "topic_panel",
     }
 )

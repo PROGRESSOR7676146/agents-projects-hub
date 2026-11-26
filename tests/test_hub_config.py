@@ -1137,6 +1137,109 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.recovery_plane.tlive_config_path, tlive_config.resolve())
         self.assertEqual(config.recovery_plane.hermes_notify_target, "telegram")
 
+    def test_tlive_off_requires_full_codex_and_no_confined_claude(self) -> None:
+        # ADR 0116: the owner may switch tlive off only where nothing asks a human through it.
+        hermes_config = self.base / "hermes.yaml"
+        hermes_config.write_text("model: provider-selected\n", encoding="utf-8")
+        hermes_config.chmod(0o600)
+        recovery = {
+            "enabled": True,
+            "hermes_config_path": str(hermes_config),
+            # A dormant path for switching back: never resolved or opened while off.
+            "tlive_config_path": str(self.base / "absent" / "tlive.json"),
+        }
+        queue = {
+            "dispatch_mode": "queue",
+            "queue_runtime": "external",
+            "external_worker_agent_ids": ["codex"],
+        }
+        self.assertTrue(load_hub_config(self.write_config()).tlive_enabled)
+        config = load_hub_config(
+            self.write_config(
+                recovery_plane=recovery,
+                tlive_enabled=False,
+                codex_permission_profile="full",
+                **queue,
+            )
+        )
+        self.assertFalse(config.tlive_enabled)
+        self.assertTrue(config.recovery_plane.enabled)
+        self.assertIsNone(config.recovery_plane.tlive_config_path)
+        self.assertEqual(config.recovery_plane.hermes_config_path, hermes_config.resolve())
+        for profile in (None, "example-project-policy"):
+            with (
+                self.subTest(profile=profile),
+                self.assertRaisesRegex(HubConfigError, "tlive_enabled.*full"),
+            ):
+                load_hub_config(
+                    self.write_config(
+                        tlive_enabled=False, codex_permission_profile=profile, **queue
+                    )
+                )
+        for value in (0, "false", None):
+            with self.subTest(value=value), self.assertRaisesRegex(HubConfigError, "boolean"):
+                load_hub_config(
+                    self.write_config(tlive_enabled=value, codex_permission_profile="full", **queue)
+                )
+        # Switched on, the path must still exist as before.
+        with self.assertRaisesRegex(HubConfigError, "tlive_config_path"):
+            load_hub_config(self.write_config(recovery_plane=recovery))
+
+    def test_tlive_off_refuses_confined_claude_permission_profiles(self) -> None:
+        claude_token = self.base / "claude-token"
+        claude_token.write_text("123457:secret-token-value", encoding="utf-8")
+        claude_token.chmod(0o600)
+        claude = {
+            "agent_id": "claude",
+            "display_name": "Claude",
+            "telegram_username": "project_claude_bot",
+            "runtime": "claude",
+            "token_file": str(claude_token),
+            "terminal_enabled": False,
+            "default_model": "sonnet",
+        }
+        codex = {
+            "agent_id": "codex",
+            "display_name": "Codex",
+            "telegram_username": "project_codex_bot",
+            "runtime": "codex",
+            "token_file": str(self.token),
+            "terminal_enabled": True,
+        }
+        confined: dict[str, object] = {
+            "tlive_config": "/home/example/private/tlive.json",
+            "tlive_home": "/home/example/private/tlive",
+            "provider_home": "/home/example/provider",
+            "runtime_roots": ["/usr/bin"],
+            "python_executable": "/usr/bin/python3",
+            "hook_code_root": "/home/example/runtime",
+            "bwrap_executable": "/usr/bin/bwrap",
+            "private_paths": ["/home/example/private"],
+        }
+
+        def load(permissions: dict[str, object]) -> HubConfig:
+            return load_hub_config(
+                self.write_config(
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    external_worker_agent_ids=["codex", "claude"],
+                    agents=[codex, claude],
+                    codex_permission_profile="full",
+                    tlive_enabled=False,
+                    claude_file_permissions=permissions,
+                )
+            )
+
+        # Confined profiles take human permission receipts through tlive.
+        for profile in ("editor", "developer", "workstation"):
+            with (
+                self.subTest(profile=profile),
+                self.assertRaisesRegex(HubConfigError, "tlive_enabled.*confined"),
+            ):
+                load(confined | {"profile": profile})
+        host = load({"profile": "host", "provider_home": "/home/example/provider"})
+        self.assertFalse(host.tlive_enabled)
+
     def test_rejects_unsafe_recovery_service_unit(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "hermes_service"):
             load_hub_config(

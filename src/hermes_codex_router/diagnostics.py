@@ -301,7 +301,7 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
     recovery_available: bool | None = None
     if config.recovery_plane.enabled:
         assert config.recovery_plane.hermes_config_path is not None
-        assert config.recovery_plane.tlive_config_path is not None
+        tlive_path = config.recovery_plane.tlive_config_path
         heartbeat = probe_gateway_heartbeat(
             config.recovery_plane.hermes_config_path.parent / "state" / "gateway.heartbeat"
         )
@@ -310,10 +310,10 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                 hermes_service=config.recovery_plane.hermes_service,
                 tlive_service=config.recovery_plane.tlive_service,
                 hermes_config_path=config.recovery_plane.hermes_config_path,
-                tlive_config_path=config.recovery_plane.tlive_config_path,
+                tlive_config_path=tlive_path,
             ),
             hermes_liveness=heartbeat.ok,
-            tlive_liveness=probe_tlive_runtime(),
+            tlive_liveness=probe_tlive_runtime() if tlive_path is not None else False,
         )
         recovery_available = recovery.available
         expected_chats = tuple(
@@ -326,20 +326,17 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
         checks.append(
             Check("hermes:hub_plugin_compatibility", plugin.ok, plugin.detail, required=False)
         )
+        checks.append(
+            Check("recovery:hermes", recovery.hermes_ok, recovery.details["hermes"], required=False)
+        )
+        if recovery.tlive_ok is not None:
+            checks.append(
+                Check(
+                    "recovery:tlive", recovery.tlive_ok, recovery.details["tlive"], required=False
+                )
+            )
         checks.extend(
             (
-                Check(
-                    "recovery:hermes",
-                    recovery.hermes_ok,
-                    recovery.details["hermes"],
-                    required=False,
-                ),
-                Check(
-                    "recovery:tlive",
-                    recovery.tlive_ok,
-                    recovery.details["tlive"],
-                    required=False,
-                ),
                 Check(
                     "hermes:telegram_group_policy",
                     hermes_policy.ok,
@@ -352,6 +349,17 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                     heartbeat.detail,
                     required=False,
                 ),
+            )
+        )
+
+    if not config.tlive_enabled:
+        # Visible, not probed: off is the owner's choice, not a healthy channel (ADR 0116).
+        checks.append(
+            Check(
+                "tlive",
+                True,
+                "switched off by owner configuration (ADR 0116); not monitored",
+                required=False,
             )
         )
 

@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 from hermes_codex_router.alerts import (
+    OperationalAlert,
     _extract_latest_session_token_usage,
     _resolve_codex_session_label,
     check_codex_session_bloat,
@@ -123,6 +124,42 @@ class OperationalAlertTests(unittest.TestCase):
             },
         )
         self.assertIn("error", {item.severity for item in both_down})
+
+    def test_tlive_switched_off_is_neither_alerted_nor_counted_as_a_channel(self) -> None:
+        # ADR 0116: the configuration, not the report, decides whether tlive is a channel.
+        healthy = evaluate_operational_alerts(
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            recovery_status={"hermes": True, "tlive": False},
+            tlive_expected=False,
+        )
+        self.assertEqual(healthy, ())
+        hermes_down = evaluate_operational_alerts(
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            recovery_status={"hermes": False},
+            tlive_expected=False,
+        )
+        self.assertEqual(
+            {(item.code, item.severity) for item in hermes_down},
+            {
+                ("hermes_recovery_unavailable", "warning"),
+                ("recovery_plane_unavailable", "error"),
+            },
+        )
+        everything = next(item for item in hermes_down if item.key == "recovery:all")
+        self.assertIn("only independent recovery channel", everything.message)
+
+    def test_missing_tlive_evidence_is_an_outage_while_tlive_is_on(self) -> None:
+        # A partial doctor report must not read as the owner's switch.
+        for status in ({"hermes": True}, {"hermes": True, "tlive": None}):
+            with self.subTest(status=status):
+                alerts = evaluate_operational_alerts(
+                    state_snapshot={"pending_dispatches": []},
+                    doctor_ok=True,
+                    recovery_status=status,  # type: ignore[arg-type]
+                )
+                self.assertEqual({item.code for item in alerts}, {"tlive_recovery_unavailable"})
 
     def test_hermes_delivery_uses_argv_and_no_shell(self) -> None:
         calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
@@ -319,12 +356,15 @@ class OperationalAlertTests(unittest.TestCase):
             ((stdio, False, None), ("missing", True, False)),
             ((stdio, True, tlive), ("missing", True, True)),
             ((None, False, None), ("missing", False, True)),
+            # Switching tlive off (ADR 0116) keeps the external server expected.
+            ((stdio, True, None), ("missing", True, True)),
         )
         for (executable, enabled, tlive_path), expected in cases:
             config = Mock()
             config.codex_stdio_executable = executable
             config.recovery_plane.enabled = enabled
             config.recovery_plane.tlive_config_path = tlive_path
+            config.tlive_enabled = tlive_path is not None or not enabled
             with TemporaryDirectory() as directory:
                 state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
                 with (
@@ -341,7 +381,72 @@ class OperationalAlertTests(unittest.TestCase):
                         config, state, None, notify=False, repair=False, cooldown_seconds=0
                     )
                 self.assertEqual(evaluate.call_args.kwargs["codex_listener"], expected)
+                # The tlive channel is expected from configuration, never from the report.
+                self.assertIs(evaluate.call_args.kwargs["tlive_expected"], config.tlive_enabled)
                 state.close()
+
+    def test_monitor_reads_recovery_evidence_fail_closed(self) -> None:
+        # Partial, empty or non-boolean doctor evidence never reads as healthy or as the
+        # owner's tlive switch; only the configuration switches tlive off (ADR 0116).
+        def codes(checks: list[dict[str, object]], *, tlive_enabled: bool) -> set[str]:
+            config = Mock()
+            config.codex_stdio_executable = None
+            config.recovery_plane.enabled = True
+            config.recovery_plane.tlive_config_path = (
+                Path("/home/example/.tlive/config.env") if tlive_enabled else None
+            )
+            config.tlive_enabled = tlive_enabled
+            captured: dict[str, object] = {}
+
+            def evaluate(**kwargs: object) -> tuple[OperationalAlert, ...]:
+                captured["alerts"] = evaluate_operational_alerts(**kwargs)  # type: ignore[arg-type]
+                raise RuntimeError("stop after evaluation")
+
+            with TemporaryDirectory() as directory:
+                state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
+                with (
+                    patch(
+                        "hermes_codex_router.monitoring.evaluate_operational_alerts",
+                        side_effect=evaluate,
+                    ),
+                    patch(
+                        "hermes_codex_router.monitoring.run_doctor",
+                        return_value={"ok": True, "checks": checks},
+                    ),
+                    patch("hermes_codex_router.monitoring.refresh_provider_catalogs"),
+                    patch("hermes_codex_router.monitoring._hermes_health", return_value=None),
+                    patch("hermes_codex_router.monitoring._telegram_access", return_value={}),
+                    patch("hermes_codex_router.monitoring.project_runtime_health"),
+                    self.assertRaises(RuntimeError),
+                ):
+                    _run_monitor_once(
+                        config, state, None, notify=False, repair=False, cooldown_seconds=0
+                    )
+                state.close()
+            alerts = captured["alerts"]
+            assert isinstance(alerts, tuple)
+            return {alert.code for alert in alerts if alert.key.startswith("recovery:")}
+
+        def check(name: str, ok: object) -> dict[str, object]:
+            return {"name": name, "ok": ok, "detail": "example", "required": False}
+
+        hermes = check("recovery:hermes", True)
+        tlive_down = {"tlive_recovery_unavailable"}
+        everything_down = {
+            "hermes_recovery_unavailable",
+            "tlive_recovery_unavailable",
+            "recovery_plane_unavailable",
+        }
+        self.assertEqual(codes([hermes], tlive_enabled=True), tlive_down)
+        self.assertEqual(
+            codes([hermes, check("recovery:tlive", "false")], tlive_enabled=True), tlive_down
+        )
+        self.assertEqual(codes([], tlive_enabled=True), everything_down)
+        self.assertEqual(codes([hermes], tlive_enabled=False), set())
+        self.assertEqual(
+            codes([], tlive_enabled=False),
+            {"hermes_recovery_unavailable", "recovery_plane_unavailable"},
+        )
 
     def test_unreachable_configured_codex_proxy_alert_is_edge_triggered(self) -> None:
         alerts = evaluate_operational_alerts(

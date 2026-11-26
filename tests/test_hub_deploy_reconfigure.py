@@ -143,6 +143,13 @@ class ReconfigureTests(WindowFixture):
     def test_controller_and_sender_settings_are_reconfigurable(self):
         # Workers read these from the database projection, never their own copy.
         self.assertLessEqual({"agent_mail", "session_handoff"}, hub_deploy.RECONFIGURABLE_KEYS)
+        # Only the doctor and the monitor, which reads the config on every run, read
+        # the tlive switch (ADR 0116); recovery paths and services stay out of reach.
+        self.assertIn("tlive_enabled", hub_deploy.RECONFIGURABLE_KEYS)
+        self.assertNotIn("recovery_plane", hub_deploy.RECONFIGURABLE_KEYS)
+        self.assertEqual(
+            hub_deploy.config_changes(b"{}", b'{"tlive_enabled": false}'), ["tlive_enabled"]
+        )
 
     def test_unsafe_or_empty_candidates_are_refused(self):
         self.accept()

@@ -25,6 +25,12 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     the class.
 - **REQ-OPS-005 (Implemented):** Hermes and tlive MUST remain independently monitored recovery
   channels; heartbeat proves liveness, not approval-card delivery.
+  - An explicit local `tlive_enabled: false` (ADR 0116) MUST refuse to load unless Codex uses the
+    local `full` profile and no confined Claude permission profile is configured. Then tlive is
+    neither read, probed, polled nor alerted and its open approval-surface episode retires; with
+    recovery-plane monitoring enabled, Hermes is the only monitored channel, its loss is a total
+    recovery outage, and the external Codex server expectation is unchanged. While tlive is on,
+    missing tlive evidence MUST count as unavailable.
   - Approval health MUST require fresh exact request/session/turn evidence and a positive delivery
     reference; unconfirmed waits MUST alert once without inference, replay, permission decisions or
     automatic repair.
