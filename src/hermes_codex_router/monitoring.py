@@ -305,8 +305,9 @@ def _run_monitor_once(
         doctor = run_doctor(config)
         raw_checks = doctor.get("checks")
         doctor_checks = raw_checks if isinstance(raw_checks, list) else []
+        # Only an explicit boolean True is evidence of a healthy channel.
         recovery_status = {
-            str(check["name"]).split(":", 1)[1]: bool(check["ok"])
+            str(check["name"]).split(":", 1)[1]: check.get("ok") is True
             for check in doctor_checks
             if isinstance(check, dict) and str(check.get("name", "")).startswith("recovery:")
         }
@@ -335,7 +336,8 @@ def _run_monitor_once(
         alerts = evaluate_operational_alerts(
             state_snapshot=snapshot,
             doctor_ok=bool(doctor["ok"]),
-            recovery_status=recovery_status or None,
+            # An enabled plane is evaluated even without evidence: missing is unavailable.
+            recovery_status=recovery_status if config.recovery_plane.enabled else None,
             tlive_expected=config.tlive_enabled,
             telegram_access=access,
             hermes_telegram=hermes_telegram,
