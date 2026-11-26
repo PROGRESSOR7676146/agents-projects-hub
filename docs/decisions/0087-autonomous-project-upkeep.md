@@ -7,7 +7,9 @@ Amends: the deployment, service-restart and branch-deletion reservations in
 [AGENTS.md](../../AGENTS.md#review-merge-and-scope) and the per-update approval
 in the [Hub restart procedure](../operations/HUB_RESTART.ru.md)
 Amended by: [ADR 0092](0092-session-hygiene-and-agent-run-procedures.md)
-(sessions clean up after themselves; the elevated-privilege reservation becomes a defect)
+(sessions clean up after themselves; the elevated-privilege reservation becomes a defect);
+[ADR 0115](0115-owner-requested-day-deploys.md) (rule 3: by day only an owner-requested
+release is deployed, others wait for the deploy window)
 
 ## Context
 

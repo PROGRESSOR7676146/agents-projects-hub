@@ -366,7 +366,9 @@ outside Git.
 
 Enable `recovery_plane` in `hub.json` to make `doctor` and `monitor` report
 Hermes and tlive separately. One failed channel is a warning; losing both is an
-error. The included `tlive.service` is installed only when no user unit already
+error. An installation where no Hub work can ask a human through tlive (Codex
+`full`, no confined Claude profile) may set `"tlive_enabled": false`; Hermes is
+then the only channel ([ADR 0116](docs/decisions/0116-local-no-tlive-mode.md)). The included `tlive.service` is installed only when no user unit already
 exists, so a customized unit is never overwritten. See
 [the recovery runbook](docs/RECOVERY_PLANE.ru.md).
 

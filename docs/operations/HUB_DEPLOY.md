@@ -43,7 +43,8 @@ and outside a Git checkout. The last restart unit must be the controller.
 }
 ```
 
-`untouched_units` lists the managed Codex app-server first, followed by tlive.
+`untouched_units` lists the managed Codex app-server first, followed by tlive
+unless the installation switched tlive off ([below](#switching-tlive-off)).
 The first unit may initially be active or failed; the remaining units must be
 active. The tool records their identities and never starts or stops them. It
 compares the Codex socket only when the app-server was initially active. The
@@ -180,13 +181,13 @@ mode `0600`, absolute path) and pass it with `--config`. The tool compares
 top-level keys with exact JSON values and refuses an unchanged config,
 duplicate keys, non-JSON numbers and any changed key outside
 `RECONFIGURABLE_KEYS`: `agent_mail`, `message_batch_max_ms`,
-`message_batch_quiet_ms`, `session_handoff`, `task_no_progress_seconds` and
-`topic_panel`. Workers read agent mail routes and the handoff setting from the
-database, where the sender projects them at start
+`message_batch_quiet_ms`, `session_handoff`, `task_no_progress_seconds`,
+`tlive_enabled` and `topic_panel`. Workers read agent mail routes and the
+handoff setting from the database, where the sender projects them at start
 ([ADR 0112](../decisions/0112-agent-mail-between-topics.md),
 [ADR 0114](../decisions/0114-one-tap-new-session-with-handoff.md)). Numbers compare as exact
-decimals, and `1`, `1.0` and `true` differ. Only the Controller and sender read
-these keys, from the Hub config. Other keys stay outside `reconfigure`: Claude
+decimals, and `1`, `1.0` and `true` differ. Only the Controller, the sender
+and the monitor, which reads the Hub config on every run, read these keys. Other keys stay outside `reconfigure`: Claude
 workers read some from their own copy, a destination such as the alert topic
 is the owner's choice, and the rest are trust, credentials, project
 registration, security profiles, paths, worker counts or the unit set. The
@@ -252,6 +253,38 @@ The result codes are those of a window, with `REVERTED` (2) for a restored
 amendment. The tool runs from the repository checkout, not from the release
 wheel, so it needs no Hub release. It is covered by offline fixture tests,
 not yet by installed use.
+
+## Switching tlive off
+
+[ADR 0116](../decisions/0116-local-no-tlive-mode.md) lets an installation in
+which no Hub work can ask a human through tlive switch it off. The deploy
+preflight requires every untouched unit after the app-server to be active, and
+`rollback --window` and `reconfigure` refuse a descriptor that differs from
+the copy their window recorded. So the descriptor changes before a window,
+never after it:
+
+1. Tell an external backup consumer about the new service set first; it
+   cannot learn that from its own check.
+2. Keep the exact descriptor bytes, remove tlive's unit from
+   `untouched_units`, then deploy the window of a release that knows
+   `tlive_enabled`. That window records the new descriptor; tlive keeps
+   running meanwhile. Until the window is accepted, recovery of the previous
+   window needs the old descriptor: if the new window is not accepted,
+   establish which window is current before restoring the matching bytes.
+3. `reconfigure` with `"tlive_enabled": false` added. The installed runtime
+   refuses it unless Codex uses `full` and no confined Claude profile is
+   configured.
+4. Stop and disable only tlive's unit through the service manager. Keep its
+   package, unit files, build and bot token.
+5. Check: the doctor reports `tlive` switched off and `recovery:hermes`
+   healthy, a monitor run raises no tlive alert, an ordinary Codex turn
+   completes, and the consumer's check result goes into the report.
+
+The way back enables and starts tlive and checks that it is active before a
+`reconfigure` sets `"tlive_enabled": true`; the key stays. Until a later
+window puts tlive back into `untouched_units`, the deploy preflight does not
+check it. A release rollback to a release without the key expects tlive again,
+so start tlive before it.
 
 ## Claude CLI store
 

@@ -44,7 +44,8 @@ without losing local control or incurring surprise model spend.
 5. Telegram MUST NOT select paths, relax sandboxes or grant approvals.
 6. Sharing MUST contain only bounded visible dialogue, never hidden reasoning, raw tools/screens,
     credentials or environment dumps.
-7. Hub, Hermes Gateway and tlive MUST remain independent recovery paths.
+7. Hub, Hermes Gateway and tlive MUST remain independent recovery paths; an installation MAY
+    switch tlive off only where no Hub work can ask a human through it (ADR 0116).
 8. Small adapters SHOULD fail visibly and reversibly, without concealed repair or fragile CLI
     coupling.
 

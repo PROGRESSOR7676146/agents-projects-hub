@@ -155,6 +155,8 @@ class HubConfig:
     agent_mail: tuple[MailRoute, ...] = ()
     # Default-off one-tap new session with the previous answer (ADR 0114).
     session_handoff: bool = False
+    # The owner may switch tlive off where nothing asks a human through it (ADR 0116).
+    tlive_enabled: bool = True
     # The file this configuration was loaded from, for local hand-off commands.
     source_path: Path | None = None
     # Consecutive productive messages with identical routing are collected
@@ -459,7 +461,32 @@ def _parse_terminal(root: dict[str, Any]) -> TerminalSettings:
     )
 
 
-def _parse_recovery_plane(root: dict[str, Any]) -> RecoveryPlaneSettings:
+def _parse_tlive_enabled(root: dict[str, Any], codex_permission_profile: str | None) -> bool:
+    """The owner's tlive switch (ADR 0116); off only where no Codex work asks a human."""
+    tlive_enabled = root.get("tlive_enabled", True)
+    if not isinstance(tlive_enabled, bool):
+        raise HubConfigError("tlive_enabled must be boolean")
+    if not tlive_enabled and codex_permission_profile != "full":
+        # Every other Codex profile can ask a human through tlive.
+        raise HubConfigError("tlive_enabled false requires codex_permission_profile full")
+    return tlive_enabled
+
+
+def _refuse_confined_claude_without_tlive(
+    tlive_enabled: bool, claude_file_permissions: ClaudeFilePermissionsConfig | None
+) -> None:
+    """Confined Claude profiles take human permission receipts through tlive."""
+    if (
+        not tlive_enabled
+        and claude_file_permissions is not None
+        and claude_file_permissions.profile != "host"
+    ):
+        raise HubConfigError(
+            "tlive_enabled false refuses a confined claude_file_permissions profile"
+        )
+
+
+def _parse_recovery_plane(root: dict[str, Any], *, tlive_enabled: bool) -> RecoveryPlaneSettings:
     recovery_data = _object(root.get("recovery_plane", {}), "recovery_plane")
     recovery_enabled = recovery_data.get("enabled", False)
     if not isinstance(recovery_enabled, bool):
@@ -485,6 +512,8 @@ def _parse_recovery_plane(root: dict[str, Any]) -> RecoveryPlaneSettings:
             "recovery_plane.hermes_config_path",
             must_exist=True,
         )
+    if recovery_enabled and tlive_enabled:
+        # Switched off, the path stays dormant for switching back: never read (ADR 0116).
         tlive_config_path = _absolute_path(
             recovery_data.get("tlive_config_path"),
             "recovery_plane.tlive_config_path",
@@ -1138,7 +1167,8 @@ def load_hub_config(
     )
     codex = _parse_codex_transport(root)
     terminal = _parse_terminal(root)
-    recovery_plane = _parse_recovery_plane(root)
+    tlive_enabled = _parse_tlive_enabled(root, codex.codex_permission_profile)
+    recovery_plane = _parse_recovery_plane(root, tlive_enabled=tlive_enabled)
     projects = _parse_projects(
         root, allow_unbound=allow_unbound, acceptance_actors=acceptance_actors
     )
@@ -1218,6 +1248,7 @@ def load_hub_config(
             "claude_image_input combines with claude_file_permissions or claude_stream_input "
             "only as the host profile with claude_stream_input"
         )
+    _refuse_confined_claude_without_tlive(tlive_enabled, claude_file_permissions)
     if (
         claude_file_permissions is not None
         and claude_file_permissions.profile == "developer"
@@ -1264,6 +1295,7 @@ def load_hub_config(
         topic_panel=topic_panel,
         agent_mail=agent_mail,
         session_handoff=session_handoff,
+        tlive_enabled=tlive_enabled,
         message_batch_quiet_ms=topology.message_batch_quiet_ms,
         message_batch_max_ms=topology.message_batch_max_ms,
         task_no_progress_seconds=_task_progress_seconds(root, "task_no_progress_seconds", 300),

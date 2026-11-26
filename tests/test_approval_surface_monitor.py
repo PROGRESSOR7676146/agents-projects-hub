@@ -144,3 +144,53 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
                 self.assertEqual(sender.send_html.call_count, 2)
                 journal = json.loads(cfg.state_path.with_name("incident-journal.json").read_text())
                 self.assertEqual(len(journal["episodes"]), 2)
+
+    def test_switching_tlive_off_retires_the_surface_incident_without_reading_it(self):
+        # ADR 0116: no tlive means no approval surface; the open episode is retired,
+        # not left open as unobserved and not reported as a healthy delivery.
+        f = fixtures.IncidentMonitorTests()
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = f.config(directory)
+            on = replace(
+                cfg,
+                recovery_plane=replace(
+                    cfg.recovery_plane,
+                    enabled=True,
+                    tlive_config_path=Path(directory) / "tlive/config.json",
+                ),
+            )
+            off = replace(
+                on,
+                tlive_enabled=False,
+                codex_permission_profile="full",
+                recovery_plane=replace(on.recovery_plane, tlive_config_path=None),
+            )
+            now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            wait = ApprovalWait(
+                "thread",
+                "turn",
+                identity_digest(7),
+                identity_digest("item"),
+                now - timedelta(seconds=60),
+            )
+            sender = Mock()
+            with (
+                f.monitor(alerts=()),
+                patch.object(monitoring, "datetime", wraps=datetime) as clock,
+                patch.object(monitoring, "_hermes_health", return_value=None),
+                patch.object(HubState, "pending_codex_approvals", return_value=((wait,), False)),
+                patch.object(monitoring, "read_snapshot", return_value=None) as read,
+                patch.object(monitoring, "_operational_telegram", return_value=(sender, "hub")),
+            ):
+                clock.now.return_value = now
+                monitoring.run_monitor_once(on, notify=True)
+                journal_path = cfg.state_path.with_name("incident-journal.json")
+                journal = json.loads(journal_path.read_text())
+                self.assertIsNone(journal["episodes"][0]["resolved_at"])
+                read.reset_mock()
+                result = monitoring.run_monitor_once(off, notify=True)
+                read.assert_not_called()
+                self.assertIsNone(result["approval_surface"])
+                journal = json.loads(journal_path.read_text())
+                self.assertEqual(len(journal["episodes"]), 1)
+                self.assertIsNotNone(journal["episodes"][0]["resolved_at"])

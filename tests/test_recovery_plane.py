@@ -47,6 +47,49 @@ class RecoveryPlaneTests(unittest.TestCase):
         self.assertEqual(result.service_states, {"hermes": "active", "tlive": "inactive"})
         self.assertEqual(len(calls), 2)
 
+    def test_tlive_switched_off_is_not_probed_and_leaves_hermes_alone(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        commands: list[str] = []
+
+        def service_status(argv: tuple[str, ...]) -> SupervisorServiceState:
+            calls.append(argv)
+            return "active"
+
+        def command_available(command: str) -> bool:
+            commands.append(command)
+            return True
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            hermes = Path(tempdir) / "hermes.yaml"
+            hermes.write_text("model: test\n", encoding="utf-8")
+            hermes.chmod(0o600)
+            probe = RecoveryPlaneProbe(
+                hermes_service="hermes-gateway.service",
+                tlive_service="tlive.service",
+                hermes_config_path=hermes,
+                tlive_config_path=None,
+            )
+            up = probe_recovery_plane(
+                probe, service_status=service_status, command_available=command_available
+            )
+            down = probe_recovery_plane(
+                probe,
+                service_status=lambda argv: "inactive",
+                command_available=command_available,
+            )
+
+        self.assertTrue(up.hermes_ok)
+        self.assertIsNone(up.tlive_ok)
+        self.assertTrue(up.available)
+        self.assertEqual(up.service_states, {"hermes": "active"})
+        self.assertEqual(set(up.details), {"hermes"})
+        self.assertEqual(
+            calls, [("systemctl", "--user", "is-active", "--quiet", "hermes-gateway.service")]
+        )
+        self.assertNotIn("tlive", commands)
+        # Hermes is then the only independent channel; its loss leaves none.
+        self.assertFalse(down.available)
+
     def test_private_configuration_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             config = Path(tempdir) / "config.json"

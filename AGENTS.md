@@ -159,9 +159,8 @@ ask for approval one action at a time.
 
 - **Agents do on their own:** close pull requests that are merged in another
   form or superseded; merge green Dependabot updates; fix and rebase their own
-  pull requests; deploy the newest release forward and restart services for
-  it, and roll back on a failed check; delete branches whose commits are in
-  `main`;
+  pull requests; deploy releases as the deploy timing below allows; roll back
+  on a failed check; delete branches whose commits are in `main`;
   remove clean merged worktrees; settle stale uncertain jobs and deliveries
   through supported Hub commands; keep the handoff and plans current.
 - **The owner keeps:** restoring data from a backup, and any step whose only
@@ -173,6 +172,16 @@ ask for approval one action at a time.
   probes; approval answers; product decisions and scope changes. When unsure
   whether a step can be undone, treat it as reserved and ask once with a
   recommendation.
+- **Deploy timing** (owner decision, 2026-11-25,
+  [ADR 0115](docs/decisions/0115-owner-requested-day-deploys.md)): by day,
+  deploy the newest release forward, and restart services for it, only when
+  the owner explicitly asked to install that release or to make a named change
+  live on this installation. A request to implement, test, merge, release or
+  tag is not one. Every other ready release waits for the installation's
+  scheduled deploy window; until that unattended entry exists, it waits for
+  the owner's request. There is no urgency exception: report a ready security
+  fix at once and recommend installing it. Rollback and restarting a failed
+  component stay immediate.
 - **Always:** back up before changing state, keep a verified rollback that
   needs no backup restore, and send one report per session with the exact
   revision, the rollback pointer and what is left for the owner. A refusal by
@@ -180,9 +189,9 @@ ask for approval one action at a time.
   around.
 - **External backup consumers:** an installation's archive owner may pin Hub
   inputs by hash. After changing any of them (release, configuration, service
-  set, moving or deleting a file), follow
+  set, moving or deleting a file), run the consumer's check as
   [external backup consumers](docs/operations/UPKEEP.md#external-backup-consumers)
-  in the same session and put its check result in the report.
+  describes, in the same session, and put its result in the report.
 
 Owner decision, 2026-11-07 ([ADR 0092](docs/decisions/0092-session-hygiene-and-agent-run-procedures.md)):
 

@@ -20,7 +20,7 @@ from hermes_codex_router.diagnostics import (
     codex_listener_state,
     run_doctor,
 )
-from hermes_codex_router.hub_config import HubConfig, TerminalSettings
+from hermes_codex_router.hub_config import HubConfig, RecoveryPlaneSettings, TerminalSettings
 from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.state import HubState, TelegramContractProvenance
 from hermes_codex_router.unix_socket_diag import IncompleteEvidence, has_listener_for
@@ -183,6 +183,57 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIn("verified per thread at start/resume", str(check["detail"]))
             sessions = next(item for item in checks if item["name"] == "codex_full_sessions")
             self.assertIn("incompatible=0", str(sessions["detail"]))
+
+    def test_doctor_reports_tlive_switched_off_without_probing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            HubState.open(root / "state.db", codex_permission_profile=None).close()
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=root / "projects.json",
+                state_path=root / "state.db",
+                codex_socket_path=root / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(),
+                agents=(),
+                codex_permission_profile="full",
+                tlive_enabled=False,
+                recovery_plane=RecoveryPlaneSettings(
+                    True,
+                    "hermes-gateway.service",
+                    "tlive.service",
+                    root / "hermes.yaml",
+                    None,
+                    "telegram",
+                ),
+            )
+            with (
+                patch("hermes_codex_router.diagnostics.probe_codex_config_proxy") as proxy,
+                patch("hermes_codex_router.diagnostics.probe_gateway_heartbeat") as heartbeat,
+                patch("hermes_codex_router.diagnostics.probe_hermes_group_policy") as policy,
+                patch("hermes_codex_router.diagnostics.probe_running_plugin") as plugin,
+                patch("hermes_codex_router.diagnostics.probe_tlive_runtime") as tlive_runtime,
+            ):
+                for probe in (proxy, heartbeat, policy, plugin):
+                    probe.return_value.ok = True
+                    probe.return_value.detail = "example"
+                with patch(
+                    "hermes_codex_router.diagnostics.probe_recovery_plane",
+                    wraps=diagnostics.probe_recovery_plane,
+                ) as recovery:
+                    report = run_doctor(config)
+            tlive_runtime.assert_not_called()
+            self.assertIsNone(recovery.call_args.args[0].tlive_config_path)
+            checks = cast(list[dict[str, object]], report["checks"])
+            names = {str(item["name"]) for item in checks}
+            self.assertIn("recovery:hermes", names)
+            self.assertNotIn("recovery:tlive", names)
+            mode = next(item for item in checks if item["name"] == "tlive")
+            self.assertTrue(mode["ok"])
+            self.assertFalse(mode["required"])
+            self.assertIn("switched off by owner configuration", str(mode["detail"]))
 
 
 class CodexListenerStateTests(unittest.TestCase):

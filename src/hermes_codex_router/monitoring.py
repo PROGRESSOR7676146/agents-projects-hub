@@ -229,17 +229,21 @@ def _doctor_ok(checks: list[object], name: str) -> bool | None:
 def _codex_listener(config: HubConfig, checks: list[object]) -> tuple[str, bool, bool] | None:
     """Return (listener state, stdio fallback, external server expected).
 
-    Without a stdio fallback, or with attach-only tlive configured, the external
-    server is expected, so even a fully removed socket path is an outage.
+    Without a stdio fallback, or on a recovery-plane installation, the external
+    server is expected, so even a fully removed socket path is an outage. Such an
+    installation attaches tlive to that server; switching tlive off (ADR 0116)
+    keeps the expectation, so the switch changes no app-server check.
     """
     check = _doctor_check(checks, "codex_socket")
     if check is None:
         return None
     has_fallback = config.codex_stdio_executable is not None
-    tlive = config.recovery_plane.enabled and config.recovery_plane.tlive_config_path is not None
+    plane_server = config.recovery_plane.enabled and (
+        config.recovery_plane.tlive_config_path is not None or not config.tlive_enabled
+    )
     # The doctor detail is "<listener state>: <path>".
     state = str(check.get("detail", "")).split(":", 1)[0]
-    return state, has_fallback, not has_fallback or tlive
+    return state, has_fallback, not has_fallback or plane_server
 
 
 def _run_monitor_once(
@@ -354,7 +358,10 @@ def _run_monitor_once(
         # Only positive exact delivery for every observed wait proves recovery.
         # Grace and absent waits carry no delivery evidence; retain the existing
         # incident and notification edge until the surface is actually observed.
-        if approval_surface is None or not approval_surface["waiting"] or approval_surface["grace"]:
+        # With tlive switched off (ADR 0116) there is no surface: the episode retires.
+        if config.tlive_enabled and (
+            approval_surface is None or not approval_surface["waiting"] or approval_surface["grace"]
+        ):
             unobserved_keys += ("tlive:approval-surface",)
         stale_catalogs = ProviderCatalogCache(
             config.state_path.with_name("provider-model-catalogs.json")

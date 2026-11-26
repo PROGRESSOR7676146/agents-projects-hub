@@ -238,7 +238,7 @@ def _codex_listener_alert(codex_listener: tuple[str, bool, bool] | None) -> Oper
         "codex_app_server_unavailable",
         "warning" if has_fallback else "error",
         f"The external Codex app-server is not listening ({listener_state}); "
-        "tlive cannot attach"
+        "its clients cannot attach"
         + (" and Hub uses the stdio fallback" if has_fallback else "")
         + ". Start it only through a fresh reviewed plan; never remove the socket by hand.",
     )
@@ -329,7 +329,8 @@ def evaluate_operational_alerts(
         )
     if recovery_status is not None:
         hermes_ok = recovery_status.get("hermes", False)
-        tlive_ok = recovery_status.get("tlive", False)
+        # Absent: the owner switched tlive off (ADR 0116); it is not a channel then.
+        tlive_ok = recovery_status.get("tlive")
         if not hermes_ok:
             alerts.append(
                 OperationalAlert(
@@ -339,7 +340,7 @@ def evaluate_operational_alerts(
                     "The independent Hermes Telegram recovery channel is unavailable.",
                 )
             )
-        if not tlive_ok:
+        if tlive_ok is False:
             alerts.append(
                 OperationalAlert(
                     "recovery:tlive",
@@ -354,7 +355,10 @@ def evaluate_operational_alerts(
                     "recovery:all",
                     "recovery_plane_unavailable",
                     "error",
-                    "Both independent recovery channels are unavailable; local intervention is required.",
+                    "Both independent recovery channels are unavailable; local intervention is required."
+                    if tlive_ok is not None
+                    else "The only independent recovery channel, Hermes, is unavailable; "
+                    "local intervention is required.",
                 )
             )
     if telegram_access is not None:

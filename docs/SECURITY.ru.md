@@ -74,6 +74,9 @@ receipts автоматически. При компрометации треб�
    (ADR 0091).
 7. Реестр допускает только `read-only` и `workspace-write` с `on-request`. Только локальный профиль Codex `full` допускает `danger-full-access` с `never` согласно ADR 0096.
 8. Hermes не может отвечать на approval автоматически. Возникающие запросы решает пользователь в Codex/tlive; timeout/неопределённость означает deny/no action. Локальный Codex `full` не запрашивает подтверждения; неожиданные запросы отклоняются.
+   Выключить tlive локально (`tlive_enabled: false`, ADR 0116) можно только при
+   Codex `full` и без confined-профиля Claude: тогда Hub ни у кого не спрашивает
+   решение через tlive. Маркер approval-only в ходах Hub остаётся.
 9. Telegram `update_id` и router `request_id` обеспечивают exactly-once dispatch при повторной доставке.
 10. Один активный turn на lane; очередь имеет размер/TTL, `/stop` не означает delete.
 11. Логи не содержат токены, environment dump, hidden reasoning и полный terminal buffer. Prompt хранится как digest, если полный текст не нужен для recovery.

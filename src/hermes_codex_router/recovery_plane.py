@@ -14,13 +14,14 @@ class RecoveryPlaneProbe:
     hermes_service: str
     tlive_service: str
     hermes_config_path: Path
-    tlive_config_path: Path
+    # None: the owner switched tlive off (ADR 0116); it is then neither probed nor a channel.
+    tlive_config_path: Path | None
 
 
 @dataclass(frozen=True, slots=True)
 class RecoveryPlaneStatus:
     hermes_ok: bool
-    tlive_ok: bool
+    tlive_ok: bool | None
     available: bool
     service_states: dict[str, SupervisorServiceState]
     details: dict[str, str]
@@ -92,35 +93,40 @@ def probe_recovery_plane(
     tlive_liveness: bool = False,
 ) -> RecoveryPlaneStatus:
     hermes_command = command_available("hermes")
-    tlive_command = command_available("tlive")
     hermes_config = _private_file(probe.hermes_config_path)
-    tlive_config = _private_file(probe.tlive_config_path)
     hermes_service = service_status(
         ("systemctl", "--user", "is-active", "--quiet", probe.hermes_service)
     )
-    tlive_service = service_status(
-        ("systemctl", "--user", "is-active", "--quiet", probe.tlive_service)
-    )
-    tlive_runtime = tlive_command and tlive_liveness
     hermes_ok = hermes_command and hermes_config and (hermes_service == "active" or hermes_liveness)
-    tlive_ok = tlive_command and tlive_config and (tlive_service == "active" or tlive_runtime)
+    service_states: dict[str, SupervisorServiceState] = {"hermes": hermes_service}
+    details = {
+        "hermes": (
+            f"command={'ok' if hermes_command else 'missing'}, "
+            f"config={'private' if hermes_config else 'missing-or-unsafe'}, "
+            f"service={hermes_service}, "
+            f"heartbeat={'healthy' if hermes_liveness else 'unavailable'}"
+        )
+    }
+    tlive_ok: bool | None = None
+    if probe.tlive_config_path is not None:
+        tlive_command = command_available("tlive")
+        tlive_config = _private_file(probe.tlive_config_path)
+        tlive_service = service_status(
+            ("systemctl", "--user", "is-active", "--quiet", probe.tlive_service)
+        )
+        tlive_runtime = tlive_command and tlive_liveness
+        tlive_ok = tlive_command and tlive_config and (tlive_service == "active" or tlive_runtime)
+        service_states["tlive"] = tlive_service
+        details["tlive"] = (
+            f"command={'ok' if tlive_command else 'missing'}, "
+            f"config={'private' if tlive_config else 'missing-or-unsafe'}, "
+            f"service={tlive_service}, "
+            f"runtime={'healthy' if tlive_runtime else 'unavailable'}"
+        )
     return RecoveryPlaneStatus(
         hermes_ok=hermes_ok,
         tlive_ok=tlive_ok,
-        available=hermes_ok or tlive_ok,
-        service_states={"hermes": hermes_service, "tlive": tlive_service},
-        details={
-            "hermes": (
-                f"command={'ok' if hermes_command else 'missing'}, "
-                f"config={'private' if hermes_config else 'missing-or-unsafe'}, "
-                f"service={hermes_service}, "
-                f"heartbeat={'healthy' if hermes_liveness else 'unavailable'}"
-            ),
-            "tlive": (
-                f"command={'ok' if tlive_command else 'missing'}, "
-                f"config={'private' if tlive_config else 'missing-or-unsafe'}, "
-                f"service={tlive_service}, "
-                f"runtime={'healthy' if tlive_runtime else 'unavailable'}"
-            ),
-        },
+        available=hermes_ok or bool(tlive_ok),
+        service_states=service_states,
+        details=details,
     )

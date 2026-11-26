@@ -124,6 +124,29 @@ class OperationalAlertTests(unittest.TestCase):
         )
         self.assertIn("error", {item.severity for item in both_down})
 
+    def test_tlive_switched_off_is_neither_alerted_nor_counted_as_a_channel(self) -> None:
+        # ADR 0116: an absent tlive entry means the owner switched it off.
+        healthy = evaluate_operational_alerts(
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            recovery_status={"hermes": True},
+        )
+        self.assertEqual(healthy, ())
+        hermes_down = evaluate_operational_alerts(
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            recovery_status={"hermes": False},
+        )
+        self.assertEqual(
+            {(item.code, item.severity) for item in hermes_down},
+            {
+                ("hermes_recovery_unavailable", "warning"),
+                ("recovery_plane_unavailable", "error"),
+            },
+        )
+        everything = next(item for item in hermes_down if item.key == "recovery:all")
+        self.assertIn("only independent recovery channel", everything.message)
+
     def test_hermes_delivery_uses_argv_and_no_shell(self) -> None:
         calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
 
@@ -319,12 +342,15 @@ class OperationalAlertTests(unittest.TestCase):
             ((stdio, False, None), ("missing", True, False)),
             ((stdio, True, tlive), ("missing", True, True)),
             ((None, False, None), ("missing", False, True)),
+            # Switching tlive off (ADR 0116) keeps the external server expected.
+            ((stdio, True, None), ("missing", True, True)),
         )
         for (executable, enabled, tlive_path), expected in cases:
             config = Mock()
             config.codex_stdio_executable = executable
             config.recovery_plane.enabled = enabled
             config.recovery_plane.tlive_config_path = tlive_path
+            config.tlive_enabled = tlive_path is not None or not enabled
             with TemporaryDirectory() as directory:
                 state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
                 with (
