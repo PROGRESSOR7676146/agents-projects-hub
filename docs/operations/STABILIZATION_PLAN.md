@@ -150,9 +150,12 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   Owner acceptance from a phone in a Claude topic at revision `6080628`
   (2026-11-26): the control appeared after an answer ending with
   `[[handoff: ...]]`, and a «▶ option» press opened one new session whose first
-  turn carried that answer and the option; a second press on the same control
-  was refused with «Кнопка уже использована». Still open: a press during a turn,
-  a press after `/new`, and the same checks in a Codex topic.
+  turn carried that answer and the option. The owner confirmed that a second
+  press, a press during a turn and a press after `/new` were refused.
+  In a Codex topic, the owner observed the stale-session refusal after
+  `/new` and `/model`. Direct continuation and the remaining guard checks
+  are open for Codex. Choosing a different model and carrying the handoff
+  in one flow remains an open design question.
 - Agent mail (ADR 0112): owner live-accepted on 0.11.31 (2026-11-24) for both
   directions of the first route. Each letter appeared in the other topic as a
   Hub-bot document with «Обработать», and one phone press started exactly one
