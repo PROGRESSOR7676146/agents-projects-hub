@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from hermes_codex_router.external_runtime import ExternalCliAdapter
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from tests import test_claude_native_worker as fixtures
 from tests.delivery_fixture import complete_final_delivery
+from tests.test_claude_stream_stability import image_events, permission_denial
 from tests.test_external_runtime import fictional_claude_source
 
 
@@ -44,11 +46,7 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
         blocked: bool = False,
         accept_child: bool = True,
     ) -> ExternalCliAdapter:
-        executable = self.fixture.root / "fictional-provider"
-        source = fictional_claude_source(
-            "import json,os,sys\n"
-            "native=next(sys.argv[sys.argv.index(flag)+1] for flag in ('--session-id','--resume') if flag in sys.argv)\n"
-            "def emit(value): print(json.dumps(value),flush=True)\n"
+        return self.script_adapter(
             "def result(text): emit(dict(type='result',subtype='success',is_error=False,session_id=native,result=text))\n"
             "if '--input-format' not in sys.argv:\n    result('Ordinary answer');sys.exit(0)\n"
             "first=json.loads(sys.stdin.readline());emit(dict(first,isReplay=True))\n"
@@ -65,6 +63,14 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
             + ("sys.exit(0)\n" if missing else "assert sys.stdin.read()==''\n")
             + extra
         )
+
+    def script_adapter(self, script: str) -> ExternalCliAdapter:
+        executable = self.fixture.root / "fictional-provider"
+        source = fictional_claude_source(
+            "import json,os,sys,uuid\n"
+            "native=next(sys.argv[sys.argv.index(flag)+1] for flag in ('--session-id','--resume') if flag in sys.argv)\n"
+            "def emit(value): print(json.dumps(value),flush=True)\n" + script
+        )
         # Add the streamed-input declarations to the fictional --help reply.
         source = source.replace(
             "if sys.argv[1:] == ['--help']:\n",
@@ -76,6 +82,57 @@ class ClaudeCorrectionWorkerTests(unittest.TestCase):
 
     def worker(self, adapter: ExternalCliAdapter):
         return self.fixture.worker(adapter)  # type: ignore[arg-type]
+
+    def test_cancelled_typed_refusal_publishes_one_failure_notice(self) -> None:
+        parent = self.fixture.enqueue(1)
+        denial_json = json.dumps(permission_denial("example-input"))
+        adapter = self.script_adapter(
+            "frame=json.loads(sys.stdin.readline())\n"
+            "def lifecycle(state):emit(dict(type='command_lifecycle',session_id=native,"
+            "command_uuid=frame['uuid'],state=state,uuid=str(uuid.uuid4())))\n"
+            "lifecycle('queued');lifecycle('started');emit(dict(frame,isReplay=True))\n"
+            f"denial=json.loads({denial_json!r})\n"
+            "emit(dict(denial,session_id=native,user_message_uuid=frame['uuid'],"
+            "user_message_uuids=[frame['uuid']]))\n"
+            "lifecycle('cancelled');sys.exit(1)\n"
+        )
+        worker = self.worker(adapter)
+        self.assertTrue(worker.run_cycle())
+        state = worker.state
+        job = state.get_provider_job(parent)
+        self.assertEqual((job.status, job.error_code), ("failed", "claude_provider_access_denied"))
+        self.assertEqual(job.attempt_count, 1)
+        self.fixture.assert_no_result(state, parent)
+        self.assertIsNone(persistent_root_blocker(state._connection, topic_id=job.topic_id))
+        self.assertFalse(worker.run_cycle())
+        outbox = state.get_telegram_outbox_for_job(parent)
+        assert outbox is not None
+        parts = state.get_telegram_outbox_parts(outbox.outbox_id)
+        self.assertEqual(len(parts), 1)
+        self.assertIn("HTTP 403", parts[0].telegram_html)
+        self.assertNotIn("Example organization", parts[0].telegram_html)
+
+    def test_cancelled_after_read_work_keeps_unknown_and_blocks_replay(self) -> None:
+        parent = self.fixture.enqueue(1)
+        read, _, _ = image_events()
+        adapter = self.script_adapter(
+            "frame=json.loads(sys.stdin.readline())\n"
+            "def lifecycle(state):emit(dict(type='command_lifecycle',session_id=native,"
+            "command_uuid=frame['uuid'],state=state,uuid=str(uuid.uuid4())))\n"
+            "lifecycle('queued');lifecycle('started');emit(dict(frame,isReplay=True))\n"
+            f"emit(dict(json.loads({json.dumps(read)!r}),session_id=native))\n"
+            "lifecycle('cancelled');sys.exit(1)\n"
+        )
+        # The text-only worker rejects the observed tool action, and cannot
+        # settle this stream as a terminal provider refusal.
+        worker = self.worker(adapter)
+        self.assertTrue(worker.run_cycle())
+        state = worker.state
+        job = state.get_provider_job(parent)
+        self.assertEqual(job.status, "indeterminate")
+        self.assertEqual(job.attempt_count, 1)
+        self.assertIsNotNone(persistent_root_blocker(state._connection, topic_id=job.topic_id))
+        self.assertFalse(worker.run_cycle())
 
     def test_current_and_late_native_results_settle_exact_child_and_one_outbox(self) -> None:
         for late in (False, True):

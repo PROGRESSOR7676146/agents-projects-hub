@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import uuid
 
 from .claude_image_input import (
     MAX_CLAUDE_IMAGE_AGGREGATE_BYTES,
@@ -15,14 +14,8 @@ from .claude_image_input import (
     ClaudeImageInputError,
     image_signature_matches,
 )
+from .claude_input_lifecycle import ClaudeInputLifecycle, is_event_uuid
 from .claude_stream import ClaudeStreamError
-
-
-def _uuid(value: object) -> bool:
-    try:
-        return isinstance(value, str) and str(uuid.UUID(value)) == value
-    except ValueError:
-        return False
 
 
 def _image_size(block: object) -> int:
@@ -63,8 +56,8 @@ class ClaudeImageReceipt:
                 or frame["type"] != "user"
                 or frame["parent_tool_use_id"] is not None
                 or frame["session_id"] != expected_session_id
-                or not _uuid(frame["session_id"])
-                or not _uuid(frame["uuid"])
+                or not is_event_uuid(frame["session_id"])
+                or not is_event_uuid(frame["uuid"])
                 or not isinstance(frame["message"], dict)
                 or set(frame["message"]) != {"role", "content"}
                 or frame["message"]["role"] != "user"
@@ -110,7 +103,7 @@ class ClaudeImageReceipt:
         except (ValueError, TypeError, KeyError, UnicodeError):
             raise ClaudeImageInputError() from None
         self._acknowledged = False
-        self._lifecycle: list[str] = []
+        self._lifecycle = ClaudeInputLifecycle(self.session_id, self.message_id, "image")
         self._terminal = False
         self._success = False
 
@@ -118,22 +111,15 @@ class ClaudeImageReceipt:
         """Return whether to retain the event after the tools-disabled guard."""
         kind = event.get("type")
         if kind == "command_lifecycle":
-            state = event.get("state")
-            if (
-                set(event) != {"type", "state", "session_id", "command_uuid", "uuid"}
-                or event.get("session_id") != self.session_id
-                or event.get("command_uuid") != self.message_id
-                or not _uuid(event.get("uuid"))
-                or self._lifecycle != ["queued", "started", "completed"][: len(self._lifecycle)]
-                or len(self._lifecycle) >= 3
-                or state != ["queued", "started", "completed"][len(self._lifecycle)]
-                or self._terminal
-                and state != "completed"
-            ):
-                raise ClaudeStreamError("claude image input lifecycle is unverified")
-            assert isinstance(state, str)
-            self._lifecycle.append(state)
+            self._lifecycle.observe_command(
+                event,
+                input_ids=(self.message_id,),
+                acknowledged=self._acknowledged,
+                terminal=self._terminal,
+            )
             return False
+        if kind in {"assistant", "stream_event"}:
+            self._lifecycle.observe_activity(event)
         if kind == "user":
             message = event.get("message")
             if (
@@ -204,10 +190,12 @@ class ClaudeImageReceipt:
             self._acknowledged = True
             return False
         if kind == "result":
+            self._lifecycle.observe_result(event)
             self._terminal = True
             self._success = event.get("subtype") == "success" and event.get("is_error") is False
         return True
 
     def finish(self) -> None:
+        self._lifecycle.finish()
         if self._success and not self._acknowledged:
             raise ClaudeStreamError("claude image input acknowledgement is missing")

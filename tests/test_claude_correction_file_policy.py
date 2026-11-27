@@ -134,15 +134,15 @@ class ClaudeCorrectionFilePolicyTests(unittest.TestCase):
                     ),
                 )
                 code = """
-import json,sys
+import json,sys,uuid
 def emit(event): print(json.dumps(event),flush=True)
 first=json.loads(sys.stdin.readline())
 for state in ('queued','started'):
-    emit(dict(type='command_lifecycle',state=state,session_id=first['session_id'],command_uuid=first['uuid'],uuid='example-event'))
+    emit(dict(type='command_lifecycle',state=state,session_id=first['session_id'],command_uuid=first['uuid'],uuid=str(uuid.uuid4())))
 emit(dict(first,isReplay=True))
 child=json.loads(sys.stdin.readline());emit(dict(child,isReplay=True))
 emit(dict(type='result',subtype='success',is_error=False,session_id=first['session_id'],result='Example complete'))
-emit(dict(type='command_lifecycle',state='completed',session_id=first['session_id'],command_uuid=first['uuid'],uuid='example-event'))
+emit(dict(type='command_lifecycle',state='completed',session_id=first['session_id'],command_uuid=first['uuid'],uuid=str(uuid.uuid4())))
 assert sys.stdin.read()==''
 """
                 launch = MagicMock(

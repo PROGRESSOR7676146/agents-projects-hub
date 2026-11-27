@@ -80,6 +80,25 @@ or inference. It verifies native receipt/result order for both scenarios. Its
 fictional Read policy does not exercise the protected permission host, productive
 Bash, real Telegram, billing, comprehension or installed restart acceptance.
 
+## Provider refusal and resized Read image
+
+`tests.test_claude_stream_stability` replays two reduced Claude Code 2.1.332
+streams observed in an isolated native fixture with a fictional Messages server.
+One request returned HTTP 403 `permission_error` after the input replay and the
+CLI emitted a bound error result and `cancelled`. A separate turn read a
+3000×2000 image, emitted its resized tool result and a synthetic coordinate note,
+then completed normally.
+
+The tests cover both orders of the refusal result and lifecycle record, foreign
+bindings, duplicate events, pending corrections, earlier work and missing proof.
+The image note is accepted only immediately after an observed Read image result
+with matching tool identity and dimensions. It cannot acknowledge a submitted
+input or complete a turn. The fictional worker test also checks a single saved
+failure notice and retained execution uncertainty when the stream lacks proof.
+These observations establish protocol behavior with a fictional upstream.
+Installed Telegram acceptance and real account entitlement require separate
+evidence.
+
 References: [official streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode.md),
 [CLI replay flag](https://code.claude.com/docs/en/cli-reference.md#cli-flags),
 [interruption and buffered results](https://code.claude.com/docs/en/agent-sdk/python.md#claudesdkclient).
