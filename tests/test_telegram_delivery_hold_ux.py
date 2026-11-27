@@ -481,6 +481,38 @@ class TelegramDeliveryHoldUXTests(unittest.TestCase):
         self.assertEqual(lease.job_id, tail.job_id)
         self.assertEqual(len(self.hub.telegram.sent), 1)
 
+    def test_new_explains_delivery_hold_before_and_after_queue_continuation(self) -> None:
+        callback = self._preview()
+        self.assertTrue(self.hub.service.handle_update(_topic_update(61, "/new")))
+        self.assertIn("Доставка сохранённого ответа", self.hub.telegram.sent[-1])
+        self.assertIn("/delivery", self.hub.telegram.sent[-1])
+
+        self._apply(callback)
+        self.assertTrue(self.hub.service.handle_update(_topic_update(62, "/new")))
+        self.assertIn("Очередь может продолжаться", self.hub.telegram.sent[-1])
+        self.assertIn("отдельное решение", self.hub.telegram.sent[-1])
+        self.assertEqual(self.state.active_session(self.topic.topic_id), self.session)
+        self.assertEqual(
+            self.state.get_telegram_outbox_for_job(self.outbox.job_id).status, "unknown"
+        )
+
+    def test_new_does_not_treat_historical_delivery_as_current_blocker(self) -> None:
+        callback = self._preview()
+        self._apply(callback)
+        full_control = self.state.preview_delivery_control("final_outbox", self.outbox.outbox_id)
+        self.state.reconcile_delivery_control(
+            "final_outbox",
+            self.outbox.outbox_id,
+            expected_snapshot=full_control.snapshot,
+            accept_unconfirmed_delivery=True,
+        )
+        self.assertTrue(self.hub.service.handle_update(_topic_update(63, "/new")))
+        self.assertNotIn("отдельное решение", self.hub.telegram.sent[-1])
+        self.assertIn("new:confirm:", str(self.hub.telegram.markups[-1]))
+        self.assertEqual(
+            self.state.get_telegram_outbox_for_job(self.outbox.job_id).status, "unknown"
+        )
+
     def test_hub_decision_does_not_bypass_native_writer_or_stop_guards(self) -> None:
         callback = self._preview()
         self._apply(callback)

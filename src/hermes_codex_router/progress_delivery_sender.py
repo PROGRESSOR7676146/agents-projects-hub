@@ -62,7 +62,8 @@ def deliver_progress(
         commit_receipt(
             lambda: delivery.mark_progress_delivered(
                 progress.progress_id, token, telegram_message_id=message_id, now=current_time()
-            )
+            ),
+            operation="progress",
         )
     except Exception as error:
         delivery.mark_progress_unknown(

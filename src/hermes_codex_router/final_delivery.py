@@ -184,7 +184,8 @@ def deliver_final_part(
                 telegram_message_id=message_id,
                 part_index=part.part_index,
                 now=current_time(),
-            )
+            ),
+            operation="final",
         )
     except Exception as error:
         delivery.mark_outbox_unknown(

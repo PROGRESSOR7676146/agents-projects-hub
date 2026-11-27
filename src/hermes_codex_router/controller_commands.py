@@ -264,6 +264,50 @@ class ControllerCommandOrchestrator:
         if catalog.agent_id != agent_id:
             raise ModelSelectionError("provider selection is no longer available")
 
+    def new_session_preview(
+        self, topic: TopicRecord, *, has_arguments: bool
+    ) -> TextCommandDecision | HtmlCommandDecision:
+        if has_arguments:
+            return TextCommandDecision("Usage: /new")
+        active = self.state.active_session(topic.topic_id)
+        if active is None:
+            return TextCommandDecision("No active provider session exists yet.")
+        if active.writer_mode != "telegram":
+            release = "/release" if active.writer_mode == "terminal" else "/return"
+            return TextCommandDecision(f"Use {release} before resetting the session.")
+        notice = self.new_session_delivery_notice(topic.topic_id)
+        if notice:
+            return TextCommandDecision(notice)
+        agent = self.config.require_agent(active.agent_id)
+        return HtmlCommandDecision(
+            html.escape(
+                f"Start a new {agent.display_name} session? The current provider "
+                "session will be archived."
+            ),
+            self._inline_grid(
+                [
+                    ("Confirm", f"new:confirm:{active.session_id}"),
+                    ("Cancel", f"new:cancel:{active.session_id}"),
+                ]
+            ),
+        )
+
+    def new_session_delivery_notice(self, topic_id: int) -> str | None:
+        delivery = self.state.delivery.topic_unknown_final_control_wait(topic_id)
+        if delivery == "outstanding":
+            action = (
+                "Ответьте /delivery на предупреждение Hub, чтобы открыть варианты."
+                if self.config.hub_delivery_hold_recovery_enabled
+                else "Подробности доступны в /status."
+            )
+            return "Доставка сохранённого ответа не подтверждена. /new заблокирована. " + action
+        if delivery == "queue_only":
+            return (
+                "Очередь может продолжаться. Для /new требуется отдельное решение владельца "
+                "по неподтверждённой доставке сохранённого ответа в локальном управлении Hub."
+            )
+        return None
+
     def model_refresh_acknowledgement(self, agent_id: str, *, external_worker: bool) -> str:
         if self.config.require_agent(agent_id).runtime == "claude":
             return "Refreshing configured choices…"

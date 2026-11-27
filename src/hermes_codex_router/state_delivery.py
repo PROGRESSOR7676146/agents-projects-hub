@@ -7,7 +7,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
-from typing import TYPE_CHECKING, Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Literal, Sequence
 
 from .artifacts import ValidatedArtifact
 from .delivery_control_predicates import final_control_reconciled, progress_control_reconciled
@@ -742,6 +742,24 @@ class DeliveryStateFacade:
             "released": int(row[4]),
             "queue_only": int(row[4]) - int(row[2]),
         }
+
+    def topic_unknown_final_control_wait(
+        self, topic_id: int
+    ) -> Literal["outstanding", "queue_only"] | None:
+        row = self._connection.execute(
+            f"""SELECT CASE WHEN {outbox_delivery_hold_released("o")} THEN 1 ELSE 0 END
+                FROM provider_jobs j JOIN provider_job_results r USING(job_id)
+                JOIN topics t ON t.topic_id=j.topic_id
+                JOIN telegram_outbox o ON o.job_id=j.job_id AND o.chat_id=j.chat_id
+                    AND o.thread_id=t.thread_id AND o.sender_agent_id=j.agent_id
+                WHERE j.topic_id=? AND j.status='result_ready' AND o.status='unknown'
+                    AND NOT {final_control_reconciled("o")}
+                ORDER BY 1 LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return "queue_only" if row[0] else "outstanding"
 
     def enqueue_progress(
         self,
