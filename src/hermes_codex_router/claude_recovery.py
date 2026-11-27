@@ -128,7 +128,7 @@ def _recover_leased_claude_job(
             # completion or turn it into execution uncertainty. Preserve the
             # lease/root; another bounded stale-recovery cycle retries delivery.
             return True
-        notice = uncertain_provider_notice(config.require_agent(agent_id).display_name, job.job_id)
+        notice = uncertain_provider_notice(config.require_agent(agent_id).display_name)
         if partial:
             notice += partial_response_block(partial)
         state.terminate_provider_job_with_notice(

@@ -888,7 +888,7 @@ class ExternalQueueWorker:
                             token,
                             project_root,
                             uncertain_provider_notice(
-                                self.agent.display_name, executing.job_id, decision_buttons=offer
+                                self.agent.display_name, decision_buttons=offer
                             ),
                         )
                         if failure.notice == "uncertain"

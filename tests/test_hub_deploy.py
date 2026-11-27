@@ -1580,6 +1580,45 @@ class WindowFixture(StageFixture):
 
 
 class WindowTests(WindowFixture):
+    def test_candidate_claude_config_carries_the_controller_hub_bot_identity(self):
+        worker_path = self.configs / f"claude-{self.old_sha[:7]}.json"
+        worker = json.loads(worker_path.read_text())
+        hub = json.loads(self.hub.read_text())
+        worker["hub_bot"] = {
+            "telegram_username": "@Example_Hub_Bot",
+            "token_file": "/home/example/private/worker-bot-token",
+        }
+        hub["hub_bot"] = {
+            "telegram_username": "example_hub_bot",
+            "telegram_user_id": 800,
+            "token_file": "/home/example/private/controller-bot-token",
+        }
+        worker_path.write_text(json.dumps(worker))
+        self.hub.write_text(json.dumps(hub))
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, python=Path("/usr/bin/python3")
+        )
+
+        plan_dir = hub_deploy.create_plan(self.install, old, new, self.runner)
+        plan = hub_deploy.verify_saved_plan(plan_dir)
+        entry = next(entry for entry in plan["files"] if entry["kind"] == "claude_config")
+        candidate = json.loads((plan_dir / entry["after"]["copy"]).read_text())
+        self.assertEqual(candidate["hub_bot"], {**worker["hub_bot"], "telegram_user_id": 800})
+        self.assertEqual(json.loads(worker_path.read_text()), worker)
+        self.assertEqual(json.loads(self.hub.read_text()), hub)
+
+        for conflicting in (
+            {**worker["hub_bot"], "telegram_user_id": 801},
+            {**worker["hub_bot"], "telegram_username": "different_hub_bot"},
+        ):
+            with self.subTest(conflicting=conflicting):
+                worker_path.write_text(json.dumps({**worker, "hub_bot": conflicting}))
+                with self.assertRaisesRegex(hub_deploy.Refused, "Hub bot identity"):
+                    hub_deploy.create_plan(self.install, old, new, self.runner)
+
     def test_claude_settings_drift_between_configs_refuses_the_plan(self):
         old = hub_deploy.discover_installation(
             self.install, self.runner, lambda *_: True, lambda _: 0

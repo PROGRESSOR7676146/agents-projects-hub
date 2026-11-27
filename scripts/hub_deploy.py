@@ -257,6 +257,29 @@ def claude_policy(config: object) -> dict[str, Any]:
     }
 
 
+def _sync_claude_hub_bot_identity(hub: dict[str, Any], worker: dict[str, Any]) -> None:
+    """Project the Controller's public bot identity into the candidate worker config."""
+    hub_bot, worker_bot = hub.get("hub_bot"), worker.get("hub_bot")
+    if not isinstance(hub_bot, dict) or "telegram_user_id" not in hub_bot:
+        if isinstance(worker_bot, dict):
+            worker_bot.pop("telegram_user_id", None)
+        return
+    bot_id = hub_bot["telegram_user_id"]
+    need(type(bot_id) is int and bot_id > 0, "invalid Hub bot identity")
+    need(isinstance(worker_bot, dict), "Claude worker has no matching Hub bot identity")
+    assert isinstance(worker_bot, dict)
+    hub_name, worker_name = hub_bot.get("telegram_username"), worker_bot.get("telegram_username")
+    need(
+        isinstance(hub_name, str)
+        and isinstance(worker_name, str)
+        and hub_name.removeprefix("@").casefold() == worker_name.removeprefix("@").casefold(),
+        "Claude worker Hub bot identity differs from the Hub config",
+    )
+    prior = worker_bot.get("telegram_user_id", bot_id)
+    need(type(prior) is int and prior == bot_id, "Claude worker Hub bot identity conflicts")
+    worker_bot["telegram_user_id"] = bot_id
+
+
 def verify_config_pin(
     config: dict[str, Any], old: str, verify: Callable[[str, str], bool], *, user_owned: bool
 ) -> None:
@@ -1335,10 +1358,12 @@ def create_plan(
         raise Refused("missing Hub config")
     # ADR 0104: the first boot start reconciles with this installation's Hub config.
     manifest["hub_config"] = str(hub_path)
+    hub_config = _config_object(hub_bytes)
     need(
-        claude_policy(json.loads(hub_bytes)) == claude_policy(candidate_config),
+        claude_policy(hub_config) == claude_policy(candidate_config),
         "Claude settings differ between the Hub config and the Claude worker config",
     )
+    _sync_claude_hub_bot_identity(hub_config, candidate_config)
     target_config = old_config.with_name(new_name)
     files: list[tuple[str, Path, bytes | None, bytes | None]] = [
         ("hub_config", hub_path, hub_bytes, hub_bytes),

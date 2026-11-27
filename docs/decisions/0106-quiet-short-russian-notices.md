@@ -34,10 +34,10 @@ uncertainty blocked the project. The owner reads these on a phone.
    most 400, excluding collapsed content. An uncertainty notice states that
    files may have changed, that there is no automatic retry, and that the
    project is paused. It never suggests an action that the pause would refuse.
-   Until a Telegram decision exists, its one action is the supported owner
-   resolution, shown as the copyable local
-   `agents-projects-hub indeterminate-resolve <config> <job> --resolution acknowledged`
-   command (ADR 0074).
+   An eligible Claude job offers the [Telegram decision](0107-telegram-decision-for-uncertain-claude-work.md).
+   When that decision is unavailable, the notice explains that the project
+   remains paused pending verification. The local recovery procedure belongs in
+   the [queue recovery runbook](../operations/QUEUE_RECOVERY.md).
 3. **Collapsed detail.** Explicitly incomplete provider text keeps its
    existing bound but moves into a Telegram expandable quote after the action.
    A pre-start refusal shows a Russian reason and action. Its fixed provider

@@ -26,14 +26,14 @@ choices can lead to new work in the root, so the offer itself needs that proof.
    turn's systemd host scope, when used, is killed again and observed
    inactive. This is the existing stop proof, rechecked at that moment.
    Without the proof, after a restart or recovery, for a streamed-input
-   correction pair, or for Codex, OpenCode and Antigravity, the notice keeps
-   the local command.
+   correction pair, or for Codex, OpenCode and Antigravity, the project remains
+   paused pending verification.
 2. **Prompt.** With the proof, the uncertainty notice gets one more final
    part. The final sender delivers it through the Hub bot as a short prompt
    with **«Проверить и продолжить»** and **«Закрыть без повтора»**. The part
    stores a server-side snapshot of the job, Hub session, generation and
    native session; the notice's action line points at the buttons. Without a
-   Hub bot the part degrades to the local command.
+   Hub bot the part explains that the decision is unavailable in Telegram.
 3. **Press.** The Controller accepts a press only from a configured owner, on
    a message authored by the configured numeric Hub bot. One immediate
    transaction then rechecks the positively receipted prompt part, its topic,
@@ -78,6 +78,7 @@ press handling (with the moved held-request buttons).
 - The kill-and-reap proof covers the process group and the host scope; like
   the existing stop proof it does not claim isolation from processes that a
   turn deliberately detached outside both.
-- Recovered and non-Claude uncertainty keep the local command. Extending the
+- Recovered and non-Claude uncertainty use the
+  [local recovery procedure](../operations/QUEUE_RECOVERY.md). Extending the
   proof to them is a separate decision.
 - Installed and live Telegram acceptance remain pending.

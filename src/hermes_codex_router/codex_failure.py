@@ -5,7 +5,7 @@ import re
 from contextlib import contextmanager
 from typing import Iterator
 
-from .uncertain_decision import buttons_action
+from .uncertain_decision import DECISION_UNAVAILABLE, buttons_action
 
 MAX_PARTIAL_TEXT = 10_000
 
@@ -142,31 +142,15 @@ def codex_failure_notice(
     return notice
 
 
-def owner_resolution_action(job_id: str) -> str:
-    """The one supported owner decision for an unresolved uncertain job.
-
-    The local owner command records an immutable resolution without replay and
-    releases only the project root (ADR 0074).
-    """
-    return (
-        "Снять паузу без повтора может владелец на компьютере: "
-        "<code>agents-projects-hub indeterminate-resolve &lt;config&gt; "
-        f"{html.escape(job_id)} --resolution acknowledged</code>"
-    )
-
-
-def uncertain_provider_notice(
-    display_name: str, job_id: str, *, decision_buttons: bool = False
-) -> str:
-    """Explain an uncertain non-Codex outcome without exposing provider diagnostics.
-
-    With ``decision_buttons`` the Hub-bot prompt that follows is the one action
-    (ADR 0107); otherwise it is the local owner command.
-    """
+def uncertain_provider_notice(display_name: str, *, decision_buttons: bool = False) -> str:
+    """Explain the pause and offer a Telegram decision when available."""
     safe_name = html.escape(display_name)
+    action = (
+        "Проект на паузе до вашего решения.\n" + buttons_action()
+        if decision_buttons
+        else DECISION_UNAVAILABLE
+    )
     return (
         f"⚠️ {safe_name} прервался без итогового ответа.\n"
-        "Итог неизвестен: файлы могли измениться. Автоповтора не будет; "
-        "новые запуски в проекте на паузе до вашего решения.\n"
-        + (buttons_action() if decision_buttons else owner_resolution_action(job_id))
+        "Итог неизвестен: файлы могли измениться. Автоповтора не будет.\n" + action
     )

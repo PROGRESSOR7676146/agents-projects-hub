@@ -25,6 +25,9 @@ PROMPT_HTML = (
 CONTINUE_LABEL = "Проверить и продолжить"
 CLOSE_LABEL = "Закрыть без повтора"
 DONE_CALLBACK = "ud:done"
+DECISION_UNAVAILABLE = (
+    "Кнопки решения недоступны. Проект останется на паузе до проверки состояния задачи."
+)
 
 CONTINUATION_PROMPT = (
     "The previous turn in this session ended without a confirmed outcome. Its process was "
