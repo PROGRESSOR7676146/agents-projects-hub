@@ -5,6 +5,14 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.35] - 2026-11-27
+
+- In a Codex topic, the original handoff card still works after changing
+  the model or effort with `/model`. The saved answer and optional choice
+  become the first input of the empty session opened by the selection.
+  The card is single-use, survives a restart, and expires after other
+  input, a manual `/new`, or a provider switch. State schema 61 is unchanged.
+
 ## [0.11.34] - 2026-11-26
 
 - Provide a distinct release for the first Claude CLI store deployment
