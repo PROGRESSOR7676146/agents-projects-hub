@@ -210,14 +210,17 @@ addressing (ADR 0111).
     longer answer gets a notice instead of the control and a malformed line stays visible. Files
     and earlier turns are not carried.
   - Only the configured owner's press on the exact recorded delivery of that control, in its
-    numeric topic of the same project, MAY act. It is the owner's `/new` plus one ordinary
-    message: one transaction MUST archive the session that wrote the answer, open its successor
-    and admit a fixed owner request with that answer and the chosen option, both rebuilt from
-    saved state, as the successor's first input; any refusal commits nothing.
-  - The press MUST refuse while that session is not the topic's active one, after later input
-    reached it, during pending or running work or while a local writer owns it; a repeat MUST
-    report the first use. The marker, delivery, retries and restarts MUST NOT admit input, and
-    the control grants no approval, stop, writer or routing authority.
+    numeric topic of the same project, MAY act. One transaction MUST admit a fixed owner request
+    with that answer and the chosen option, both rebuilt from saved state, as the first input.
+    Normally that transaction also archives the session that wrote the answer and opens its
+    successor. After one or more Codex `/model` selections, it MUST instead use the current
+    successor whose uninterrupted chain of model changes from the source is recorded in local
+    state and whose intermediate and current sessions received no input.
+  - Later input after the source answer or a manual `/new` MUST make the card stale. An agent
+    switch MUST invalidate the recorded model-selection chain. A press during pending or
+    running work or while a local writer owns the target MUST refuse. A repeat MUST report the
+    first use. The marker, delivery, retries and restarts MUST NOT admit input. The control
+    grants no approval, stop, writer or routing authority.
 
 ### Explicit Claude Code/Codex collaboration
 

@@ -13,8 +13,9 @@ from .incoming_materials import IncomingMaterialDraft
 from .provider_queue_capacity import QueueCapacityConfig
 from .root_blockers import persistent_root_blocker
 from .state_errors import StateError
+from .state_handoff import HandoffAdmission, has_later_handoff_input, is_model_handoff_successor
 from .state_provider_jobs import ProviderJobRecord
-from .state_sessions import SessionsStateFacade, WriterTransferSnapshot
+from .state_sessions import SessionRecord, SessionsStateFacade, WriterTransferSnapshot
 from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .telegram_turn_provenance import validate_ingress_identity
 
@@ -53,7 +54,7 @@ class ProviderAdmissionState:
         control_input: str | None = None,
         attach_forwarded_materials: bool = True,
         telegram_ingress_identity: str | None = None,
-        rotate_after: int | None = None,
+        session_handoff: HandoffAdmission | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Admit one input without committing or opening a nested transaction."""
 
@@ -89,9 +90,10 @@ class ProviderAdmissionState:
             if int(existing["chat_id"]) != chat_id or int(existing["message_id"]) != message_id:
                 raise StateError("idempotency key belongs to another Telegram message")
             return self.state._provider_job(existing), False
-        if rotate_after is not None:  # ADR 0114
-            target_session, session_generation = self._rotate(topic_id, session_id, rotate_after)
 
+        if session_handoff is not None:
+            successor = self._prepare_handoff(topic_id, target_session, session_handoff)
+            target_session, session_generation = successor.session_id, successor.generation
         session = self._require_binding_in_transaction(
             topic_id=topic_id,
             chat_id=chat_id,
@@ -107,7 +109,6 @@ class ProviderAdmissionState:
             handoff=handoff,
             expected_transfer=expected_transfer,
         )
-        persisted_provider_session = session["provider_session_id"]
 
         now = _now()
         ready_at = _timestamp(available_at) if available_at is not None else None
@@ -157,7 +158,7 @@ class ProviderAdmissionState:
                     target_agent,
                     target_session,
                     session_generation,
-                    persisted_provider_session,
+                    session["provider_session_id"],
                     selected_model,
                     selected_effort,
                     payload,
@@ -195,7 +196,7 @@ class ProviderAdmissionState:
                 now,
             ),
         )
-        if attach_forwarded_materials:
+        if attach_forwarded_materials and session_handoff is None:
             self.state._attach_forwarded_materials(
                 job_id=job_id,
                 topic_id=topic_id,
@@ -226,24 +227,23 @@ class ProviderAdmissionState:
             )
         return job, True
 
-    def _rotate(self, topic_id: int, session_id: str, after_sequence: int) -> tuple[str, int]:
-        """ADR 0114: archive this exact active session and admit into its successor.
-
-        Runs in the admission transaction, so either both happen or neither
-        does. Input that reached the session after the source answer (topic
-        sequence ``after_sequence``) refuses. The successor keeps the agent,
-        model and effort and has no provider session yet, as the request must.
-        """
-        later = self.state._connection.execute(
-            "SELECT 1 FROM provider_jobs WHERE session_id = ? AND topic_sequence > ? LIMIT 1",
-            (session_id, after_sequence),
-        ).fetchone()
-        if later is not None:
+    def _prepare_handoff(
+        self, topic_id: int, session_id: str, handoff: HandoffAdmission
+    ) -> SessionRecord:
+        """Validate the source and reserve the successor's first input atomically."""
+        if has_later_handoff_input(self.state._connection, topic_id, handoff):
             raise StateError("later input reached the session")
-        successor = self.state._sessions_state.rotate_active_session_in_transaction(
-            topic_id, expected_session_id=session_id
-        )
-        return successor.session_id, successor.generation
+        if handoff.source_session_id == session_id:
+            successor = self.state._sessions_state.rotate_active_session_in_transaction(
+                topic_id, expected_session_id=session_id
+            )
+        else:
+            self.state._require_control_snapshot(topic_id, session_id)
+            source = self.state.get_session(handoff.source_session_id)
+            successor = self.state.get_session(session_id)
+            if not is_model_handoff_successor(self.state._connection, source, successor):
+                raise StateError("model handoff successor changed or already received input")
+        return successor
 
     def _require_binding_in_transaction(
         self,

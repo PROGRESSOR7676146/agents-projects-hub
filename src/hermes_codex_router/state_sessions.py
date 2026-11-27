@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING, Callable, Mapping, TypedDict
 from .codex_control_predicates import control_owner_for_topic
 from .delivery_control_predicates import result_ready_control_reconciled
 from .state_errors import CodexPermissionSelectionChanged
+from .state_handoff import (
+    clear_model_handoff,
+    model_handoff_source_generation,
+    remember_model_handoff,
+)
 
 if TYPE_CHECKING:
     from .state import TopicRecord
@@ -505,6 +510,7 @@ class SessionsStateFacade:
                     self.require_codex_selection(self.record(current))
                 session_id = str(current["session_id"])
             else:
+                clear_model_handoff(self._connection, topic_id)
                 if current is not None:
                     self._connection.execute(
                         "UPDATE agent_sessions SET status = 'satellite', updated_at = ? "
@@ -578,6 +584,7 @@ class SessionsStateFacade:
             raise self._state_error("topic has no active session")
         if previous.writer_mode != "telegram":
             raise self._state_error("return the local writer before changing session settings")
+        clear_model_handoff(self._connection, topic_id)
         self._connection.execute(
             "UPDATE agent_sessions SET status = 'archived', updated_at = ? WHERE session_id = ?",
             (self._now(), previous.session_id),
@@ -594,6 +601,7 @@ class SessionsStateFacade:
         effort: str,
         expected_session_id: str | None = None,
         runtime: str | None = None,
+        keep_model_handoff: bool = False,
     ) -> SessionRecord:
         with self._transaction():
             if runtime == "claude" and expected_session_id is None:
@@ -620,12 +628,22 @@ class SessionsStateFacade:
                     ),
                 )
                 return self.get_session(previous.session_id)
+            source_generation = None
+            if keep_model_handoff and previous.agent_id == "codex":
+                source_generation = (
+                    model_handoff_source_generation(self._connection, previous)
+                    or previous.generation
+                )
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
                 "WHERE session_id = ?",
                 (self._now(), previous.session_id),
             )
             replacement = self._insert_session(topic_id, previous.agent_id, model, effort, "active")
+            if source_generation is not None:
+                remember_model_handoff(self._connection, replacement, source_generation)
+            else:
+                clear_model_handoff(self._connection, topic_id)
         return self.get_session(replacement.session_id)
 
     def require_codex_selection(self, session: SessionRecord) -> None:

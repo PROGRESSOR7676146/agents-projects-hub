@@ -1,6 +1,6 @@
 # ADR 0114: One-tap new session with the previous answer as handoff
 
-Status: accepted policy (owner decisions, 2026-11-23 and 2026-11-25);
+Status: accepted policy (owner decisions, 2026-11-23, 2026-11-25 and 2026-11-27);
 implemented in source. Release, enabling and live Telegram acceptance are
 separate.
 Date: 2026-11-25.
@@ -33,7 +33,8 @@ delivery of the control, and a default-off owner setting.
    never carry it.
 2. **Content.** The handoff is the saved visible answer of that job without the
    marker line, so the owner sees exactly what the new session receives. Its
-   files and earlier turns are not carried. The answer and the fixed request
+   files and earlier turns are excluded. Forwarded files waiting in a model
+   successor remain available for ordinary input. The answer and the fixed request
    must fit the ingress budgets: an answer longer than 16,000 characters gets a
    short notice instead of the control. If Hub appended its own notice to the
    answer, the marker is no longer the last line and no control appears, as for
@@ -51,27 +52,29 @@ delivery of the control, and a default-off owner setting.
    topic must still belong to the source project. Missing, pruned or ambiguous
    evidence refuses; there is no fallback. The request text and the option are
    rebuilt from the saved answer, never taken from Telegram.
-5. **One transaction.** The press is the owner's explicit `/new` plus one
-   ordinary message. Durable admission archives the session that wrote the
-   answer, opens its successor with the same agent, model and effort, and admits
-   the fixed request as the successor's first input, all in one SQLite
-   transaction. The transaction itself rechecks that the source session is
-   still active and has received no later input, so a concurrent `/new` or
-   message cannot be overtaken. Any guard failure commits nothing and the button
-   stays usable; only an admitted message or a durably recorded refusal spends it.
-   Normal admission rules apply: a persistent root blocker refuses the message
-   visibly and spends the button, as for a letter.
-6. **Refusals.** The press refuses, with a plain reason, when that session is no
-   longer the topic's active session (including after a manual `/new`), when
-   later input already reached it, while work or result delivery is pending or
-   running, and while a local writer owns it. A press that already admitted its
-   message reports the first use before any other check, even with the setting
-   now off, so a repeat after a crash or of another option never changes the
-   choice.
-7. **Request.** The fixed owner request says the owner started a new session
-   with the button, labels the answer as the previous agent's notes rather than
-   new owner instructions, asks to check them against the repository, and names
-   the chosen option as the owner's decision.
+5. **One transaction.** When the source is still active, the owner's press
+   archives it, opens a successor with the same agent, model and effort, and
+   admits the fixed request as its first input in one SQLite transaction.
+   After a Codex `/model` selection, the same control admits the request as
+   the first input of the successor already opened with the selected model
+   and effort. Consecutive selections retain the original card while their
+   successors stay empty. Hub records the origin and exact successor in the
+   session replacement transaction and checks both again at admission.
+6. **Refusals.** Later input to the source or any successor and manual
+   `/new` make the original control stale. Agent switches invalidate the
+   recorded model-selection chain. Work and retained
+   result delivery must settle before the press, and Telegram must own the
+   writer. The admission transaction rechecks these guards, so neither a
+   concurrent session change nor another input can be overtaken. An earlier
+   runtime may ignore the recorded origin, so the check also binds the
+   successor's original row timestamp to detect a provider switch during
+   rollback. The direct rotation keeps its existing durable root refusal.
+   When reusing a model successor, a root or permission refusal leaves the
+   control unused. Once admitted, a repeat reports the first use, including
+   after restart, with the setting off or when pressed on another option.
+7. **Request.** The fixed owner request records the press, identifies the
+   answer as the previous agent's notes, asks to check them against the
+   repository and names the chosen option as the owner's decision.
 8. **Setting.** `session_handoff` is off by default and needs the Hub bot and
    the external queue and outbox. The Controller checks it at the press. Workers
    may read another configuration copy, so the sender projects the setting into
@@ -116,5 +119,7 @@ later input arriving between the press checks and the transaction, a used
 button with the setting now off, a recorded control carrying another job's
 binding, and agent text that tries to forge a control part. An independent
 source review (GPT Astra, high) found two concurrency blockers and three major
-issues in the first candidate; all are fixed with these tests. Release, enabling and owner live acceptance
+issues in the first candidate; all are fixed with these tests. The model-selection
+extension covers first input, restart, repeated selection, an input race, manual
+reset, older-runtime agent switching and isolation from staged forwarded files. Release, enabling and owner live acceptance
 are tracked in the [stabilization plan](../operations/STABILIZATION_PLAN.md).
