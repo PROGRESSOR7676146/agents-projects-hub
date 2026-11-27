@@ -151,8 +151,13 @@ class ClaudeCorrectionInput:
             if self.lifecycle.cancelled:
                 self.sealed = True
             return False
+        subtype = event.get("subtype")
         if (
-            kind == "user"
+            kind.startswith(("hook_", "task_"))
+            or kind == "system"
+            and isinstance(subtype, str)
+            and subtype.startswith(("hook_", "task_"))
+            or kind == "user"
             and (event.get("isReplay") is not True or event.get("parent_tool_use_id") is not None)
             or kind
             in {"assistant", "stream_event", "tool_progress", "tool_use_summary", "control_request"}

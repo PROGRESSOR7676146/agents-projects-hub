@@ -203,6 +203,7 @@ class ClaudeStreamStabilityTests(unittest.TestCase):
             "duplicate_uuid",
             "bad_uuid",
             "earlier_work",
+            "earlier_hook",
             "wrong_reason",
             "non_permission_403",
             "pending_correction",
@@ -215,6 +216,8 @@ class ClaudeStreamStabilityTests(unittest.TestCase):
                     self.feed(self.replay())
                 if mismatch == "earlier_work":
                     self.feed(image_events()[0])
+                if mismatch == "earlier_hook":
+                    self.feed(native_event("system", subtype="hook_started"))
                 if mismatch == "pending_correction":
                     from hermes_codex_router.claude_corrections import ClaudeInputFrame
 
@@ -269,6 +272,16 @@ class ClaudeStreamStabilityTests(unittest.TestCase):
         self.feed(self.lifecycle("completed"))
         self.assertEqual(self.finish(), "Example final")
         self.assertEqual(self.receipts, [self.identifier])
+
+    def test_synthetic_subagent_data_can_never_replace_main_input_or_result(self) -> None:
+        self.begin()
+        _, _, note = image_events()
+        note["parent_tool_use_id"] = "toolu_example_child"
+        self.feed(note)
+        self.assertEqual(self.receipts, [self.identifier])
+        self.assertFalse(self.reader.terminal_seen)
+        self.feed(native_event("result", subtype="success", is_error=False, result="Example final"))
+        self.assertEqual(self.finish(), "Example final")
 
     def test_foreign_synthetic_or_unbound_image_metadata_retains_uncertainty(self) -> None:
         for mismatch in (

@@ -22,6 +22,9 @@ class ClaudeReadImage:
         expected, self._next_note = self._next_note, None
         kind = event.get("type")
         if kind == "user" and event.get("isSynthetic") is True:
+            if event.get("parent_tool_use_id") is not None and expected is None:
+                # Forwarded child messages keep their existing parent-owned path.
+                return False
             identity = event.get("uuid")
             if (
                 not acknowledged
