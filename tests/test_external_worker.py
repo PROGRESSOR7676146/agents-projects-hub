@@ -983,7 +983,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertIn("Автоповтора не будет", notice)
             self.assertIn("прервался без итогового ответа", notice)
             self.assertIn("Итог неизвестен", notice)
-            self.assertIn("на паузе до вашего решения", notice)
+            self.assertIn("Проект останется на паузе", notice)
+            self.assertNotIn("indeterminate-resolve", notice)
         finally:
             worker.close()
 

@@ -78,7 +78,7 @@ class NoticeCopyTests(unittest.TestCase):
                     )
                     self.assert_copy(notice, FAILURE_LIMIT)
                     self.assertNotIn("private", notice)
-        self.assert_copy(uncertain_provider_notice(LONG_NAME, JOB_ID), FAILURE_LIMIT)
+        self.assert_copy(uncertain_provider_notice(LONG_NAME), FAILURE_LIMIT)
         for code in (
             "claude_quota_exhausted",
             "claude_rate_limited",
@@ -113,7 +113,7 @@ class NoticeCopyTests(unittest.TestCase):
 
     def test_indeterminate_notice_never_promises_a_replay(self) -> None:
         for notice in (
-            uncertain_provider_notice("Claude", JOB_ID),
+            uncertain_provider_notice("Claude"),
             codex_failure_notice(RuntimeError("closed")),
         ):
             self.assertIn("Итог неизвестен", notice)
@@ -122,14 +122,11 @@ class NoticeCopyTests(unittest.TestCase):
             # A new message is refused while the project is paused; never suggest it.
             self.assertNotIn("новое сообщение", notice)
 
-    def test_uncertain_notice_names_the_supported_owner_decision(self) -> None:
-        notice = uncertain_provider_notice("Claude", JOB_ID)
-        self.assertIn(
-            "<code>agents-projects-hub indeterminate-resolve &lt;config&gt; "
-            f"{JOB_ID} --resolution acknowledged</code>",
-            notice,
-        )
-        self.assertIn("без повтора", notice)
+    def test_uncertain_notice_keeps_a_clear_pause_without_terminal_instructions(self) -> None:
+        notice = uncertain_provider_notice("Claude")
+        self.assertIn("до проверки", notice)
+        self.assertNotIn("indeterminate-resolve", notice)
+        self.assertNotIn(JOB_ID, notice)
 
     def test_assembled_preexecution_notices_stay_within_limit(self) -> None:
         bases = (

@@ -5,6 +5,19 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.11.36] - 2026-11-27
+
+- Restore Telegram decision buttons for eligible interrupted Claude turns by
+  carrying the Hub bot identity into the Claude worker config. Uncertainty
+  notices explain the pause and keep recovery commands out of Telegram.
+
+- Report a proven Claude permission refusal directly in the topic and
+  recognize resize notes from verified image reads. Unproven cancellations
+  still pause the project.
+- Preserve Codex permission observations received during turn preparation.
+- Explain which Telegram delivery hold blocks `/new` and report SQLite
+  contention when saving Telegram receipts. State schema 61 is unchanged.
+
 ## [0.11.35] - 2026-11-27
 
 - In a Codex topic, the original handoff card still works after changing

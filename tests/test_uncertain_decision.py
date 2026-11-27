@@ -91,7 +91,7 @@ class _StateFixture(unittest.TestCase):
             error_class="ambiguous_execution",
             error_code="ClaudeStreamError",
             sender_agent_id="claude",
-            telegram_html=uncertain_provider_notice("Claude", job.job_id, decision_buttons=prompt),
+            telegram_html=uncertain_provider_notice("Claude"),
             decision_prompt=prompt,
         )
         return self.state.get_provider_job(job.job_id)
@@ -137,7 +137,7 @@ class UncertainDecisionStateTests(_StateFixture):
             job = self.uncertain(10)
         parts = self.parts(job.job_id)
         self.assertEqual(job.status, "indeterminate")
-        self.assertIn("кнопкой", parts[0]["telegram_html"])
+        self.assertIn("на паузе", parts[0]["telegram_html"])
         self.assertNotIn("indeterminate-resolve", parts[0]["telegram_html"])
         self.assertEqual(
             parse_prompt_part(parts[-1]["telegram_html"]),
@@ -420,16 +420,22 @@ class PromptDeliveryTests(_StateFixture):
         hub = FakeBot(800)
         provider = self.deliver_all(hub)
         self.assertEqual(len(provider.sent), 1)
-        self.assertIn("кнопкой", provider.sent[0][0])
+        self.assertIn("на паузе", provider.sent[0][0])
         snapshot = parse_prompt_part(self.parts(self.job_id)[-1]["telegram_html"])
         assert snapshot is not None
         self.assertEqual(hub.sent, [(PROMPT_HTML, keyboard(snapshot))])
         self.assertEqual(self.state.get_telegram_outbox_for_job(self.job_id).status, "delivered")
 
-    def test_without_hub_bot_the_prompt_degrades_to_the_local_command(self) -> None:
+    def test_without_hub_bot_the_prompt_explains_the_pause_without_terminal_instructions(
+        self,
+    ) -> None:
         provider = self.deliver_all(None)
         self.assertEqual(len(provider.sent), 2)
-        self.assertIn("indeterminate-resolve", provider.sent[1][0])
+        self.assertIn("до проверки", provider.sent[0][0])
+        self.assertNotIn("кноп", provider.sent[0][0].lower())
+        self.assertIn("Карточка решения недоступна", provider.sent[1][0])
+        self.assertNotIn("indeterminate-resolve", provider.sent[1][0])
+        self.assertNotIn(self.job_id, provider.sent[1][0])
         self.assertIsNone(provider.sent[1][1])
 
 
@@ -450,7 +456,7 @@ class PureHelperTests(unittest.TestCase):
         self.assertIsNone(parse_callback("ud:done"))
 
     def test_notice_and_prompt_copy_stay_short_and_honest(self) -> None:
-        notice = uncertain_provider_notice("Claude", "job-1", decision_buttons=True)
+        notice = uncertain_provider_notice("Claude")
         self.assertLessEqual(len(notice), 400)
         self.assertIn("Автоповтора не будет", notice)
         self.assertLessEqual(len(PROMPT_HTML), 400)
@@ -540,7 +546,8 @@ class CallbackHandlerTests(_StateFixture):
             self.press(self.service(enabled_config=False), f"ud:c:{snapshot}")
             self.press(service, "ud:c:not-a-snapshot")
         self.assertIn("Только владелец", service.telegram.answers[0])
-        self.assertTrue(all("локальная команда" in a for a in service.telegram.answers[1:]))
+        self.assertTrue(all("Кнопка недоступна" in a for a in service.telegram.answers[1:]))
+        self.assertTrue(all("команд" not in a for a in service.telegram.answers[1:]))
         self.assertEqual(service.telegram.calls, [])
         self.assertIsNone(
             self.state._connection.execute(

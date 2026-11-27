@@ -1240,9 +1240,7 @@ class ProjectHubService:
                         error=exc,
                         failure=failure,
                         turn_status=turn_status,
-                        fallback_notice=uncertain_provider_notice(
-                            agent.display_name, executing.job_id
-                        ),
+                        fallback_notice=uncertain_provider_notice(agent.display_name),
                     )
             except Exception as survived_error:
                 survived("service.failure_notice_record", survived_error)

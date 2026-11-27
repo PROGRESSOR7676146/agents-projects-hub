@@ -9,7 +9,6 @@ from typing import Callable, Protocol
 
 from . import artifact_capabilities
 from .artifacts import artifact_spool_root, remove_spooled_artifact, verify_spooled_artifact
-from .codex_failure import owner_resolution_action
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .receipt_commit import commit_receipt
 from .reply_choices import CHOICE_PROMPT_HTML, keyboard, parse_choice_part
@@ -17,9 +16,9 @@ from .session_handoff import HANDOFF_PROMPT_HTML, parse_handoff_part
 from .session_handoff import keyboard as handoff_keyboard
 from .state_delivery import DeliveryStateFacade, TelegramOutboxRecord
 from .telegram import TelegramError
+from .uncertain_decision import DECISION_UNAVAILABLE, parse_prompt_part
 from .uncertain_decision import PROMPT_HTML as UNCERTAIN_PROMPT_HTML
 from .uncertain_decision import keyboard as uncertain_keyboard
-from .uncertain_decision import parse_prompt_part
 
 
 class FinalDeliveryTelegram(Protocol):
@@ -142,8 +141,7 @@ def deliver_final_part(
                 reply_markup=handoff_keyboard(*handoff),
             )
         elif (snapshot := parse_prompt_part(part.telegram_html)) is not None:
-            # Only the Hub bot receives the press (ADR 0107); without it the
-            # prompt degrades to the local owner command, never provider buttons.
+            # Only the Hub bot receives the press (ADR 0107).
             message_id = (
                 choice_telegram.send_html(
                     outbox.chat_id,
@@ -152,9 +150,7 @@ def deliver_final_part(
                     reply_markup=uncertain_keyboard(snapshot),
                 )
                 if choice_telegram is not None
-                else telegram.send_html(
-                    outbox.chat_id, outbox.thread_id, owner_resolution_action(outbox.job_id)
-                )
+                else telegram.send_html(outbox.chat_id, outbox.thread_id, DECISION_UNAVAILABLE)
             )
         else:
             message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, part.telegram_html)

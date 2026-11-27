@@ -79,7 +79,7 @@ def _uncertain(service: Any, callback: TopicCallback) -> bool:
         or callback.message_sender_id is None
         or callback.message_sender_id != hub_bot_id
     ):
-        _answer(service, callback, "Кнопка недоступна; паузу снимает локальная команда")
+        _answer(service, callback, "Кнопка недоступна")
         return True
     action, snapshot = parsed
     try:

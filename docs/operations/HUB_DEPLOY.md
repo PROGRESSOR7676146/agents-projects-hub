@@ -151,6 +151,10 @@ settings differ from the candidate Claude worker config. Only the release
 overlay may differ — the CLI executable and a confined profile's runtime paths
 and pin. The Controller and monitor read the Hub config, so a drifted copy there
 would misreport the Claude workers' real configuration.
+The plan also projects the Controller's public Hub bot ID into the Claude
+worker config when both bot names are configured and match. A conflicting ID
+or name blocks the plan. If either name is absent, the plan preserves
+the worker bot configuration. Each config keeps its own token reference.
 Release unit templates are included as changes only when their bytes differ;
 unchanged templates are recorded as guards.
 
