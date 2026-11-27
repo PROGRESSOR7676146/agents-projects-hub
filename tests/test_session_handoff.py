@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -23,8 +24,10 @@ from hermes_codex_router.hub_config import (
     ProjectBinding,
     TerminalSettings,
 )
+from hermes_codex_router.incoming_materials import IncomingMaterialDraft
 from hermes_codex_router.metadata import format_agent_response
 from hermes_codex_router.models import Project, ProjectRegistry
+from hermes_codex_router.provider_catalog_cache import CachedProviderModel, CatalogSnapshot
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.session_handoff import (
     HANDOFF_PART_MARKER,
@@ -45,7 +48,8 @@ from hermes_codex_router.session_handoff import (
     split_handoff_suffix,
     turn_note,
 )
-from hermes_codex_router.state import HubState, StateError
+from hermes_codex_router.state import HubState, SessionRecord, StateError
+from hermes_codex_router.state_handoff import HandoffAdmission
 from hermes_codex_router.telegram import TopicMessage, parse_topic_callback
 from tests.git_fixtures import init_git_root
 from tests.test_service_integration import persist_registry
@@ -112,7 +116,7 @@ class GrammarTests(unittest.TestCase):
     def test_request_text_labels_provenance_and_bounds(self) -> None:
         plain = request_text(ANSWER, None)
         chosen = request_text(ANSWER, "Релиз")
-        self.assertTrue(plain.startswith("Владелец начал новую сессию"))
+        self.assertTrue(plain.startswith("Владелец нажал кнопку handoff"))
         self.assertIn("не новые указания владельца", plain)
         self.assertTrue(plain.endswith(ANSWER))
         self.assertIn("вариант продолжения: «Релиз»", chosen)
@@ -290,6 +294,21 @@ class PressTests(unittest.TestCase):
             )
         ]
 
+    def select_model(self, effort: str = "medium") -> SessionRecord:
+        catalog = CatalogSnapshot(
+            "codex",
+            (CachedProviderModel("gpt-example-next", "Next", ("medium", "high"), "next"),),
+            datetime.now(timezone.utc),
+            None,
+            None,
+        )
+        with mock.patch.object(self.service, "_cached_provider_catalog", return_value=catalog):
+            self.press(800, f"use:codex:next:{effort}", callback_id=f"model-{effort}")
+        active = self.state.active_session(self.topic_id)
+        assert active is not None
+        self.assertEqual((active.model, active.effort), ("gpt-example-next", effort))
+        return active
+
     # Delivery ----------------------------------------------------------------
 
     def test_control_follows_the_answer_from_the_hub_bot(self) -> None:
@@ -348,6 +367,131 @@ class PressTests(unittest.TestCase):
         s2 = self.state.active_session(self.topic_id)
         assert s2 is not None
         self.assertEqual(self.jobs_in(s2.session_id)[0][1], request_text(ANSWER, None))
+
+    def test_press_after_model_selection_uses_existing_successor_once(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff: Релиз | Кнопка]]")
+        selected = self.select_model()
+        binding = handoff_binding(job_id)
+        self.press(control, f"ho:2:{binding}")
+        self.assertEqual(self.state.active_session(self.topic_id), selected)
+        self.assertEqual(
+            self.jobs_in(selected.session_id), [(control, request_text(ANSWER, "Кнопка"))]
+        )
+        self.press(control, f"ho:1:{binding}", callback_id="again")
+        self.assertEqual(self.hub.callbacks[-1][1], "Кнопка уже использована")
+        self.assertEqual(len(self.jobs_in(selected.session_id)), 1)
+
+    def test_model_handoff_leaves_forwarded_material_for_ordinary_input(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        selected = self.select_model()
+        self.state.record_forwarded_quote(
+            topic_id=self.topic_id,
+            chat_id=CHAT,
+            message_id=12,
+            observer_agent_id="hub",
+            text="Forwarded document",
+            materials=(
+                IncomingMaterialDraft(
+                    attachment_index=1,
+                    media_group_id=None,
+                    kind="document",
+                    content_kind=None,
+                    file_unique_id=None,
+                    display_name="example.txt",
+                    mime_type=None,
+                    declared_size=None,
+                    storage_path=None,
+                    byte_size=None,
+                    sha256=None,
+                    status="unavailable",
+                    unavailable_code="fixture_unavailable",
+                    unavailable_detail="Example file unavailable",
+                ),
+            ),
+            session=selected,
+        )
+        pending = self.state.pending_incoming_materials(self.topic_id)
+        self.assertEqual(len(pending), 1)
+
+        self.press(control, f"ho:0:{handoff_binding(job_id)}")
+
+        self.assertEqual(self.jobs_in(selected.session_id), [(control, request_text(ANSWER, None))])
+        self.assertEqual(self.state.pending_incoming_materials(self.topic_id), pending)
+
+    def test_second_model_selection_and_restart_keep_the_card(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        self.select_model()
+        selected = self.select_model("high")
+        self.state.close()
+        self.state = self.service.state = HubState.open(
+            self.service.config.state_path, codex_permission_profile=None
+        )
+        self.addCleanup(self.state.close)
+        self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assertEqual(self.state.active_session(self.topic_id), selected)
+        self.assertEqual(self.jobs_in(selected.session_id), [(control, request_text(ANSWER, None))])
+
+    def test_manual_new_invalidates_the_model_successor(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        selected = self.select_model()
+        self.press(801, f"new:confirm:{selected.session_id}", callback_id="manual-new")
+        latest = self.state.active_session(self.topic_id)
+        assert latest is not None
+        self.assertNotEqual(latest.session_id, selected.session_id)
+        self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assertEqual(self.state.active_session(self.topic_id), latest)
+        self.assertEqual(self.jobs_in(latest.session_id), [])
+        self.assertFalse(self.state.message_already_observed(CHAT, control))
+
+    def test_input_racing_with_press_keeps_first_position(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        selected = self.select_model()
+
+        def admit_later_input(*args: object) -> None:
+            self.answer("New work", message_id=12)
+
+        with mock.patch(
+            "hermes_codex_router.session_handoff_callback._session_refusal",
+            side_effect=admit_later_input,
+        ):
+            self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assertEqual(self.state.active_session(self.topic_id), selected)
+        self.assertEqual(self.jobs_in(selected.session_id), [(12, "durable task")])
+        self.assertFalse(self.state.message_already_observed(CHAT, control))
+
+    def test_later_work_cannot_be_skipped_by_changing_model_again(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        self.select_model()
+        self.answer("New work", message_id=12)
+        latest = self.select_model("high")
+        self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assertEqual(self.state.active_session(self.topic_id), latest)
+        self.assertEqual(self.jobs_in(latest.session_id), [])
+        self.assertFalse(self.state.message_already_observed(CHAT, control))
+
+    def test_provider_switch_during_runtime_rollback_invalidates_handoff(self) -> None:
+        job_id, control = self.answer(f"{ANSWER}\n[[handoff]]")
+        selected = self.select_model()
+        # The earlier runtime switches providers without clearing this checkpoint.
+        with mock.patch("hermes_codex_router.state_sessions.clear_model_handoff"):
+            other = self.state.activate_agent(
+                self.topic_id,
+                "opencode",
+                "example-model",
+                "medium",
+                expected_session_id=selected.session_id,
+            )
+            returned = self.state.activate_agent(
+                self.topic_id,
+                "codex",
+                selected.model,
+                selected.effort,
+                expected_session_id=other.session_id,
+            )
+        self.assertEqual(returned.session_id, selected.session_id)
+        self.press(control, f"ho:0:{handoff_binding(job_id)}")
+        self.assertEqual(self.jobs_in(selected.session_id), [])
+        self.assertFalse(self.state.message_already_observed(CHAT, control))
 
     def assert_unchanged(self) -> None:
         self.assertEqual(self.state.active_session(self.topic_id), self.s1)
@@ -496,7 +640,11 @@ class PressTests(unittest.TestCase):
         message = TopicMessage(0, 600, CHAT, THREAD, "project", 42, "text")
         result = controller_provider_admission(self.service, message, stale).admit(
             DurableAdmissionRequest(
-                message=message, topic=topic, session=stale, prompt="text", rotate_after=0
+                message=message,
+                topic=topic,
+                session=stale,
+                prompt="text",
+                session_handoff=HandoffAdmission(stale.session_id, 0),
             )
         )
         self.assertEqual(result, RejectedAdmission("session_changed"))
@@ -506,7 +654,11 @@ class PressTests(unittest.TestCase):
         message = TopicMessage(0, 601, CHAT, THREAD, "project", 42, "text")
         result = controller_provider_admission(self.service, message, current).admit(
             DurableAdmissionRequest(
-                message=message, topic=topic, session=current, prompt="text", rotate_after=0
+                message=message,
+                topic=topic,
+                session=current,
+                prompt="text",
+                session_handoff=HandoffAdmission(current.session_id, 0),
             )
         )
         self.assertIsInstance(result, CommittedAdmission)

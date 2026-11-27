@@ -53,6 +53,7 @@ from .state_delivery import (
 )
 from .state_errors import StateError
 from .state_facades import HubStateFacade
+from .state_handoff import HandoffAdmission
 from .state_incoming_materials import IncomingMaterialsStateFacade
 from .state_lanes import LaneState
 from .state_outcomes import OutcomeJournalStateFacade, ProviderJobOutcome
@@ -927,7 +928,7 @@ class HubState(HubStateFacade):
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
         telegram_ingress_identity: str | None = None,
-        rotate_after: int | None = None,
+        session_handoff: HandoffAdmission | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one provider input and its receipt/notices."""
         from .provider_admission_state import ProviderAdmissionState
@@ -956,7 +957,7 @@ class HubState(HubStateFacade):
                 prepare_task_notices=prepare_task_notices,
                 queue_capacity=queue_capacity,
                 telegram_ingress_identity=telegram_ingress_identity,
-                rotate_after=rotate_after,
+                session_handoff=session_handoff,
             )
 
     def enqueue_or_append_provider_job(
@@ -2309,6 +2310,7 @@ class HubState(HubStateFacade):
         effort: str,
         expected_session_id: str | None = None,
         runtime: str | None = None,
+        keep_model_handoff: bool = False,
     ) -> SessionRecord:
         return self._sessions_state.replace_active_session(
             topic_id,
@@ -2316,6 +2318,7 @@ class HubState(HubStateFacade):
             effort=effort,
             expected_session_id=expected_session_id,
             runtime=runtime,
+            keep_model_handoff=keep_model_handoff,
         )
 
     def claim_message(self, chat_id: int, message_id: int, *, observer_agent_id: str) -> bool:

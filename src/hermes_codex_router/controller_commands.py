@@ -471,6 +471,7 @@ class ControllerCommandOrchestrator:
             effort=effort,
             expected_session_id=active.session_id,
             runtime=agent.runtime,
+            keep_model_handoff=self.config.session_handoff and agent.runtime == "codex",
         )
         return TextCommandDecision(
             f"{agent.display_name} · {model} · {effort.title()} will start on the next "

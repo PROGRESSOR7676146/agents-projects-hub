@@ -155,8 +155,11 @@ Prepared-release switching: [candidate](PREPARED_RELEASE_SWITCHER.md); review an
   In a Codex topic, the owner observed the stale-session refusal after
   `/new` and `/model`. An owner press on v0.11.33 started a fresh Codex
   session with the saved answer, the same model and the same effort.
-  Other live Codex guard checks remain open. Choosing a different model
-  and carrying the handoff in one flow remains an open design question.
+  The owner approved reusing the existing control after a Codex `/model`
+  selection. Automated coverage exercises the fixed request as the first input
+  of that successor and refusal after other input or `/new`. Live acceptance
+  still needs a model selection followed by a press on the original control,
+  including the option and repeat checks.
 - Agent mail (ADR 0112): owner live-accepted on 0.11.31 (2026-11-24) for both
   directions of the first route. Each letter appeared in the other topic as a
   Hub-bot document with «Обработать», and one phone press started exactly one

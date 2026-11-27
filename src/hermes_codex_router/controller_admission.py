@@ -23,6 +23,7 @@ from .state import (
     WriterTransferSnapshot,
 )
 from .state_errors import CodexPermissionSelectionChanged
+from .state_handoff import HandoffAdmission
 from .telegram import TelegramError, TopicMessage
 from .telegram_quoted_context import bounded_payload, with_quoted_context
 from .telegram_turn_provenance import validate_ingress_identity
@@ -49,10 +50,7 @@ class DurableAdmissionRequest:
     batchable_user_text: str | None = None
     take_local_writer: bool = False
     writer_transfer_snapshot: WriterTransferSnapshot | None = None
-    # ADR 0114: archive ``session`` and admit this input as its successor's
-    # first one in the same transaction, unless input reached ``session``
-    # after this topic sequence (the source answer). Text only, never batched.
-    rotate_after: int | None = None
+    session_handoff: HandoffAdmission | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,11 +111,14 @@ class DurableProviderAdmission:
         writer_transfer_preflight: WriterTransferPreflight | None = None,
     ) -> DurableAdmissionResult:
         message = request.message
-        rotating = request.rotate_after is not None
+        handoff = request.session_handoff
+        model_handoff = (
+            handoff is not None and handoff.source_session_id != request.session.session_id
+        )
         if self.state.message_already_observed(message.chat_id, message.message_id):
             return DuplicateAdmission()
 
-        if rotating and (
+        if handoff is not None and (
             request.batchable_user_text is not None
             or message.attachments
             or message.unavailable_materials
@@ -125,7 +126,7 @@ class DurableProviderAdmission:
         ):
             raise ValueError("session rotation admits one plain text input")
         # A rotated input runs in a new generation with the current selection.
-        if request.session.agent_id == "codex" and not rotating:
+        if request.session.agent_id == "codex" and handoff is None:
             refusal = self._permission_refusal(request)
             if refusal is not None:
                 return refusal
@@ -139,7 +140,7 @@ class DurableProviderAdmission:
                 return DuplicateAdmission()
             return RejectedAdmission("input_too_long")
 
-        if not request.take_local_writer:
+        if not request.take_local_writer and not model_handoff:
             try:
                 blocked = self.state.reject_blocked_provider_input(
                     chat_id=message.chat_id,
@@ -149,7 +150,7 @@ class DurableProviderAdmission:
                     session_generation=request.session.generation,
                 )
             except StateError:
-                if rotating:
+                if handoff is not None:
                     return RejectedAdmission("session_changed")
                 raise
             if blocked is not None:
@@ -240,7 +241,7 @@ class DurableProviderAdmission:
                     agent_id=request.session.agent_id,
                     session_id=request.session.session_id,
                     session_generation=request.session.generation,
-                    provider_session_id=(None if rotating else request.session.provider_session_id),
+                    provider_session_id=None if handoff else request.session.provider_session_id,
                     model=request.session.model,
                     effort=request.session.effort,
                     payload_text=payload,
@@ -250,17 +251,21 @@ class DurableProviderAdmission:
                     input_group_key=group_key,
                     take_local_writer=request.take_local_writer,
                     expected_transfer=expected_transfer,
-                    rotate_after=request.rotate_after,
+                    session_handoff=handoff,
                     prepare_task_notices=self.prepare_task_notices,
                     queue_capacity=self.queue_capacity,
                     telegram_ingress_identity=self.telegram_ingress_identity,
                 )
         except CodexPermissionSelectionChanged as exc:
+            if model_handoff:
+                return RejectedAdmission("codex_permission_selection_changed")
             return self._permission_refusal(request) or DurableAdmissionFailure(
                 "enqueue_uncommitted", exc
             )
         except StateError as exc:
             if str(exc) == "execution root has a persistent local writer or uncertainty":
+                if model_handoff:
+                    return RejectedAdmission("persistent_root_blocker")
                 blocked = self.state.reject_blocked_provider_input(
                     chat_id=message.chat_id,
                     message_id=message.message_id,
@@ -282,7 +287,7 @@ class DurableProviderAdmission:
                 return RejectedAdmission("input_before_session_activation")
             if request.take_local_writer:
                 return RejectedAdmission("local_transfer_changed")
-            if rotating:
+            if handoff is not None:
                 # The session or its guards changed: nothing committed or claimed.
                 return RejectedAdmission("session_changed")
             return DurableAdmissionFailure("enqueue_uncommitted", exc)

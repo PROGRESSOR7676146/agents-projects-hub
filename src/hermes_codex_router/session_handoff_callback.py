@@ -19,6 +19,7 @@ from .controller_admission import (
     DuplicateAdmission,
     DurableAdmissionFailure,
     DurableAdmissionRequest,
+    RejectedAdmission,
     controller_provider_admission,
 )
 from .diagnostic_log import survived
@@ -33,6 +34,7 @@ from .session_handoff import (
     request_text,
 )
 from .state import StateError
+from .state_handoff import HandoffAdmission, has_later_handoff_input, is_model_handoff_successor
 from .telegram import TelegramError, TopicCallback, TopicMessage
 
 STALE = "Кнопка устарела"
@@ -91,8 +93,9 @@ def handle_session_handoff(
         return True
     body = extracted[0]
     label = labels[index - 1] if index else None
+    target = state.active_session(topic_id)
     refusal = _session_refusal(state, topic_id, job)
-    if refusal is not None or not fits(body, labels):
+    if refusal is not None or target is None or not fits(body, labels):
         _answer(service, callback.callback_id, refusal or STALE)
         return True
     text = request_text(body, label)
@@ -107,15 +110,14 @@ def handle_session_handoff(
         sender_id=callback.sender_id,
         text=text,
     )
-    # Admission rotates exactly the session that wrote the answer and refuses
-    # inside its transaction if that session changed or received later input.
-    result = controller_provider_admission(service, message, source).admit(
+    after_model = source.session_id != target.session_id
+    result = controller_provider_admission(service, message, target).admit(
         DurableAdmissionRequest(
             message=message,
             topic=topic,
-            session=source,
+            session=target,
             prompt=text,
-            rotate_after=job.topic_sequence,
+            session_handoff=HandoffAdmission(source.session_id, job.topic_sequence),
         )
     )
     if isinstance(result, DuplicateAdmission):
@@ -126,6 +128,15 @@ def handle_session_handoff(
     if isinstance(result, DurableAdmissionFailure):
         _answer(service, callback.callback_id, "Hub не смог принять нажатие, попробуй ещё раз")
         return False
+    if after_model and isinstance(result, RejectedAdmission):
+        if result.reason == "persistent_root_blocker":
+            _answer(
+                service, callback.callback_id, "Работа в корне проекта заблокирована. См. /status"
+            )
+            return True
+        if result.reason == "codex_permission_selection_changed":
+            _answer(service, callback.callback_id, "Профиль Codex изменился. Открой /new")
+            return True
     if not admitted and not state.message_already_observed(callback.chat_id, callback.message_id):
         _answer(service, callback.callback_id, "Сессия как раз изменилась, нажми ещё раз")
         return True
@@ -152,7 +163,9 @@ def handle_session_handoff(
         )
         service.telegram.answer_callback(
             callback.callback_id,
-            "Новая сессия начата" if admitted else "Hub не принял сообщение, причина — в теме",
+            ("Резюме передано" if after_model else "Новая сессия начата")
+            if admitted
+            else "Hub не принял сообщение, причина — в теме",
         )
     except TelegramError as error:
         # The press is already settled; a repeat is refused by the record.
@@ -163,13 +176,16 @@ def handle_session_handoff(
 def _session_refusal(state: Any, topic_id: int, job: Any) -> str | None:
     """Plain reasons why this press cannot replace the session now, or None."""
     active = state.active_session(topic_id)
-    if active is None or active.session_id != job.session_id:
+    if active is None or (
+        active.session_id != job.session_id
+        and not is_model_handoff_successor(
+            state._connection, state.get_session(job.session_id), active
+        )
+    ):
         return "Кнопка относится к прошлой сессии: в теме уже другая сессия"
-    later = state._connection.execute(
-        "SELECT 1 FROM provider_jobs WHERE session_id = ? AND topic_sequence > ? LIMIT 1",
-        (job.session_id, job.topic_sequence),
-    ).fetchone()
-    if later is not None:
+    if has_later_handoff_input(
+        state._connection, topic_id, HandoffAdmission(job.session_id, job.topic_sequence)
+    ):
         return "После этого ответа в сессии уже была работа, кнопка устарела"
     if active.writer_mode != "telegram":
         return "Сессией сейчас владеет локальный терминал: верни её в Telegram и нажми снова"

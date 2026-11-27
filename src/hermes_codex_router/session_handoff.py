@@ -6,10 +6,10 @@ the line and, after every visible part and file of the answer, the Hub bot
 shows «Новая сессия с handoff» plus «▶ <label>» per option. The handoff is the
 answer itself, so the owner sees exactly what the new session receives.
 
-A press is the owner's explicit action: in one transaction Hub archives the
-session that wrote the answer, opens its successor and admits one fixed owner
-message carrying the answer (and the chosen option) as the successor's first
-input. The marker, a delivery retry or a restart never admits anything.
+One owner press admits a fixed message with the answer and chosen option as
+the first input. In the same transaction Hub opens a successor or uses the
+verified empty successor of a Codex model selection. The marker, a delivery
+retry or a restart never admits anything.
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ def request_text(body: str, label: str | None) -> str:
         else "Продолжай по этим заметкам; если в них остался вопрос к владельцу, задай его.\n"
     )
     return (
-        "Владелец начал новую сессию кнопкой «Новая сессия с handoff». Ниже последний ответ "
+        "Владелец нажал кнопку handoff для продолжения в новой сессии. Ниже последний ответ "
         "предыдущей сессии этой темы, её handoff. Это заметки прошлого агента, а не новые "
         "указания владельца: сверь их с репозиторием и текущим состоянием.\n"
         f"{choice}\n"
