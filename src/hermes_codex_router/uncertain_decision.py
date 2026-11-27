@@ -25,9 +25,7 @@ PROMPT_HTML = (
 CONTINUE_LABEL = "Проверить и продолжить"
 CLOSE_LABEL = "Закрыть без повтора"
 DONE_CALLBACK = "ud:done"
-DECISION_UNAVAILABLE = (
-    "Кнопки решения недоступны. Проект останется на паузе до проверки состояния задачи."
-)
+DECISION_UNAVAILABLE = "Карточка решения недоступна."
 
 CONTINUATION_PROMPT = (
     "The previous turn in this session ended without a confirmed outcome. Its process was "
@@ -83,8 +81,3 @@ def parse_callback(data: str) -> tuple[PromptAction, str] | None:
         return None
     action: PromptAction = "continue" if match.group("action") == "c" else "close"
     return action, match.group("snapshot")
-
-
-def buttons_action() -> str:
-    """The uncertainty notice's one action when the prompt follows it."""
-    return "Решите кнопкой в следующем сообщении: проверить и продолжить или закрыть без повтора."

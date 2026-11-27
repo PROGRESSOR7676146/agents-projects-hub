@@ -1619,6 +1619,34 @@ class WindowTests(WindowFixture):
                 with self.assertRaisesRegex(hub_deploy.Refused, "Hub bot identity"):
                     hub_deploy.create_plan(self.install, old, new, self.runner)
 
+    def test_plan_preserves_worker_configs_without_comparable_hub_bot_names(self):
+        worker_path = self.configs / f"claude-{self.old_sha[:7]}.json"
+        worker = json.loads(worker_path.read_text())
+        hub = json.loads(self.hub.read_text())
+        old = hub_deploy.discover_installation(
+            self.install, self.runner, lambda *_: True, lambda _: 0
+        )
+        new = hub_deploy.prepare_stage(
+            self.install, old, "v2.0.0", self.runner, python=Path("/usr/bin/python3")
+        )
+        named_worker = {**worker, "hub_bot": {"telegram_username": "example_hub_bot"}}
+        named_hub = {"telegram_username": "example_hub_bot", "telegram_user_id": 800}
+        for candidate_worker, controller_bot in (
+            (worker, named_hub),
+            ({**worker, "hub_bot": {"telegram_user_id": 800}}, named_hub),
+            (named_worker, {"telegram_user_id": 800}),
+        ):
+            with self.subTest(
+                controller_bot=controller_bot, worker=candidate_worker.get("hub_bot")
+            ):
+                worker_path.write_text(json.dumps(candidate_worker))
+                self.hub.write_text(json.dumps({**hub, "hub_bot": controller_bot}))
+                plan_dir = hub_deploy.create_plan(self.install, old, new, self.runner)
+                plan = hub_deploy.verify_saved_plan(plan_dir)
+                entry = next(entry for entry in plan["files"] if entry["kind"] == "claude_config")
+                result = json.loads((plan_dir / entry["after"]["copy"]).read_text())
+                self.assertEqual(result.get("hub_bot"), candidate_worker.get("hub_bot"))
+
     def test_claude_settings_drift_between_configs_refuses_the_plan(self):
         old = hub_deploy.discover_installation(
             self.install, self.runner, lambda *_: True, lambda _: 0

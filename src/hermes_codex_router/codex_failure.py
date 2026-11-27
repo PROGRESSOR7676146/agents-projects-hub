@@ -5,9 +5,8 @@ import re
 from contextlib import contextmanager
 from typing import Iterator
 
-from .uncertain_decision import DECISION_UNAVAILABLE, buttons_action
-
 MAX_PARTIAL_TEXT = 10_000
+UNCERTAIN_PAUSE_NOTICE = "Проект останется на паузе до проверки состояния задачи."
 
 
 class CodexPreparationError(RuntimeError):
@@ -142,15 +141,10 @@ def codex_failure_notice(
     return notice
 
 
-def uncertain_provider_notice(display_name: str, *, decision_buttons: bool = False) -> str:
-    """Explain the pause and offer a Telegram decision when available."""
+def uncertain_provider_notice(display_name: str) -> str:
+    """Explain the pause independently of Telegram decision delivery."""
     safe_name = html.escape(display_name)
-    action = (
-        "Проект на паузе до вашего решения.\n" + buttons_action()
-        if decision_buttons
-        else DECISION_UNAVAILABLE
-    )
     return (
         f"⚠️ {safe_name} прервался без итогового ответа.\n"
-        "Итог неизвестен: файлы могли измениться. Автоповтора не будет.\n" + action
+        "Итог неизвестен: файлы могли измениться. Автоповтора не будет.\n" + UNCERTAIN_PAUSE_NOTICE
     )

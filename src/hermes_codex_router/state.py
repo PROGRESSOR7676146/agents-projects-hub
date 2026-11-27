@@ -17,6 +17,7 @@ from .assessment_inputs import OutcomeAssessmentInput
 from .batch_part_state import BatchPartState
 from .claude_correction_state import ClaudeCorrectionState
 from .codex_control_predicates import control_owner_for_topic
+from .codex_failure import UNCERTAIN_PAUSE_NOTICE
 from .codex_ingress_assessments import CodexIngressAssessments
 from .codex_ingress_control import CodexIngressControl
 from .codex_permission_refusals import CodexPermissionInputState, PermissionInputDisposition
@@ -78,7 +79,6 @@ from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
 from .telegram_ingress_ledger import TelegramIngressLedger
 from .telegram_turn_provenance import TelegramTurnProvenance, validate_ingress_identity
-from .uncertain_decision import DECISION_UNAVAILABLE
 from .uncertain_decision_state import UncertainDecisionState
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
@@ -1494,7 +1494,7 @@ class HubState(HubStateFacade):
                 html = (
                     "⚠️ Codex сообщил об ошибке подготовки, но запуск уже мог начаться.\n"
                     "Итог неизвестен: файлы могли измениться. Автоповтора не будет.\n"
-                    + DECISION_UNAVAILABLE
+                    + UNCERTAIN_PAUSE_NOTICE
                 )
             if status == "failed" and self._provider_job_state.honor_stop(
                 job_id, lease_token, expected_status

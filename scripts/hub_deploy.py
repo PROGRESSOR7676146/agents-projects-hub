@@ -260,19 +260,17 @@ def claude_policy(config: object) -> dict[str, Any]:
 def _sync_claude_hub_bot_identity(hub: dict[str, Any], worker: dict[str, Any]) -> None:
     """Project the Controller's public bot identity into the candidate worker config."""
     hub_bot, worker_bot = hub.get("hub_bot"), worker.get("hub_bot")
-    if not isinstance(hub_bot, dict) or "telegram_user_id" not in hub_bot:
-        if isinstance(worker_bot, dict):
-            worker_bot.pop("telegram_user_id", None)
+    if not isinstance(hub_bot, dict) or not isinstance(worker_bot, dict):
+        return
+    if "telegram_user_id" not in hub_bot:
+        return
+    hub_name, worker_name = hub_bot.get("telegram_username"), worker_bot.get("telegram_username")
+    if not isinstance(hub_name, str) or not isinstance(worker_name, str):
         return
     bot_id = hub_bot["telegram_user_id"]
     need(type(bot_id) is int and bot_id > 0, "invalid Hub bot identity")
-    need(isinstance(worker_bot, dict), "Claude worker has no matching Hub bot identity")
-    assert isinstance(worker_bot, dict)
-    hub_name, worker_name = hub_bot.get("telegram_username"), worker_bot.get("telegram_username")
     need(
-        isinstance(hub_name, str)
-        and isinstance(worker_name, str)
-        and hub_name.removeprefix("@").casefold() == worker_name.removeprefix("@").casefold(),
+        hub_name.removeprefix("@").casefold() == worker_name.removeprefix("@").casefold(),
         "Claude worker Hub bot identity differs from the Hub config",
     )
     prior = worker_bot.get("telegram_user_id", bot_id)

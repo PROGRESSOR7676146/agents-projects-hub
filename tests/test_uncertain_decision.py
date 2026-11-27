@@ -91,7 +91,7 @@ class _StateFixture(unittest.TestCase):
             error_class="ambiguous_execution",
             error_code="ClaudeStreamError",
             sender_agent_id="claude",
-            telegram_html=uncertain_provider_notice("Claude", decision_buttons=prompt),
+            telegram_html=uncertain_provider_notice("Claude"),
             decision_prompt=prompt,
         )
         return self.state.get_provider_job(job.job_id)
@@ -137,7 +137,7 @@ class UncertainDecisionStateTests(_StateFixture):
             job = self.uncertain(10)
         parts = self.parts(job.job_id)
         self.assertEqual(job.status, "indeterminate")
-        self.assertIn("кнопкой", parts[0]["telegram_html"])
+        self.assertIn("на паузе", parts[0]["telegram_html"])
         self.assertNotIn("indeterminate-resolve", parts[0]["telegram_html"])
         self.assertEqual(
             parse_prompt_part(parts[-1]["telegram_html"]),
@@ -420,7 +420,7 @@ class PromptDeliveryTests(_StateFixture):
         hub = FakeBot(800)
         provider = self.deliver_all(hub)
         self.assertEqual(len(provider.sent), 1)
-        self.assertIn("кнопкой", provider.sent[0][0])
+        self.assertIn("на паузе", provider.sent[0][0])
         snapshot = parse_prompt_part(self.parts(self.job_id)[-1]["telegram_html"])
         assert snapshot is not None
         self.assertEqual(hub.sent, [(PROMPT_HTML, keyboard(snapshot))])
@@ -431,7 +431,9 @@ class PromptDeliveryTests(_StateFixture):
     ) -> None:
         provider = self.deliver_all(None)
         self.assertEqual(len(provider.sent), 2)
-        self.assertIn("до проверки", provider.sent[1][0])
+        self.assertIn("до проверки", provider.sent[0][0])
+        self.assertNotIn("кноп", provider.sent[0][0].lower())
+        self.assertIn("Карточка решения недоступна", provider.sent[1][0])
         self.assertNotIn("indeterminate-resolve", provider.sent[1][0])
         self.assertNotIn(self.job_id, provider.sent[1][0])
         self.assertIsNone(provider.sent[1][1])
@@ -454,7 +456,7 @@ class PureHelperTests(unittest.TestCase):
         self.assertIsNone(parse_callback("ud:done"))
 
     def test_notice_and_prompt_copy_stay_short_and_honest(self) -> None:
-        notice = uncertain_provider_notice("Claude", decision_buttons=True)
+        notice = uncertain_provider_notice("Claude")
         self.assertLessEqual(len(notice), 400)
         self.assertIn("Автоповтора не будет", notice)
         self.assertLessEqual(len(PROMPT_HTML), 400)

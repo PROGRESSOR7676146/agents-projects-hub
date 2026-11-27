@@ -32,8 +32,9 @@ choices can lead to new work in the root, so the offer itself needs that proof.
    part. The final sender delivers it through the Hub bot as a short prompt
    with **«Проверить и продолжить»** and **«Закрыть без повтора»**. The part
    stores a server-side snapshot of the job, Hub session, generation and
-   native session; the notice's action line points at the buttons. Without a
-   Hub bot the part explains that the decision is unavailable in Telegram.
+   native session. The notice describes the pause independently of delivery
+   of the decision part. Without a Hub bot the part explains that the decision
+   is unavailable in Telegram.
 3. **Press.** The Controller accepts a press only from a configured owner, on
    a message authored by the configured numeric Hub bot. One immediate
    transaction then rechecks the positively receipted prompt part, its topic,
@@ -73,8 +74,8 @@ press handling (with the moved held-request buttons).
 - The callback grants no replay, approval, stop, writer or delivery authority.
   It cannot resolve a job that the local command already resolved, and the
   command still works after a Telegram decision with the same resolution.
-- A changed session, generation or native session makes old buttons refuse;
-  the owner falls back to the local command.
+- A changed session, generation or native session makes old buttons refuse.
+  Administrative recovery follows the queue recovery runbook.
 - The kill-and-reap proof covers the process group and the host scope; like
   the existing stop proof it does not claim isolation from processes that a
   turn deliberately detached outside both.
