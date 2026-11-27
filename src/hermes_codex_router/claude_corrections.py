@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
+from .claude_input_lifecycle import ClaudeInputLifecycle
+from .claude_read_image import ClaudeReadImage
 from .claude_stream import MAX_CLAUDE_VISIBLE_CHARACTERS, ClaudeStreamError
 
 if TYPE_CHECKING:
@@ -97,7 +99,8 @@ class ClaudeCorrectionInput:
         self.frames = [self.initial]
         self.receipts: list[int] = []
         self.results: list[dict[str, object]] = []
-        self.lifecycle: dict[str, list[str]] = {}
+        self.lifecycle = ClaudeInputLifecycle(session_id, self.initial.uuid, "text")
+        self.read_image = ClaudeReadImage(session_id)
         self.sealed = False
         self.complete = False
         self._persist(lambda: callbacks.prepare(self.initial))
@@ -135,24 +138,31 @@ class ClaudeCorrectionInput:
 
     def observe(self, event: dict[str, object]) -> bool:
         kind = event.get("type")
-        if kind == "command_lifecycle":
-            identifier = event.get("command_uuid")
-            known = {frame.uuid for frame in self.frames}
-            if not isinstance(identifier, str) or identifier not in known:
-                raise ClaudeStreamError("claude text input lifecycle is unverified")
-            history = self.lifecycle.setdefault(identifier, [])
-            sequence = ["queued", "started", "completed"]
-            if (
-                set(event) != {"type", "state", "session_id", "command_uuid", "uuid"}
-                or event.get("session_id") != self.initial.session_id
-                or len(history) >= 3
-                or event.get("state") != sequence[len(history)]
-                or self.complete
-                and event.get("state") != "completed"
-            ):
-                raise ClaudeStreamError("claude text input lifecycle is unverified")
-            history.append(sequence[len(history)])
+        if not isinstance(kind, str):
+            raise ClaudeStreamError("claude returned an invalid event type")
+        input_ids = {frame.uuid for frame in self.frames}
+        if self.read_image.observe(event, input_ids=input_ids, acknowledged=bool(self.receipts)):
+            self.lifecycle.observe_activity(event)
             return False
+        if kind == "command_lifecycle":
+            self.lifecycle.observe_command(
+                event, input_ids=input_ids, acknowledged=bool(self.receipts), terminal=self.complete
+            )
+            if self.lifecycle.cancelled:
+                self.sealed = True
+            return False
+        subtype = event.get("subtype")
+        if (
+            kind.startswith(("hook_", "task_"))
+            or kind == "system"
+            and isinstance(subtype, str)
+            and subtype.startswith(("hook_", "task_"))
+            or kind == "user"
+            and (event.get("isReplay") is not True or event.get("parent_tool_use_id") is not None)
+            or kind
+            in {"assistant", "stream_event", "tool_progress", "tool_use_summary", "control_request"}
+        ):
+            self.lifecycle.observe_activity(event)
         if kind == "user" and event.get("parent_tool_use_id") is not None:
             # A forwarded subagent message names the Agent call that owns it
             # (headless docs: parent_tool_use_id). It is tool-internal, never a
@@ -166,6 +176,8 @@ class ClaudeCorrectionInput:
             if len(self.receipts) >= len(self.frames) or self.complete:
                 raise ClaudeStreamError("claude text input receipt is duplicated")
             frame = self.frames[len(self.receipts)]
+            if self.lifecycle.cancelled:
+                raise ClaudeStreamError("claude text input receipt followed cancellation")
             if frame is self.initial and self._image_receipt is not None:
                 self._image_receipt.observe(event)
             elif (
@@ -207,6 +219,7 @@ class ClaudeCorrectionInput:
         if len(self.results) and not any(boundary == 2 for boundary in self.receipts):
             raise ClaudeStreamError("claude returned an unowned subsequent result")
         # ClaudeStreamReader validates the native result before this method.
+        self.lifecycle.observe_result(event)
         self.results.append(dict(event))
         self._persist(lambda: self.callbacks.result(len(self.results)))
         self.complete = len(self.receipts) == len(self.frames) and max(self.receipts) <= len(
@@ -242,10 +255,13 @@ class ClaudeCorrectionInput:
             else "unknown"
         )
         history = (
-            "+".join(self.lifecycle.get(identifier, ())) if isinstance(identifier, str) else ""
+            "+".join(self.lifecycle.history.get(identifier, ()))
+            if isinstance(identifier, str)
+            else ""
         )
         return f"{detail} command={role} history={history or '-'}"
 
     def finish(self) -> None:
+        self.lifecycle.finish()
         if not self.complete:
             raise ClaudeStreamError("claude text input has no complete processed result")

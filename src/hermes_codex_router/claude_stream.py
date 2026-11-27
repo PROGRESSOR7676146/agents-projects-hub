@@ -486,6 +486,7 @@ def _file_result_evidence(event: dict[str, object]) -> dict[str, object] | None:
             "result",
             "is_error",
             "api_error_status",
+            "api_error_type",
         )
         if key in event
     }
@@ -534,6 +535,12 @@ def _terminal_failure_code(
     status = terminal.get("api_error_status")
     if type(status) is int and status == 429:
         return rate_limit
+    if (
+        type(status) is int
+        and status == 403
+        and terminal.get("api_error_type") == "permission_error"
+    ):
+        return "claude_provider_access_denied"
     if type(status) is int and status == 401:
         return "claude_authentication_failed"
     if type(status) is int and status == 529:
@@ -579,6 +586,10 @@ def _terminal_failure_message(code: str) -> str:
             "Беседа сохранена; позже напишите «продолжай».",
         ),
         "claude_authentication_failed": ("Claude: ошибка авторизации.", check_route),
+        "claude_provider_access_denied": (
+            "Claude получил запрос. Провайдер отклонил доступ (HTTP 403).",
+            "Проверьте доступ выбранного аккаунта перед новым запросом.",
+        ),
         "claude_billing_error": ("Claude: отказ по оплате.", check_route),
         "claude_model_not_found": (
             "Claude: выбранная модель не найдена.",
