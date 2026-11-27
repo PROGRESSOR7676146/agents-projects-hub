@@ -142,10 +142,15 @@ class LateDeliveryReceiptTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise sqlite3.OperationalError("database is locked")
+                error = sqlite3.OperationalError("Sensitive example SQLite error")
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                raise error
             return original(*args, **kwargs)
 
-        with patch.object(self.state.delivery, "mark_outbox_delivered", side_effect=commit):
+        with (
+            self.assertLogs("hermes_codex_router", level="WARNING") as log,
+            patch.object(self.state.delivery, "mark_outbox_delivered", side_effect=commit),
+        ):
             result = deliver_final_part(
                 self.state.delivery,
                 bot,
@@ -153,6 +158,11 @@ class LateDeliveryReceiptTests(unittest.TestCase):
                 state_path=self.fixture.config.state_path,
                 now=self.now,
             )
+        self.assertRegex(
+            log.output[0],
+            r"operation=final phase=receipt_commit code=SQLITE_BUSY elapsed_ms=\d+ attempt=1",
+        )
+        self.assertNotIn("Sensitive", log.output[0])
         self.assertTrue(result.receipt_committed)
         self.assertEqual(calls, 2)
         self.assertEqual(len(bot.sent), 1)

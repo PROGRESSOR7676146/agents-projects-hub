@@ -1971,6 +1971,15 @@ class ProjectHubService:
                 if self.state.topic_has_running_dispatch(
                     topic.topic_id
                 ) or self.state.topic_has_pending_provider_job(topic.topic_id):
+                    notice = self._command_orchestrator().new_session_delivery_notice(
+                        topic.topic_id
+                    )
+                    if notice:
+                        self.telegram.answer_callback(
+                            callback.callback_id, "Новая сессия заблокирована"
+                        )
+                        self._send_text(message, notice)
+                        return True
                     raise ServiceError(
                         "Provider work or retained result delivery blocks this change; inspect /status"
                     )
@@ -3017,32 +3026,10 @@ class ProjectHubService:
             self._show_accounts(message)
             return True
         if command and command.name == "new":
-            if command.arguments:
-                self._send_text(message, "Usage: /new")
-                return True
-            active = self.state.active_session(topic.topic_id)
-            if active is None:
-                self._send_text(message, "No active provider session exists yet.")
-                return True
-            if active.writer_mode != "telegram":
-                release = "/release" if active.writer_mode == "terminal" else "/return"
-                self._send_text(message, f"Use {release} before resetting the session.")
-                return True
-            agent = self.config.require_agent(active.agent_id)
-            self.telegram.send_html(
-                message.chat_id,
-                message.thread_id,
-                html.escape(
-                    f"Start a new {agent.display_name} session? The current provider "
-                    "session will be archived."
-                ),
-                reply_markup=self._inline_grid(
-                    [
-                        ("Confirm", f"new:confirm:{active.session_id}"),
-                        ("Cancel", f"new:cancel:{active.session_id}"),
-                    ]
-                ),
+            decision = self._command_orchestrator().new_session_preview(
+                topic, has_arguments=bool(command.arguments)
             )
+            self._render_command_decision(message, decision)
             return True
         if command and command.name == "terminal":
             active = self.state.active_session(topic.topic_id)

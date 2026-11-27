@@ -17,11 +17,14 @@ from __future__ import annotations
 import builtins
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
 from types import ModuleType
-from typing import TextIO
+from typing import Literal, TextIO
+
+from .sqlite_contention import is_sqlite_contention
 
 LOGGER_NAME = "hermes_codex_router"
 REPEAT_INTERVAL_SECONDS = 60.0
@@ -358,7 +361,31 @@ def survived(site: str, error: BaseException) -> None:
 def _record(site: str, error: BaseException) -> None:
     label = _site_label(site)
     kind = _error_kind(error)
-    key = f"{label}:{kind}"
+    _record_message(f"{label}:{kind}", f"survived {kind} at {label}")
+
+
+def receipt_contention(
+    operation: Literal["final", "progress"], error: BaseException, elapsed: float, attempt: int
+) -> None:
+    """Report only SQLite lock codes and local receipt timing."""
+    if operation not in ("final", "progress") or not is_sqlite_contention(error):
+        return
+    try:
+        code = (
+            "SQLITE_BUSY"
+            if getattr(error, "sqlite_errorcode") & 0xFF == sqlite3.SQLITE_BUSY
+            else "SQLITE_LOCKED"
+        )
+        _record_message(
+            f"receipt_commit:{operation}:{code}",
+            f"sqlite_contention operation={operation} phase=receipt_commit code={code} "
+            f"elapsed_ms={int(elapsed * 1000)} attempt={attempt}",
+        )
+    except Exception:  # noqa: BLE001 - receipt settlement must survive diagnostic failure
+        _count_dropped()
+
+
+def _record_message(key: str, message: str) -> None:
     current = time.monotonic()
     with _lock:
         if key not in _last_emitted and len(_last_emitted) >= MAX_REPEAT_KEYS:
@@ -370,7 +397,7 @@ def _record(site: str, error: BaseException) -> None:
         repeated = _repeats.pop(key, 0)
         _last_emitted[key] = current
     suffix = f" (+{repeated} similar)" if repeated else ""
-    _logger.warning("survived %s at %s%s", kind, label, suffix)
+    _logger.warning("%s%s", message, suffix)
 
 
 def reset_repeat_state() -> None:
