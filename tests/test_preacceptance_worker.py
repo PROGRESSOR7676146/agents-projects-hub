@@ -174,8 +174,17 @@ class PreacceptanceWorkerTests(unittest.TestCase):
                     owner.assertEqual(len(bot.sent), 1)
                 return message
 
+        prefix: list[dict] = []
+        for request in range(65):
+            prefix.extend(
+                [
+                    native.approval(request, thread="example-thread", turn="example-turn"),
+                    native.resolved(request, thread="example-thread"),
+                ]
+            )
         transport = GateTransport(
-            [
+            prefix
+            + [
                 native.approval(thread="example-thread", turn="example-turn"),
                 native.started_response(turn="example-turn"),
                 native.resolved(thread="example-thread"),
@@ -205,11 +214,13 @@ class PreacceptanceWorkerTests(unittest.TestCase):
         self.assertEqual(len(bot.sent), 1)
         self.assertEqual(
             f.state._connection.execute("SELECT count(*) FROM task_activity_entries").fetchone()[0],
-            1,
+            66,
         )
         self.assertEqual(
-            f.state._connection.execute("SELECT state FROM task_activity_entries").fetchone()[0],
-            "resolved",
+            f.state._connection.execute(
+                "SELECT COUNT(*) FROM task_activity_entries WHERE state='resolved'"
+            ).fetchone()[0],
+            66,
         )
 
     def test_failed_start_retires_observations_and_always_clears_callbacks(self) -> None:

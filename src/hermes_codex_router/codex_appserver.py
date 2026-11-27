@@ -234,6 +234,7 @@ class CodexAppServerClient:
         self._activity_turn_id: str | None = None
         self._activity_ready = False
         self._pending_activity: deque[CodexActivityEvent] = deque()
+        self._pending_nonapproval_count = 0
         self._activity_request_tracker = CodexActivityRequests()
         self._activity_requests = self._activity_request_tracker.pending
         self._activity_retired = False
@@ -260,6 +261,7 @@ class CodexAppServerClient:
         self._activity_thread_id = self._activity_turn_id = None
         self._activity_ready = False
         self._pending_activity.clear()
+        self._pending_nonapproval_count = 0
         self._activity_request_tracker.clear()
         self._activity_retired = False
         self._activity_observed_notifications.clear()
@@ -312,15 +314,16 @@ class CodexAppServerClient:
             if event.kind == "approval_requested" and event.request_id is not None:
                 if not self._activity_request_tracker.request(event):
                     return
-        if (
-            self._turn_start_pending
-            and event.kind in {"approval_requested", "approval_resolved"}
-            and self.on_preacceptance_approval is not None
-        ):
+        approval = event.kind in {"approval_requested", "approval_resolved"}
+        if self._turn_start_pending and approval and self.on_preacceptance_approval is not None:
             self.on_preacceptance_approval(event)
         if not self._activity_ready:
-            if len(self._pending_activity) >= MAX_PENDING_ACTIVITY:
-                raise ActivityObservationUnavailable("activity_pending_events_exhausted")
+            # The request tracker already bounds distinct approval pairs and
+            # pending requests. Count other buffered observations separately.
+            if not approval:
+                if self._pending_nonapproval_count >= MAX_PENDING_ACTIVITY:
+                    raise ActivityObservationUnavailable("activity_pending_events_exhausted")
+                self._pending_nonapproval_count += 1
             self._pending_activity.append(event)
         elif event.turn_id == self._activity_turn_id and self.on_activity is not None:
             self.on_activity(event)

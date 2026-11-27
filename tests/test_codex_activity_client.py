@@ -289,6 +289,37 @@ class CodexActivityClientTests(unittest.TestCase):
         self.assertEqual(pending_sizes[-1], 0)
         self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
 
+    def test_preacceptance_resolutions_preserve_capacity_for_later_approval(self) -> None:
+        messages = [tool(), approval(0), approval(1), resolved(1)]
+        for request in range(2, 130):
+            messages.extend([approval(request), resolved(request)])
+        # Request 0 remains active across the ACK. Old duplicates must not
+        # crowd out its resolution or reopen a wait after the ACK.
+        messages.extend(
+            [
+                started_response(),
+                approval(1),
+                resolved(1),
+                resolved(0, thread="foreign-thread"),
+                resolved(0),
+                completed(),
+            ]
+        )
+        client, transport, events = self.client(messages)
+        early: list[CodexActivityEvent] = []
+        lost: list[bool] = []
+        client.on_preacceptance_approval = early.append
+        client.on_activity_unavailable = lambda: lost.append(True)
+        turn_id = self.start(client)
+        self.assertEqual(events, [])
+        self.assertEqual(len(early), 259)
+        client.wait_for_turn(turn_id)
+        self.assertEqual(lost, [])
+        self.assertEqual(events[0].kind, "tool_started")
+        self.assertEqual(events[1:-1], early)
+        self.assertEqual((events[-1].kind, events[-1].request_id), ("approval_resolved", 0))
+        self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
+
     def test_resolved_id_reuse_retires_observation_without_reopening_approval(self) -> None:
         changed = approval(1)
         changed["params"]["itemId"] = "other-item"
