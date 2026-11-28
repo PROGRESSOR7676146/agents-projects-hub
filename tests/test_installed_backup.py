@@ -17,6 +17,7 @@ from hermes_codex_router.cli import main
 from hermes_codex_router.deployment_manifest import create_deployment_manifest
 from hermes_codex_router.installed_backup import (
     InstalledBackupError,
+    backup_inputs,
     backup_installation,
     describe_installation,
     file_descriptor,
@@ -372,6 +373,24 @@ class InstalledBackupTests(unittest.TestCase):
         finally:
             con.rollback()
             con.close()
+
+    def test_backup_inputs_share_native_database_and_registry_checks(self) -> None:
+        self.assertEqual(
+            backup_inputs(self.config, [self.config]),
+            {
+                "registry": file_descriptor(self.registry),
+                "databases": {"shared": {"path": str(self.database), "schema_version": 54}},
+            },
+        )
+        secondary_registry = self.root / "other.json"
+        secondary_registry.write_bytes(self.registry.read_bytes())
+        secondary = self.root / "worker.json"
+        secondary.write_text(
+            json.dumps({**self.configuration, "registry_path": str(secondary_registry)})
+        )
+        secondary.chmod(0o600)
+        with self.assertRaisesRegex(InstalledBackupError, "component backup inputs differ"):
+            backup_inputs(self.config, [secondary])
 
     def test_unknown_database_and_incompatible_schema_refuse(self) -> None:
         with closing(sqlite3.connect(self.database)) as con, con:

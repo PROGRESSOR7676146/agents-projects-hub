@@ -419,6 +419,12 @@ def rewrite_dropin(text: str, old: str, new: str, old_config: str, new_config: s
     return result
 
 
+def _asset_catalog_digest(directory: Path) -> str:
+    catalog = directory / "SHA256SUMS"
+    need(not catalog.is_symlink(), "unsafe release asset catalog")
+    return hashlib.sha256(catalog.read_bytes()).hexdigest()
+
+
 def verify_assets(directory: Path, tag: str) -> tuple[dict[str, Any], Path]:
     need(_VERSION.fullmatch(tag) is not None, "release must be an exact version tag")
     lines = (directory / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
@@ -1028,9 +1034,11 @@ def prepare_stage(
 ) -> dict[str, Any]:
     """Verify release assets and DB, then prepare inactive runtimes."""
     candidate_dir = download_release(installation, tag, runner)
+    candidate_catalog = _asset_catalog_digest(candidate_dir)
     candidate, wheel = verify_assets(candidate_dir, tag)
     old_tag = lookup(installation, old["git_sha"], runner)
     old_dir = download_release(installation, old_tag, runner)
+    previous_catalog = _asset_catalog_digest(old_dir)
     previous, old_wheel = verify_assets(old_dir, old_tag)
     need(
         previous["git_sha"] == old["git_sha"]
@@ -1064,6 +1072,7 @@ def prepare_stage(
             "new_wheel_sha256": _wheel_digest(candidate, wheel),
             "candidate_assets": str(candidate_dir),
             "old_assets": str(old_dir),
+            "asset_catalogs": {"old": previous_catalog, "new": candidate_catalog},
         }
     )
     if rollback_info is None and live >= 59:
@@ -1463,6 +1472,8 @@ def create_plan(
             "candidate_config": str(target_config),
             "files": entries,
         }
+        if "asset_catalogs" in new:
+            plan["asset_catalogs"] = new["asset_catalogs"]
         _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
         if "rollback" in new:
             _add_rollback_plan(plan_dir, plan, installation, old, new["rollback"], runner)

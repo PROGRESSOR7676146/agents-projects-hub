@@ -93,6 +93,10 @@ Supporting detail: [reference](REQUIREMENT_DETAILS.md#persistence-and-recovery).
     uncaptured recovery scope MUST be explicit; archive/storage/scheduling ownership stays external.
     The first source slice does not complete installation publication or foreign-state-consumer
     compatibility integration (ADR 0090).
+  - A nightly Hub admission ticket MUST bind the exact prepared plan, installed backup inputs,
+    candidate and compatible rollback evidence. Scheduled eligibility MUST require a successful
+    archive for the same run that binds those inputs. A ticket MUST be read-only. The archive and
+    activation remain separately owned (ADR 0117).
   - Document-artifact coverage MUST be classified from a closed snapshot through its supported
     reader. Exact receipt retirement and narrow verified `unknown` receipt evidence may account for
     an absent file; owner-attested loss is explicitly `degraded_explicit_loss`, not complete
