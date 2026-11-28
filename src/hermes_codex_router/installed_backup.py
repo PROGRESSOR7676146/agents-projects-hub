@@ -163,6 +163,28 @@ def _database_info(path: Path) -> dict[str, Any]:
     return {"path": str(path), "schema_version": schema, "file_identity": identity}
 
 
+def backup_inputs(primary: Path, secondary: list[Path]) -> dict[str, Any]:
+    """Read the configured database and registry inputs without loading secrets."""
+    config = _load_config(file_descriptor(primary))
+    databases = _databases(config)
+    for path in secondary:
+        other = _load_config(file_descriptor(path))
+        _require(
+            _databases(other) == databases and other.registry_path == config.registry_path,
+            "component backup inputs differ",
+        )
+    return {
+        "projection_version": 1,
+        "registry": file_descriptor(config.registry_path),
+        "databases": {
+            label: {
+                key: value for key, value in _database_info(path).items() if key != "file_identity"
+            }
+            for label, path in sorted(databases.items())
+        },
+    }
+
+
 def _installed_package(root: Any, artifact: ArtifactDescriptor) -> None:
     _require(isinstance(root, str) and Path(root).is_absolute(), "invalid installed package root")
     package = Path(root)

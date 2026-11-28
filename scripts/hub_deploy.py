@@ -419,6 +419,12 @@ def rewrite_dropin(text: str, old: str, new: str, old_config: str, new_config: s
     return result
 
 
+def _asset_catalog_digest(directory: Path) -> str:
+    catalog = directory / "SHA256SUMS"
+    need(not catalog.is_symlink(), "unsafe release asset catalog")
+    return hashlib.sha256(catalog.read_bytes()).hexdigest()
+
+
 def verify_assets(directory: Path, tag: str) -> tuple[dict[str, Any], Path]:
     need(_VERSION.fullmatch(tag) is not None, "release must be an exact version tag")
     lines = (directory / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
@@ -673,6 +679,92 @@ def _runtime_command(
         "runtime verification failed",
     )
     return result
+
+
+def _systemd_properties(
+    runner: Callable[..., Any], unit: str, *properties: tuple[str, str, str]
+) -> list[Any]:
+    prefix = ["busctl", "--user", "--json=short"]
+    service = "org.freedesktop.systemd1"
+    reply = _json_command(
+        runner,
+        [
+            *prefix,
+            "call",
+            service,
+            "/org/freedesktop/systemd1",
+            service + ".Manager",
+            "GetUnit",
+            "s",
+            unit,
+        ],
+    )
+    paths = reply.get("data")
+    need(
+        reply.get("type") == "o"
+        and isinstance(paths, list)
+        and len(paths) == 1
+        and isinstance(paths[0], str)
+        and paths[0].startswith("/org/freedesktop/systemd1/unit/"),
+        "unknown systemd unit",
+    )
+    values = []
+    for interface, name, signature in properties:
+        reply = _json_command(
+            runner,
+            [*prefix, "get-property", service, paths[0], service + "." + interface, name],
+        )
+        need(reply.get("type") == signature and "data" in reply, "unknown systemd property")
+        values.append(reply["data"])
+    return values
+
+
+def _nightly_service_inputs(
+    installation: dict[str, Any], runner: Callable[..., Any]
+) -> dict[str, Any]:
+    """Pin only unit and environment file identities. Never return environment values."""
+    names = set(
+        installation["restart_order"]
+        + installation["untouched_units"]
+        + installation["config_only_units"]
+        + [installation["monitor_service"], installation["monitor_timer"]]
+    )
+    inventory = {}
+    for unit in sorted(names):
+        fragment, dropins, reload_required = _systemd_properties(
+            runner,
+            unit,
+            ("Unit", "FragmentPath", "s"),
+            ("Unit", "DropInPaths", "as"),
+            ("Unit", "NeedDaemonReload", "b"),
+        )
+        need(
+            isinstance(fragment, str) and isinstance(dropins, list) and reload_required is False,
+            "loaded unit files changed",
+        )
+        env_files = (
+            _systemd_properties(runner, unit, ("Service", "EnvironmentFiles", "a(sb)"))[0]
+            if unit.endswith(".service")
+            else []
+        )
+        inventory[unit] = {
+            "unit_files": [_nightly_file_pin(path, False) for path in [fragment, *dropins]],
+            "environment_files": [
+                _nightly_file_pin(path, optional) for path, optional in env_files
+            ],
+        }
+    return inventory
+
+
+def _nightly_file_pin(name: str, optional: bool) -> dict[str, Any]:
+    path = Path(name)
+    need(
+        type(optional) is bool and path.is_absolute() and not re.search(r"[*?%\[]", name),
+        "unsupported service input path",
+    )
+    data = _file_bytes(path)
+    need(data is not None or optional, "missing service input")
+    return {"path": name, "sha256": None if data is None else hashlib.sha256(data).hexdigest()}
 
 
 def _applicable_dropin_dirs(unit: str) -> set[str]:
@@ -1028,9 +1120,11 @@ def prepare_stage(
 ) -> dict[str, Any]:
     """Verify release assets and DB, then prepare inactive runtimes."""
     candidate_dir = download_release(installation, tag, runner)
+    candidate_catalog = _asset_catalog_digest(candidate_dir)
     candidate, wheel = verify_assets(candidate_dir, tag)
     old_tag = lookup(installation, old["git_sha"], runner)
     old_dir = download_release(installation, old_tag, runner)
+    previous_catalog = _asset_catalog_digest(old_dir)
     previous, old_wheel = verify_assets(old_dir, old_tag)
     need(
         previous["git_sha"] == old["git_sha"]
@@ -1064,6 +1158,7 @@ def prepare_stage(
             "new_wheel_sha256": _wheel_digest(candidate, wheel),
             "candidate_assets": str(candidate_dir),
             "old_assets": str(old_dir),
+            "asset_catalogs": {"old": previous_catalog, "new": candidate_catalog},
         }
     )
     if rollback_info is None and live >= 59:
@@ -1317,6 +1412,8 @@ def create_plan(
     old: dict[str, Any],
     new: dict[str, Any],
     runner: Callable[..., Any],
+    *,
+    nightly: bool = False,
 ) -> Path:
     """Generate private evidence without changing the installed files."""
     old_config = Path(old["claude_config"])
@@ -1442,6 +1539,10 @@ def create_plan(
                     entry[label] = {"copy": name, "sha256": hashlib.sha256(content).hexdigest()}
             entries.append(entry)
         old_runtime = {k: old[k] for k in ("root", "git_sha", "tree_sha256")}
+        if nightly and old_runtime["tree_sha256"] is None:
+            old_runtime["tree_sha256"] = _runtime_command(Path(old["root"]), "pin", runner)[
+                "sha256"
+            ]
         if "old_" + DECLARATION in new:
             # The same-schema rollback capability, from verified release metadata.
             old_runtime[DECLARATION] = new["old_" + DECLARATION]
@@ -1463,6 +1564,10 @@ def create_plan(
             "candidate_config": str(target_config),
             "files": entries,
         }
+        if "asset_catalogs" in new:
+            plan["asset_catalogs"] = new["asset_catalogs"]
+        if nightly:
+            plan["service_inputs"] = _nightly_service_inputs(installation, runner)
         _validate_plan_configs(plan_dir, plan, "new_runtime", "after", "candidate_config", runner)
         if "rollback" in new:
             _add_rollback_plan(plan_dir, plan, installation, old, new["rollback"], runner)
@@ -3422,6 +3527,7 @@ def main(
     parser.add_argument("--rollback-release")
     parser.add_argument("--window")
     parser.add_argument("--plan")
+    parser.add_argument("--nightly", action="store_true")
     parser.add_argument("--config")
     parser.add_argument("--adopt", action="store_true")
     parser.add_argument("--recover", action="store_true")
@@ -3429,10 +3535,16 @@ def main(
     parser.add_argument("--candidate")
     parser.add_argument("--candidate-version")
     args = parser.parse_args(argv)
+    if args.nightly and (args.action != "plan" or args.rollback_release is not None):
+        parser.error("--nightly requires plan without --rollback-release")
     if args.action in CLAUDE_ACTIONS:
         return claude_main(args, runner, inspect_process, runtime_owner, manager)
     try:
         installation = load_installation(Path(args.installation))
+        need(
+            not args.nightly or not store_mode(installation),
+            "Claude CLI store requires separate admission",
+        )
         service = manager or ServiceManager(runner)
         release_options = args.release or args.rollback_release or args.window or args.plan
         amendment_options = [args.config is not None, args.adopt, args.recover]
@@ -3498,7 +3610,7 @@ def main(
                     python=python,
                     rollback_release=args.rollback_release,
                 )
-                plan_dir = create_plan(installation, old, new, runner)
+                plan_dir = create_plan(installation, old, new, runner, nightly=args.nightly)
                 if args.action == "plan":
                     print(
                         json.dumps(

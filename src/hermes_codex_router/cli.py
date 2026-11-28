@@ -695,7 +695,7 @@ def _release_info_command(args: argparse.Namespace) -> int:
 
 
 def _release_manifest_command(args: argparse.Namespace) -> int:
-    if args.manifest_command in {"installed", "inspect-backup"}:
+    if args.manifest_command in {"installed", "inspect-backup", "backup-inputs"}:
         _print({"ok": True, **installed_backup_cli.inspect_command(args)})
         return 0
     if args.manifest_command == "create":
