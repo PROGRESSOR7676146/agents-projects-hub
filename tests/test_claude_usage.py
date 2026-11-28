@@ -22,6 +22,7 @@ from hermes_codex_router.state import HubState
 from hermes_codex_router.status_view import format_session_status
 
 SESSION = "00000000-0000-4000-8000-000000000001"
+MODEL = "claude-opus-example"
 
 
 def assistant(
@@ -31,7 +32,7 @@ def assistant(
         "type": "assistant",
         "session_id": SESSION,
         "parent_tool_use_id": parent,
-        "message": {"id": message_id, "content": [], "usage": dict(usage or {})},
+        "message": {"id": message_id, "model": MODEL, "content": [], "usage": dict(usage or {})},
     }
 
 
@@ -55,6 +56,31 @@ def summarize(*events: Mapping[str, object]) -> dict[str, object] | None:
 
 
 class ClaudeUsageObserverTests(unittest.TestCase):
+    def test_remaining_context_uses_last_main_request_and_its_models_window(self) -> None:
+        terminal = {
+            "type": "result",
+            "modelUsage": {
+                MODEL: {"contextWindow": 200_000, "inputTokens": 1_100_000},
+                "claude-sonnet-example": {"contextWindow": 1_000_000},
+            },
+        }
+        last = assistant("msg-2", request_usage(input=100, read=24_000, write=900, out=600))
+        subagent = assistant("msg-3", request_usage(read=300_000), parent="toolu_1")
+        earlier = assistant("msg-1", request_usage(read=160_000))
+        details = usage_footer_details(summarize(earlier, last, subagent, terminal))
+        self.assertEqual(details["Context remaining"], "87.2% (≈174,400 tokens)")
+
+        compacted = {"type": "system", "subtype": "compact_boundary"}
+        unrelated = {"type": "result", "modelUsage": {"other": {"contextWindow": 200_000}}}
+        no_output = assistant("msg-4", {**request_usage(read=24_000), "output_tokens": None})
+        for events in (
+            (last, compacted, terminal),
+            (last, unrelated),
+            (last,),
+            (no_output, terminal),
+        ):
+            self.assertNotIn("Context remaining", usage_footer_details(summarize(*events)))
+
     def test_repeated_blocks_of_one_request_are_counted_once_with_latest_usage(self) -> None:
         summary = summarize(
             assistant("msg-1", request_usage(read=1000, write=200_000, w1h=200_000, out=1)),

@@ -171,7 +171,7 @@ class StoredTurnOutcome:
     result: TurnResult | None = None
 
 
-def context_remaining_percent(result: TurnResult) -> float | None:
+def context_remaining_tokens(result: TurnResult) -> int | None:
     if (
         result.context_window is None
         or result.context_window <= 0
@@ -179,7 +179,13 @@ def context_remaining_percent(result: TurnResult) -> float | None:
         or result.context_tokens_used < 0
     ):
         return None
-    remaining = max(0, result.context_window - result.context_tokens_used)
+    return max(0, result.context_window - result.context_tokens_used)
+
+
+def context_remaining_percent(result: TurnResult) -> float | None:
+    remaining = context_remaining_tokens(result)
+    if remaining is None or result.context_window is None:
+        return None
     return remaining * 100 / result.context_window
 
 
@@ -1047,10 +1053,9 @@ class CodexAppServerClient:
                 if isinstance(usage, dict):
                     window = usage.get("modelContextWindow")
                     last = usage.get("last")
-                    if isinstance(window, int):
-                        context_window = window
-                    if isinstance(last, dict) and isinstance(last.get("totalTokens"), int):
-                        context_tokens_used = last["totalTokens"]
+                    total = last.get("totalTokens") if isinstance(last, dict) else None
+                    context_window = window if type(window) is int else None
+                    context_tokens_used = total if type(total) is int else None
                 continue
             if method == "item/completed" and params.get("turnId") == turn_id:
                 item = params.get("item")

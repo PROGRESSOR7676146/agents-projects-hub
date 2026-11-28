@@ -4,7 +4,13 @@ import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .codex_appserver import LimitWindow, RateLimits, TurnResult, context_remaining_percent
+from .codex_appserver import (
+    LimitWindow,
+    RateLimits,
+    TurnResult,
+    context_remaining_percent,
+    context_remaining_tokens,
+)
 from .codex_turn_modes import goal_mode_label
 from .quota_windows import quota_window_label
 from .reply_choices import append_choice_suffix, extract_reply_choices
@@ -125,10 +131,11 @@ def _remaining_text(window: LimitWindow | None) -> str:
 
 
 def _context_remaining(result: TurnResult) -> str:
-    remaining = context_remaining_percent(result)
-    if remaining is None:
+    percent = context_remaining_percent(result)
+    tokens = context_remaining_tokens(result)
+    if percent is None or tokens is None:
         return "unavailable"
-    return f"{remaining:.1f}%"
+    return f"{percent:.1f}% ({tokens:,} tokens)"
 
 
 def format_telegram_response(

@@ -64,6 +64,21 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertNotIn("TELEGRAM INTERACTION CONTRACT v1", prompt)
         self.assertIn("simple work needs only a short answer", prompt)
 
+    def test_codex_turns_require_context_check_and_closeout_before_handoff(self) -> None:
+        for new_session in (True, False):
+            prompt = telegram_developer_instructions(runtime="codex", new_session=new_session)
+            for requirement in (
+                "end of every turn",
+                "less than 60%",
+                "next queued task needs substantial context",
+                "owning docs and private handoff",
+                "clean up your temporary resources",
+                "record minor open issues in BACKLOG.md",
+                "[[handoff: A | B]]",
+                "owner presses",
+            ):
+                self.assertIn(requirement, prompt)
+
     def test_codex_reminder_requires_one_useful_question_before_guessing_a_deliverable(
         self,
     ) -> None:

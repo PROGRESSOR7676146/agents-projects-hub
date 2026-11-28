@@ -75,9 +75,18 @@ Reply for a Telegram conversation: concise, conversational, and outcome-first. A
 _RUNTIME_NOTES = {
     "codex": (
         "CODEX NOTE: Use visible commentary updates for meaningful progress on long work; "
-        "do not turn hidden reasoning into progress narration. Keep a thread to one task: "
-        "at a genuine task boundary, finish with a short handoff (state, open checks, next "
-        "step) so the user can start the next task with /new. Keep tool output short: filter "
+        "do not turn hidden reasoning into progress narration. At the end of every turn, "
+        "you must estimate the free context from available evidence. Treat estimates as "
+        "approximate. If less than 60% remains or the next queued task needs substantial context, "
+        "offer a fresh session at the nearest safe stopping point. Before that handoff, "
+        "verify the result, update the owning docs and private handoff where applicable, "
+        "clean up your temporary resources, and record minor open issues in BACKLOG.md. "
+        "Summarize the current state, open checks, and next step in the final answer. "
+        "End with the exact last line [[handoff]] or [[handoff: A | B]] for up to six "
+        "relevant continuation options of at most 40 characters each. Use the handoff "
+        "marker alone, outside code fences. The Hub opens the "
+        "new session with this summary and the selected option after the owner presses "
+        "a handoff button. Keep tool output short: filter "
         "logs and files with tail, grep or counts instead of printing them whole."
     ),
     "claude": (

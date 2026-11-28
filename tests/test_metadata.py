@@ -35,7 +35,7 @@ class MetadataTests(unittest.TestCase):
             "Session: Example Project Alpha · Backend / Agent: Codex · gpt-5.6-sol-high",
             rendered,
         )
-        self.assertIn("Context remaining: 75.0%", rendered)
+        self.assertIn("Context remaining: 75.0% (75,000 tokens)", rendered)
         self.assertIn("5-hour remaining: 65%, reset: Feb. 2, 05:40", rendered)
         self.assertIn("Weekly remaining: 48%, reset: Feb. 8, 00:33", rendered)
         self.assertNotIn("2026", rendered)
