@@ -193,12 +193,12 @@ class BackupReceiptTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.run_id = "20261128T021505Z-12345678"
         self.started = datetime(2026, 11, 28, 2, 15, 5, tzinfo=UTC).timestamp()
-        self.run = self.root / self.run_id
-        self.run.mkdir(mode=0o700)
-        (self.run / "bundle").mkdir(mode=0o700)
+        self.run_directory = self.root / self.run_id
+        self.run_directory.mkdir(mode=0o700)
+        (self.run_directory / "bundle").mkdir(mode=0o700)
         self.baseline = "a" * 64
-        self.success = self.run / "SUCCESS.json"
-        self.manifest = self.run / "bundle" / "manifest.json"
+        self.success = self.run_directory / "SUCCESS.json"
+        self.manifest = self.run_directory / "bundle" / "manifest.json"
 
     def publish(self, baseline=None, covered=True):
         coverage = {"satisfies_update_artifact_precondition": covered}
@@ -262,6 +262,6 @@ class BackupReceiptTests(unittest.TestCase):
         self.manifest.write_text("{}")
         with self.assertRaisesRegex(deploy.Refused, "archive manifest"):
             self.verify()
-        self.success.rename(self.run / "BACKUP.json")
+        self.success.rename(self.run_directory / "BACKUP.json")
         with self.assertRaisesRegex(deploy.Refused, "success receipt"):
             self.verify()
