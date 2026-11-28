@@ -1,6 +1,7 @@
 import hashlib
 import json
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +18,11 @@ class TicketTests(StageFixture):
         self.manifest.write_text(json.dumps({"hub_git_sha": self.old_sha}))
         self.old_state = deploy.discover_installation(self.install, self.runner, lambda *_: True)
         new = deploy.prepare_stage(self.install, self.old_state, "v2.0.0", self.runner)
-        self.plan_dir = deploy.create_plan(self.install, self.old_state, new, self.runner)
+        self.seen = []
+        self.extra_dropins = []
+        self.plan_dir = deploy.create_plan(
+            self.install, self.old_state, new, self.read_command, nightly=True
+        )
         self.plan_digest = json.loads((self.plan_dir / "plan.json").read_bytes())["sha256"]
         self.manifest_dir = self.ops / "window-example"
         self.manifest_dir.mkdir()
@@ -26,7 +31,6 @@ class TicketTests(StageFixture):
         self.snapshot.write_bytes(b"snapshot")
         self.rollback = self.base / "older.whl"
         self.rollback.write_bytes(b"older")
-        self.seen = []
 
     def read(self):
         return ticket.project(self.install, self.plan_dir, self.plan_digest, self.read_command)
@@ -39,6 +43,15 @@ class TicketTests(StageFixture):
             if "call" in argv:
                 path = "/org/freedesktop/systemd1/unit/" + argv[-1].replace(".", "_")
                 return SimpleNamespace(stdout=json.dumps({"type": "o", "data": [path]}))
+            metadata = {
+                "FragmentPath": ("s", str(self.units / deploy.BASE_UNITS[0])),
+                "DropInPaths": ("as", self.extra_dropins),
+                "EnvironmentFiles": ("a(sb)", []),
+                "NeedDaemonReload": ("b", False),
+            }
+            if argv[-1] in metadata:
+                signature, data = metadata[argv[-1]]
+                return SimpleNamespace(stdout=json.dumps({"type": signature, "data": data}))
             worker = argv[-3].endswith("worker_service")
             path = self.old_state["claude_config"] if worker else self.install["hub_config"]
             cli = str(self.old / "venv/bin/agents-projects-hub")
@@ -55,6 +68,7 @@ class TicketTests(StageFixture):
                 stdout=json.dumps(
                     {
                         "ok": True,
+                        "projection_version": 1,
                         "registry": {"path": str(self.base / "projects.json"), "sha256": "a" * 64},
                         "databases": {"shared": {"path": str(self.db), "schema_version": 7}},
                     }
@@ -131,6 +145,19 @@ class TicketTests(StageFixture):
         self.assertNotEqual(original["sha256"], updated["sha256"])
         self.assertNotEqual(original["ticket"]["before_sha256"], updated["ticket"]["before_sha256"])
 
+    def test_new_loaded_dropin_or_missing_runtime_pin_refuses(self):
+        self.accepted_manifest()
+        extra = self.units / "local-extra.conf"
+        extra.write_text("[Service]\nEnvironment=example=value\n")
+        self.extra_dropins.append(str(extra))
+        with self.assertRaisesRegex(deploy.Refused, "loaded service inputs"):
+            self.read()
+        self.extra_dropins.clear()
+        plan = deploy.verify_saved_plan(self.plan_dir)
+        plan["old_runtime"]["tree_sha256"] = None
+        with self.assertRaisesRegex(deploy.Refused, "sealed runtime pin missing"):
+            ticket.release(plan, "old", self.read_command)
+
     def test_wrong_plan_and_live_config_drift_refuse(self):
         self.accepted_manifest()
         with self.assertRaisesRegex(deploy.Refused, "plan digest"):
@@ -165,6 +192,7 @@ class BackupReceiptTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.run_id = "20261128T021505Z-12345678"
+        self.started = datetime(2026, 11, 28, 2, 15, 5, tzinfo=UTC).timestamp()
         self.run = self.root / self.run_id
         self.run.mkdir(mode=0o700)
         (self.run / "bundle").mkdir(mode=0o700)
@@ -186,17 +214,31 @@ class BackupReceiptTests(unittest.TestCase):
             "home_snapshot": "d" * 64,
             "manifest_sha256": ticket.file_ref(self.manifest)["sha256"],
             "attachment_coverage": coverage,
-            "completed_at": 1_700_000_000,
+            "completed_at": self.started + 60,
         }
         TicketTests.write_private(self.success, deploy.canonical_document(data))
 
+    def verify(self, *, run_started_at=None):
+        return ticket.verify_backup(
+            self.root,
+            self.run_id,
+            self.baseline,
+            run_started_at=self.started if run_started_at is None else run_started_at,
+            now=lambda: self.started + 120,
+        )
+
+    def test_fresh_invocation_cannot_use_prior_success_for_same_baseline(self):
+        self.publish()
+        with self.assertRaisesRegex(deploy.Refused, "receipt differs"):
+            self.verify(run_started_at=self.started + 10)
+
     def test_exact_success_binds_file_bytes(self):
         self.publish()
-        verified = ticket.verify_backup(self.root, self.run_id, self.baseline)
+        verified = self.verify()
         self.assertEqual(verified, ticket.file_ref(self.success)["sha256"])
         self.publish(baseline="0" * 64)
         with self.assertRaisesRegex(deploy.Refused, "archived baseline"):
-            ticket.verify_backup(self.root, self.run_id, self.baseline)
+            self.verify()
 
     def test_legacy_receipt_and_misbound_run_refuse(self):
         self.publish()
@@ -206,20 +248,20 @@ class BackupReceiptTests(unittest.TestCase):
         data["manifest_sha256"] = ticket.file_ref(self.manifest)["sha256"]
         TicketTests.write_private(self.success, deploy.canonical_document(data))
         with self.assertRaisesRegex(deploy.Refused, "archived baseline"):
-            ticket.verify_backup(self.root, self.run_id, self.baseline)
+            self.verify()
         data["run_id"] = "20261128T021505Z-87654321"
         TicketTests.write_private(self.success, deploy.canonical_document(data))
         with self.assertRaisesRegex(deploy.Refused, "receipt differs"):
-            ticket.verify_backup(self.root, self.run_id, self.baseline)
+            self.verify()
 
     def test_passive_or_degraded_or_tampered_receipt_refuses(self):
         self.publish(covered=False)
         with self.assertRaisesRegex(deploy.Refused, "coverage"):
-            ticket.verify_backup(self.root, self.run_id, self.baseline)
+            self.verify()
         self.publish()
         self.manifest.write_text("{}")
         with self.assertRaisesRegex(deploy.Refused, "archive manifest"):
-            ticket.verify_backup(self.root, self.run_id, self.baseline)
+            self.verify()
         self.success.rename(self.run / "BACKUP.json")
         with self.assertRaisesRegex(deploy.Refused, "success receipt"):
-            ticket.verify_backup(self.root, self.run_id, self.baseline)
+            self.verify()

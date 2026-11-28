@@ -378,6 +378,7 @@ class InstalledBackupTests(unittest.TestCase):
         self.assertEqual(
             backup_inputs(self.config, [self.config]),
             {
+                "projection_version": 1,
                 "registry": file_descriptor(self.registry),
                 "databases": {"shared": {"path": str(self.database), "schema_version": 54}},
             },

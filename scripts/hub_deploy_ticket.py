@@ -13,6 +13,8 @@ import re
 import stat
 import subprocess
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
@@ -25,8 +27,6 @@ except ImportError:  # python -I retains neither the checkout nor the script dir
     deploy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(deploy)
 
-SYSTEMD = "org.freedesktop.systemd1"
-SYSTEMD_PATH = "/org/freedesktop/systemd1"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 
 
@@ -76,8 +76,10 @@ def release(plan, label, runner):
     )
     root = Path(runtime["root"])
     runtime_pin = runtime["tree_sha256"]
-    if runtime_pin is None:
-        runtime_pin = deploy._runtime_command(root, "pin", runner)["sha256"]
+    deploy.need(
+        isinstance(runtime_pin, str) and deploy._HEX.fullmatch(runtime_pin),
+        "sealed runtime pin missing from the plan",
+    )
     deploy._runtime_command(root, "verify", runner, runtime_pin)
     running = runtime_json(runtime, runner, "release-info")
     deploy.need(
@@ -98,19 +100,10 @@ def release(plan, label, runner):
 
 
 def effective_argv(unit, runner):
-    prefix = ["busctl", "--user", "--json=short"]
-    reply = deploy._json_command(
-        runner, [*prefix, "call", SYSTEMD, SYSTEMD_PATH, SYSTEMD + ".Manager", "GetUnit", "s", unit]
+    (commands,) = deploy._systemd_properties(
+        runner, unit, ("Service", "ExecStartEx", "a(sasasttttuii)")
     )
-    deploy.need(reply["type"] == "o" and len(reply["data"]) == 1, "unknown systemd unit")
-    info = deploy._json_command(
-        runner,
-        [*prefix, "get-property", SYSTEMD, reply["data"][0], SYSTEMD + ".Service", "ExecStartEx"],
-    )
-    commands = info["data"]
-    deploy.need(
-        info["type"] == "a(sasasttttuii)" and len(commands) == 1, "unsupported service launch"
-    )
+    deploy.need(isinstance(commands, list) and len(commands) == 1, "unsupported service launch")
     executable, argv, flags = commands[0][:3]
     deploy.need(
         not flags
@@ -128,18 +121,22 @@ def consumers(plan, source, runner):
     installation = plan["installation"]
     old_cli = deploy._runtime_cli(plan["old_runtime"])
     new_cli = deploy._runtime_cli(plan["new_runtime"])
-    manager = deploy.ServiceManager(runner)
     units = [unit for unit, mode in plan["unit_runtime_modes"].items() if mode == "process"]
     units.append(installation["monitor_service"])
     before, after = {}, {}
     for unit in units:
-        deploy.need(manager.property(unit, "NeedDaemonReload") == "no", "service files changed")
         argv = effective_argv(unit, runner)
         deploy.need(
             len(argv) >= 3
             and argv[0] == old_cli
             and argv[2] in {source, installation["hub_config"]},
             "unsupported Hub consumer configuration",
+        )
+        deploy.need(
+            not any(
+                plan["old_runtime"]["root"] in arg or Path(source).name in arg for arg in argv[3:]
+            ),
+            "unsupported release reference in service arguments",
         )
         candidate = [new_cli, *argv[1:]]
         if argv[2] == source:
@@ -200,7 +197,19 @@ def project(installation, plan_dir, expected_plan, runner=deploy.run_command):
         "nightly admission requires the installed schema and rollback release",
     )
     deploy.need(not deploy.store_mode(installation), "Claude CLI store requires separate admission")
-    deploy.need("asset_catalogs" in plan, "plan does not bind the release asset catalogs")
+    deploy.need("asset_catalogs" in plan and "service_inputs" in plan, "nightly plan required")
+    deploy.need(
+        deploy._nightly_service_inputs(installation, runner) == plan["service_inputs"],
+        "loaded service inputs differ from the plan",
+    )
+    _, dropins = deploy._managed_dropins(installation, plan["old_runtime"]["root"])
+    deploy.need(
+        {str(path) for path in dropins}
+        == {entry["path"] for entry in plan["files"] if entry["kind"] == "dropin"}
+        and deploy._unit_runtime_modes(installation, plan["old_runtime"]["root"])
+        == plan["unit_runtime_modes"],
+        "managed service inventory differs from the plan",
+    )
     deploy.need(
         not any(entry["kind"] == "base_unit" for entry in plan["files"]),
         "nightly admission requires unchanged unit templates",
@@ -229,16 +238,20 @@ def project(installation, plan_dir, expected_plan, runner=deploy.run_command):
         source["path"],
         str(plan_dir / worker["after"]["copy"]),
     )
+    databases = inventory.get("databases")
     deploy.need(
         inventory.get("ok") is True
-        and inventory["databases"]["shared"]["path"] == installation["state_db"]
-        and all(db["schema_version"] == schema for db in inventory["databases"].values()),
+        and inventory.get("projection_version") == 1
+        and isinstance(databases, dict)
+        and databases["shared"]["path"] == installation["state_db"]
+        and all(db["schema_version"] == schema for db in databases.values()),
         "nightly backup database inventory differs",
     )
     before_units, after_units = consumers(plan, source["path"], runner)
     common = {
+        "projection_version": 1,
         "schema": schema,
-        "databases": inventory["databases"],
+        "databases": databases,
         "registry": inventory["registry"],
     }
     primary = {"path": hub["path"], "sha256": hub["before"]["sha256"]}
@@ -263,6 +276,7 @@ def project(installation, plan_dir, expected_plan, runner=deploy.run_command):
             "worker_configuration": {"path": worker["path"], "sha256": worker["after"]["sha256"]},
             "consumers": after_units,
         },
+        "service_inputs": plan["service_inputs"],
         "service_inventory": {
             key: installation[key]
             for key in ("restart_order", "untouched_units", "config_only_units", "monitor_timer")
@@ -304,9 +318,14 @@ def private_json(path, limit):
     return value, hashlib.sha256(data).hexdigest()
 
 
-def verify_backup(runs_dir, run_id, baseline_sha256):
-    """Read Base's original successful run from the locally configured store."""
+def verify_backup(runs_dir, run_id, baseline_sha256, *, run_started_at, now=time.time):
+    """Read the successful run selected by the current invocation's runner."""
     deploy.need(RUN_ID.fullmatch(run_id), "invalid backup run ID")
+    dated = datetime.strptime(run_id.split("-", 1)[0], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    deploy.need(
+        type(run_started_at) in (int, float) and 0 < run_started_at < math.inf,
+        "missing backup invocation start",
+    )
     run = runs_dir / run_id
     for path in (runs_dir, run, run / "bundle"):
         info = path.lstat()
@@ -331,7 +350,8 @@ def verify_backup(runs_dir, run_id, baseline_sha256):
         and all(isinstance(item, str) and deploy._HEX.fullmatch(item) for item in snapshot_ids)
         and snapshot_ids[0] != snapshot_ids[1]
         and type(completed) in (int, float)
-        and 0 < completed < math.inf,
+        and max(dated.timestamp(), run_started_at) <= completed <= now()
+        and dated.timestamp() >= math.floor(run_started_at),
         "backup success receipt differs",
     )
     coverage = receipt.get("attachment_coverage")
@@ -368,7 +388,14 @@ def main(argv=None):
             args.ticket_sha256 is None or args.ticket_sha256 == result["sha256"],
             "admission ticket changed",
         )
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        IndexError,
+        subprocess.SubprocessError,
+    ) as exc:
         print(
             f"Refused: {exc if isinstance(exc, deploy.Refused) else type(exc).__name__}",
             file=sys.stderr,

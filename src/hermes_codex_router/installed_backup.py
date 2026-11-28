@@ -174,6 +174,7 @@ def backup_inputs(primary: Path, secondary: list[Path]) -> dict[str, Any]:
             "component backup inputs differ",
         )
     return {
+        "projection_version": 1,
         "registry": file_descriptor(config.registry_path),
         "databases": {
             label: {

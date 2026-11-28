@@ -5,13 +5,13 @@ ticket. The installation keeps the plan and release artifacts under the
 existing deployment retention rules. [ADR 0117](../decisions/0117-nightly-hub-admission-evidence.md)
 
 ```sh
-python3.12 -I scripts/hub_deploy_ticket.py \
+python3.12 -I -B scripts/hub_deploy_ticket.py \
   --installation /home/example/private/installation.json \
   --plan /home/example/private/ops/plan-example \
   --plan-sha256 PLAN_SHA256
 ```
 
-Pass the plan SHA-256 printed by `hub_deploy plan`. Read the same ticket again
+Pass the plan SHA-256 printed by `hub_deploy plan --nightly --release TAG`. Read the same ticket again
 with its exact `--ticket-sha256`. Readback performs local verification and
 outputs JSON on success. It only inspects saved inputs and the loaded service
 configuration. The candidate must include the native `release-manifest
@@ -22,16 +22,19 @@ the rollback rehearsal remain prerequisites owned by the release procedure.
 
 The output contains `ticket` and its `sha256`. All ticket and projection digests
 use SHA-256 of canonical UTF-8 JSON, with sorted keys, no optional whitespace
-and non-ASCII characters unescaped. `before_sha256` binds `before`. That record
-contains the active manifest and its artifact and snapshot identities, primary
+and non-ASCII characters unescaped. `before_sha256` binds `before`. Base
+must implement that record's `projection_version`. The record contains the active manifest and its artifact and snapshot identities, primary
 and worker config digests, registry, schema, database inventory and configured
 Hub service commands. Commands come from systemd's structured `ExecStartEx`
 readback and are represented by digests of their argv arrays. The profile
 requires simple single commands in the managed release. The ticket also
 carries the exact target and compatible rollback assets, sealed runtime pins,
 expected post-switch backup inputs and the saved plan's managed file changes.
+The plan also pins the sealed previous runtime and the loaded systemd fragments,
+drop-ins and environment files. Ticket readback refuses drift in these inputs.
 Configuration bytes, process arguments and environment values stay private to
-their owners.
+their owners. A rollback pauses ticket production until the installation has
+another accepted window.
 
 ## Archived backup evidence
 
@@ -41,8 +44,10 @@ archive manifest before sealing it. It derives that digest from the inputs it
 actually archived and validated. The ticket supplies the expected value for
 comparison.
 
-The verifier resolves the exact run ID inside the configured private runs
-directory. It reads that run's `SUCCESS.json`, checks the two snapshot IDs and
+The verifier uses the current invocation's run ID and the runner's independently
+recorded start time. It resolves that run inside the configured private runs
+directory and checks that its receipt completed during that invocation. A
+previous run cannot qualify even when its baseline is identical. It reads that run's `SUCCESS.json`, checks the two snapshot IDs and
 positive artifact coverage, and requires the digest of `bundle/manifest.json`
 to match the receipt. It then compares the archived baseline digest with the
 ticket and returns the success receipt's exact digest for later binding.
