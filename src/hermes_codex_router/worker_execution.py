@@ -42,6 +42,7 @@ from .preexecution_retry_state import PreexecutionRetryState, PreparationRetryRe
 from .project_resolution import resolve_project_context
 from .registry import ExecutionRootError
 from .schema_claude_material_notice import MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
+from .session_handoff import add_answer_notices
 from .state import HubState, ProviderJobRecord, TopicRecord
 from .telegram_interaction import (
     telegram_contract_version,
@@ -585,9 +586,9 @@ def prepare_codex_worker_result(
         visible_text = empty_visible_text
     notices = prepared_materials.visible_notice + artifact_notice
     return PreparedWorkerResult(
-        visible_response=visible_text + notices,
+        visible_response=add_answer_notices(visible_text, notices),
         telegram_html=format_telegram_response(
-            result=replace(result, text=result.text + notices),
+            result=replace(result, text=add_answer_notices(result.text, notices)),
             agent=agent_name,
             model=model,
             effort=effort,
@@ -612,7 +613,9 @@ def prepare_external_worker_result(
 ) -> PreparedWorkerResult:
     """Render an accepted external-provider result without durable side effects."""
     visible_text = result.text.strip() if trim_visible_text else result.text
-    visible_response = visible_text + prepared_materials.visible_notice + artifact_notice
+    visible_response = add_answer_notices(
+        visible_text, prepared_materials.visible_notice + artifact_notice
+    )
     details = {
         "Session": session_label,
         "Agent": agent_name,

@@ -65,6 +65,14 @@ def extract_handoff(text: str) -> tuple[str, tuple[str, ...]] | None:
     return (body, labels) if body.strip() else None
 
 
+def add_answer_notices(text: str, notices: str) -> str:
+    """Keep a valid agent handoff marker last when Hub adds its own notices."""
+    if notices and (handoff := extract_handoff(text)) is not None:
+        marker = text.rstrip().rsplit("\n", 1)[-1]
+        return f"{handoff[0]}{notices}\n{marker}"
+    return text + notices
+
+
 def handoff_binding(job_id: str) -> str:
     """Short public identity of the source job; never an authentication token."""
     return hashlib.sha256(f"session-handoff:{job_id}".encode()).hexdigest()[:12]

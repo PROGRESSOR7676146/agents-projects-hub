@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from hermes_codex_router.codex_appserver import CodexAppServerClient, RateLimits, TurnResult
 from hermes_codex_router.codex_turn_modes import MAX_EARLY_GOAL_TURNS, CodexTurnModes
 from hermes_codex_router.incoming_materials import PreparedIncomingMaterials
 from hermes_codex_router.metadata import format_telegram_response
+from hermes_codex_router.session_handoff import split_handoff_suffix
 from hermes_codex_router.worker_execution import prepare_codex_worker_result
 from tests.test_codex_appserver import FakeTransport
 
@@ -205,8 +207,31 @@ class CodexTurnModePipelineTests(unittest.TestCase):
         self.assertEqual(result.text, "Saved final")
         self.assertEqual(result.context_tokens_used, 200)
         self.assertIn("Modes: /goal (active, observed)", self.render(result))
-        self.assertIn("Context remaining: 80.0%", self.render(result))
+        self.assertIn("Context remaining: 80.0% (800 tokens)", self.render(result))
         self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
+
+    def test_partial_context_samples_are_not_combined(self) -> None:
+        result, _ = self.run_turn(
+            [
+                {"id": 1, "result": {"turn": {"id": "example-turn"}}},
+                *[
+                    {
+                        "method": "thread/tokenUsage/updated",
+                        "params": {
+                            "threadId": "example-thread",
+                            "turnId": "example-turn",
+                            "tokenUsage": sample,
+                        },
+                    }
+                    for sample in (
+                        {"modelContextWindow": 1000, "last": {"totalTokens": 200}},
+                        {"total": {"totalTokens": 700}, "last": {"totalTokens": 300}},
+                    )
+                ],
+                completed(),
+            ]
+        )
+        self.assertNotIn("Context remaining:", self.render(result))
 
     def test_worker_notices_preserve_snapshot_and_approval_authority_is_unchanged(self) -> None:
         transport = FakeTransport(
@@ -232,17 +257,19 @@ class CodexTurnModePipelineTests(unittest.TestCase):
             )
             result = client.wait_for_turn(turn)
         prepared = prepare_codex_worker_result(
-            result,
+            replace(result, text="Continue with the next task.\n[[handoff: Next task]]"),
             PreparedIncomingMaterials("", (), ("Example unavailable material",), None, ()),
             agent_name="Codex",
             model="gpt-example",
             effort="high",
             session_label="Example Project · General",
             limits=RateLimits(None, None),
-            artifact_notice="Artifact notice",
+            artifact_notice="\n\nArtifact notice",
         )
         self.assertIn("/goal (active, observed)", prepared.telegram_html)
         self.assertIn("Example unavailable material", prepared.telegram_html)
+        self.assertEqual(split_handoff_suffix(prepared.telegram_html)[1], ("Next task",))
+        self.assertTrue(prepared.visible_response.endswith("\n[[handoff: Next task]]"))
         self.assertEqual(transport.sent[1], {"id": 44, "result": {"decision": "decline"}})
         self.assertEqual(len(transport.sent), 2)
 

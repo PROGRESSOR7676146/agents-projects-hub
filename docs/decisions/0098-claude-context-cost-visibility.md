@@ -35,6 +35,12 @@ not say which limit applied.
    150k tokens, a note suggesting `/new` for the next task. `/status` shows the
    last request context of the session's latest finished turn; a failed,
    stopped or uncertain latest turn, or a turn without the summary, shows none.
+   When the terminal event reports a positive `modelUsage.contextWindow` for
+   the last main request's model and the request reports input and output
+   usage, the reply footer also gives an estimated remaining percentage and
+   token count. Hub subtracts that request's cached and uncached input and its
+   output from the reported window. It keeps the compact last-request display
+   when it cannot compute an estimate.
 4. A 429 without a native rejected rate-limit event naming a known account
    usage window (five-hour, weekly or overage) becomes `claude_rate_limited`:
    the notice says the route did not identify the limit or its reset.
@@ -45,9 +51,9 @@ not say which limit applied.
    large task with a short handoff for `/new`, keep tool output short, and wait
    for a long check with one bounded command instead of repeated polling.
 
-A Hub button that creates a new session with an automatic handoff is not built:
-it needs a model call or an automatic context transfer that REQ-CTX-002
-superseded. Auto-compaction thresholds wait for installed telemetry.
+The owner-triggered continuation button is specified in
+[ADR 0114](0114-one-tap-new-session-with-handoff.md). Auto-compaction thresholds
+wait for installed telemetry.
 
 ## Consequences
 

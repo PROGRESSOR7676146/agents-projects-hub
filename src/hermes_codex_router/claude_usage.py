@@ -64,6 +64,8 @@ class ClaudeUsageObserver:
         self._subagent: set[str] = set()
         self._context_after_last_request = True
         self._untracked = False
+        self._last_main_model: str | None = None
+        self._context_window: int | None = None
 
     def observe(self, event: dict[str, object]) -> None:
         kind = event.get("type")
@@ -71,6 +73,12 @@ class ClaudeUsageObserver:
             # Compaction replaces the context; until another request reports
             # usage, the current size is unknown.
             self._context_after_last_request = False
+            return
+        if kind == "result" and self._last_main_model is not None:
+            models = event.get("modelUsage")
+            model_usage = models.get(self._last_main_model) if isinstance(models, dict) else None
+            if isinstance(model_usage, dict):
+                self._context_window = _tokens(model_usage, "contextWindow")
             return
         if kind != "assistant":
             return
@@ -93,6 +101,8 @@ class ClaudeUsageObserver:
         # Re-inserting keeps stream order: the latest request is the last key.
         self._main.pop(message_id, None)
         self._main[message_id] = snapshot
+        model = message.get("model")
+        self._last_main_model = model if isinstance(model, str) else None
         self._context_after_last_request = True
 
     def summary(self) -> dict[str, object] | None:
@@ -100,6 +110,9 @@ class ClaudeUsageObserver:
             return None
         snapshots = list(self._main.values())
         contexts = [_context(snapshot) for snapshot in snapshots]
+        last_context = (
+            contexts[-1] if self._context_after_last_request and not self._untracked else None
+        )
         known = [value for value in contexts if value is not None]
         large_writes = sum(
             1
@@ -112,9 +125,9 @@ class ClaudeUsageObserver:
         return {
             "requests": len(snapshots),
             "subagent_requests": len(self._subagent),
-            "last_context": (
-                contexts[-1] if self._context_after_last_request and not self._untracked else None
-            ),
+            "last_context": last_context,
+            "last_output": snapshots[-1]["output"] if last_context is not None else None,
+            "context_window": self._context_window if last_context is not None else None,
             "max_context": max(known) if known else None,
             "cache_write": _total(snapshots, "cache_write"),
             "cache_write_5m": _total(snapshots, "cache_write_5m"),
@@ -164,6 +177,14 @@ def usage_footer_details(summary: dict[str, object] | None) -> dict[str, str]:
             f"{format_tokens(context)} (last request)" if context is not None else "unavailable"
         )
     }
+    if summary is not None and context is not None:
+        window = _tokens(summary, "context_window")
+        output = _tokens(summary, "last_output")
+        if window and output is not None:
+            remaining = max(0, window - context - output)
+            details["Context remaining"] = (
+                f"{remaining * 100 / window:.1f}% (≈{remaining:,} tokens)"
+            )
     large_writes = summary.get("large_cache_writes") if summary else None
     if type(large_writes) is int and large_writes > 0:
         details["Large cache writes"] = str(large_writes)

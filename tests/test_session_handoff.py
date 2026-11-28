@@ -124,9 +124,13 @@ class GrammarTests(unittest.TestCase):
         self.assertFalse(fits("x" * (MAX_HANDOFF_CHARACTERS + 1), ()))
 
     def test_formatter_carries_the_control_and_choices_win_the_last_line(self) -> None:
-        html = format_agent_response(f"{ANSWER}\n[[handoff: A]]", {"Agent": "Example"})
+        html = format_agent_response(
+            f"{ANSWER}\n[[handoff: A]]",
+            {"Agent": "Example", "Context remaining": "13.0% (26,000 tokens)"},
+        )
         visible, options = split_handoff_suffix(html)
         self.assertEqual(options, ("A",))
+        self.assertIn("13.0% (26,000 tokens)", visible)
         self.assertNotIn("handoff", visible)
         html = format_agent_response(f"{ANSWER}\n[[handoff]]\n[[choices: A | B]]", {})
         self.assertEqual(split_handoff_suffix(html)[1], None)
